@@ -1,0 +1,253 @@
+endpoints:
+    auth    
+        1) login                post:api/v1/auth/login { login, password}
+        2) gen code             post:api/v1/auth/gen-code 
+        3) check code           post:api/v1/auth/check-code
+        4) register             post:api/v1/auth/register 
+        5) logout               post:api/v1/auth/logout
+        6) forget-password      patch:api/v1/auth/forget-password
+        7) reset-password       patch:api/v1/auth/reset-password
+
+    user:
+        1) get users            get:api/v1/auth/user
+        2) find user            get:api/v1/auth/user/{id}
+        3) create user          post:api/v1/auth/user
+        4) update user          put:api/v1/auth/user
+        4) delete user          delete:api/v1/auth/user/{id}
+
+    collection:
+        1) status               resource:api/v1/auth/user
+        2) prorety              resource:api/v1/auth/prorety
+        3) department           resource:api/v1/auth/department
+        4) otdel                resource:api/v1/auth/otdel
+        5) branch               resource:api/v1/auth/branch
+        6) office               resource:api/v1/auth/office
+        7) role                 resource:api/v1/auth/role
+        8) permission           resource:api/v1/auth/permission
+        9) equipment            resource:api/v1/auth/equipment
+
+    order:
+        1) get order            get:api/v1/auth/order
+        2) find order           get:api/v1/auth/order/{id}
+        3) create order         post:api/v1/auth/order
+        4) update order         put:api/v1/auth/order
+        5) delete order         delete:api/v1/auth/order/{id}
+        6) delegation           path:api/v1/auth/order/{id}
+
+
+database:
+    user: {
+        id: int,
+        fio: string,
+        email: string,
+        phoneNumber: string,
+        password: string,
+        
+        status_id: int,
+        role_id: int,
+        branch_id: int,
+        department_id: int,
+
+        office_id: int|NULL,
+        otdel_id: int|NULL,
+
+        created_at: datetime,
+        updated_at: datetime,
+        deleted_at: datetime,
+    }
+
+    status: {
+        id: int,
+        icon: string,
+        name: string,
+        type: int,       
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    prorety: {
+        id: int,
+        icon: string,
+        name: string,
+        rate: int,
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    department: {
+        id: int,
+        name: string,
+
+        status_id: int,
+
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    otdel: {
+        id: int,
+        name: string,
+        
+        status_id: int,
+        department_id: int,
+
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    branch: {
+        id: int,
+        name: string,
+        shortName: string,
+        address: string,
+        phoneNumber: string,
+        email: string,
+        email_index: string,
+        openDate: string,
+
+        status_id: int,
+
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    office: {
+        id: int,
+        name: string,
+        address: string,
+        openDate: string,
+
+        branch_id: int,
+        status_id: int,
+
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    role: {
+        id: int,
+        name: string,
+        description: string, 
+        status_id: int,
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    permission: {
+        id: int,
+        name: string,
+        description: string,
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    role_permission: {
+        role_id: int,
+        permission_id: int,
+    }
+
+    equipment_type: {
+        id: int,
+        name: string,
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+
+    equipment: {
+        id: int,
+        name: string,
+        address: string,
+
+        branch_id: int,
+        office_id: int,
+        type_id: int,
+        status_id: int,
+
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    order: {
+        id: int,
+        name: string,
+
+        department_id: int,
+        otdel_id: int,
+        prorety_id: int,
+        status_id: int,
+        branch_id: int,
+        office_id: int,
+        equipment_id: int,
+        user_id: int,
+
+        duration: datetime,
+        address: string,
+        created_at: datetime,
+        updated_at: datetime,
+        deleted_at: datetime,
+    }
+
+    order_documents: {
+        id: int,
+        name: string,
+        path: string,
+        type: string,
+
+        order_id: int,
+    }
+
+    order_delegations: {
+        id: int,
+
+        delegation_user_id: int,
+        deleted_user_id: int,
+
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+    order_comments: {
+        id: int,
+        message: string,
+
+        status_id: int,
+        order_id: int,
+        user_id: int,
+        created_at: datetime,
+        updated_at: datetime,
+    }
+
+
+
+project_structure:
+    app
+        main.go
+    internal
+        entities
+            user-entity.go
+            order-entity.go
+        repositories
+            user-repository.go
+            order-repository.go
+        dto
+            auth-dto.go
+            user-dto.go
+            order-dto.go
+        service
+            auth-service.go
+            user-service.go
+            order-service.go
+        controllers
+            auth-controller.go
+            user-controller.go
+            order-controller.go
+        routes
+            auth.go
+            user.go
+            order.go
+    pkg
+        services
+            jwt
+        utils
+        types

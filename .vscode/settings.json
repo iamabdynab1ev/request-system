@@ -1,0 +1,15 @@
+{
+    "editor.guides.bracketPairs": true,
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "request-system",
+            "username": "postgres",
+            "password": "postgres",
+            "database": "request-system"
+        }
+    ]
+}
