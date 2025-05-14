@@ -14,26 +14,51 @@ func NewOtdelController() *OtdelController {
 
 
 func (c *OtdelController) GetOtdels(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *OtdelController) FindOtdels(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *OtdelController) CreateOtdels(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *OtdelController) UpdateOtdels(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 func (c *OtdelController) DeleteOtdels(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 

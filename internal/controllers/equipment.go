@@ -14,26 +14,51 @@ func NewEquipmentController() *EquipmentController {
 
 
 func (c *EquipmentController) GetEquipments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *EquipmentController) FindEquipments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *EquipmentController) CreateEquipments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *EquipmentController) UpdateEquipments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 func (c *EquipmentController) DeleteEquipments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 

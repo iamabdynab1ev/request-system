@@ -1,17 +1,48 @@
 package services
 
-import "request-system/internal/entities"
+import (
+	"context"
 
-type BranchService struct{}
+	"request-system/internal/dto"
+	"request-system/internal/repositories"
+)
 
-func NewBranchService() *BranchService {
-	return &BranchService{}
+type BranchService struct {
+	branchRepository repositories.BranchRepositoryInterface
 }
 
-func (service *BranchService) GetAll() ([]entities.Branch, error) {
-	return []entities.Branch{}, nil
+func NewBranchService(branchRepository repositories.BranchRepositoryInterface) *BranchService {
+	return &BranchService{
+		branchRepository: branchRepository,
+	}
 }
 
-func (service *BranchService) GetByID(id string) (*entities.Branch, error) {
-	return nil, nil
+func (s *BranchService) GetBranches(ctx context.Context, limit uint64, offset uint64) ([]dto.BranchDTO, error) {
+	return s.branchRepository.GetBranches(ctx, 1, 10)
+}
+
+func (s *BranchService) FindBranch(ctx context.Context, id uint64) (*dto.BranchDTO, error) {
+	return s.branchRepository.FindBranch(ctx, id)
+}
+
+func (s *BranchService) CreateBranch(ctx context.Context, dto dto.CreateBranchDTO) (*dto.BranchDTO, error) {
+	err := s.branchRepository.CreateBranch(ctx, dto)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, err
+}
+
+func (s *BranchService) UpdateBranch(ctx context.Context, id uint64, dto dto.UpdateBranchDTO) (*dto.BranchDTO, error) {
+	err := s.branchRepository.UpdateBranch(ctx, id, dto)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, err
+}
+
+func (s *BranchService) DeleteBranch(ctx context.Context, id uint64) error {
+	return s.branchRepository.DeleteBranch(ctx, id)
 }

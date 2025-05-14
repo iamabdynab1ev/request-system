@@ -18,7 +18,7 @@ services:
     container_name: pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: "2M8bP@example.com"
-      PGADMIN_DEFAULT_PASSWORD: "paswword"
+      PGADMIN_DEFAULT_PASSWORD: "pasword"
     ports:
       - "5050:80"
     depends_on:

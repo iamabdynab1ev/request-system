@@ -1,39 +1,145 @@
 package controllers
+
 import (
 	"net/http"
+	"strconv"
 
+	"request-system/internal/dto"
+	"request-system/internal/services"
 	"request-system/pkg/utils"
+
 	"github.com/labstack/echo/v4"
 )
 
-type RoleController struct {}
-
-func NewRoleController() *RoleController {
-	return &RoleController{}
+type RoleController struct {
+	roleService *services.RoleService
 }
 
+func NewRoleController(
+		roleService *services.RoleService,
+) *RoleController {
+	return &RoleController{
+		roleService: roleService,
+	}
+}
 
 func (c *RoleController) GetRoles(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	reqCtx := ctx.Request().Context()
+
+	res, err := c.roleService.GetRoles(reqCtx, 6, 10)
+	if err != nil {
+		return utils.ErrorResponse(
+			ctx,
+			err,
+		)
+	}
+
+	return utils.SuccessResponse(
+		ctx,
+		res,
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
-func (c *RoleController) FindRoles(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+func (c *RoleController) FindRole(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		return utils.ErrorResponse(ctx, err)
+	}
+
+	res, err := c.roleService.FindRole(reqCtx, id)
+	if err != nil {
+		return utils.ErrorResponse(
+			ctx,
+			err,
+		)
+	}
+
+	return utils.SuccessResponse(
+		ctx,
+		res,
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
+func (c *RoleController) CreateRole(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
 
-func (c *RoleController) CreateRoles(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	var dto dto.CreateRoleDTO
+	if err := ctx.Bind(&dto); err != nil {
+		return utils.ErrorResponse(ctx, err)
+	}
+
+	res, err := c.roleService.CreateRole(reqCtx, dto)
+	if err != nil {
+		return utils.ErrorResponse(
+			ctx,
+			err,
+		)
+	}
+
+	return utils.SuccessResponse(
+		ctx,
+		res,
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
+func (c *RoleController) UpdateRole(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
 
-func (c *RoleController) UpdateRoles(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		return utils.ErrorResponse(ctx, err)
+	}
+
+	var dto dto.UpdateRoleDTO
+	if err := ctx.Bind(&dto); err != nil {
+		return utils.ErrorResponse(ctx, err)
+	}
+
+	res, err := c.roleService.UpdateRole(reqCtx, id, dto)
+	if err != nil {
+		return utils.ErrorResponse(
+			ctx,
+			err,
+		)
+	}
+
+	return utils.SuccessResponse(
+		ctx,
+		res,
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
-func (c *RoleController) DeleteRoles(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+func (c *RoleController) DeleteRole(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		return utils.ErrorResponse(ctx, err)
+	}
+
+	err = c.roleService.DeleteRole(reqCtx, id)
+	if err != nil {
+		return utils.ErrorResponse(
+			ctx,
+			err,
+		)
+	}
+
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
-
-

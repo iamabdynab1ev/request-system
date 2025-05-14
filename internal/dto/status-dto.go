@@ -1,16 +1,17 @@
 package dto
 
+
 type CreateStatusDTO struct {
-	Icon      string `json:"icon" validate:"required"`
-	Name      string `json:"name" validate:"required,max=50"`
-	Type      int    `json:"type" validate:"required"`
+	Icon string `json:"icon" validate:"required"`
+	Name string `json:"name" validate:"required,max=50"`
+	Type int    `json:"type" validate:"required"`
 }
 
 type UpdateStatusDTO struct {
-	ID        int    `json:"id" validate:"required"`
-	Icon      string `json:"icon" validate:"omitemty"`
-	Name      string `json:"name" validate:"omitemty"`
-	Type      int    `json:"type" validate:"omitemty"`
+	ID   int    `json:"id" validate:"required"`
+	Icon string `json:"icon" validate:"omitempty"`
+	Name string `json:"name" validate:"omitempty"`
+	Type int    `json:"type" validate:"omitempty"`
 }
 
 type StatusDTO struct {
@@ -22,6 +23,6 @@ type StatusDTO struct {
 }
 
 type ShortStatusDTO struct {
-	ID        int    `json:"id"`
-	Name      string `json:"name"`
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }

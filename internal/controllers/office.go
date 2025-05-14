@@ -14,26 +14,51 @@ func NewOfficeController() *OfficeController {
 
 
 func (c *OfficeController) GetOffices(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *OfficeController) FindOffices(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *OfficeController) CreateOffices(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *OfficeController) UpdateOffices(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 func (c *OfficeController) DeleteOffices(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 

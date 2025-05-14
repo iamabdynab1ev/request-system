@@ -14,26 +14,51 @@ func NewDepartmentController() *DepartmentController {
 
 
 func (c *DepartmentController) GetDepartments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *DepartmentController) FindDepartments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *DepartmentController) CreateDepartments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 
 func (c *DepartmentController) UpdateDepartments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 func (c *DepartmentController) DeleteDepartments(ctx echo.Context) error {
-	return ctx.JSON(http.StatusOK, utils.SuccessResponse("success") )
+	return utils.SuccessResponse(
+		ctx,
+		struct{}{},
+		"Successfully",
+		http.StatusOK,
+	)
 }
 
 

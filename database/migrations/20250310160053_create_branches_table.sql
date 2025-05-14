@@ -11,15 +11,14 @@ CREATE TABLE branches (
     open_date TIMESTAMP NOT NULL,
     status_id INTEGER NOT NULL,
 
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT fk_branches_status_id FOREIGN KEY (status_id) REFERENCES statuses(id)
+    CONSTRAINT fk_branches_status_id FOREIGN KEY (status_id) REFERENCES statuses(id) ON DELETE RESTRICT
 );
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
-DROP TABLE IF EXISTS branch;
+DROP TABLE IF EXISTS branches;
 -- +goose StatementEnd
-
