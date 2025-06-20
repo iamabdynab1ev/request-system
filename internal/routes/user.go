@@ -2,14 +2,24 @@ package routes
 
 import (
 	"request-system/internal/controllers"
+	"request-system/internal/repositories"
 	"request-system/internal/services"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
-var userCtrl = controllers.NewUserController(&services.UserService{})
+func RUN_USER_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
+	var (
+		logger           *zap.Logger
+		userRepository   = repositories.NewUserRepository(dbConn)
+		statusRepository = repositories.NewStatusRepository(dbConn)
 
-func RUN_USER_ROUTER(e *echo.Echo) {
-	e.GET("/user", userCtrl.GetUsers)
+		userService = services.NewUserService(userRepository, statusRepository)
+		userCtrl    = controllers.NewUserController(userService, logger)
+	)
+	e.GET("/users", userCtrl.GetUsers)
 	e.GET("/user/:id", userCtrl.FindUser)
 	e.POST("/user", userCtrl.CreateUser)
 	e.PUT("/user/:id", userCtrl.UpdateUser)

@@ -1,13 +1,12 @@
 package entities
 
-import (
-	"request-system/pkg/types"
-)
+import "request-system/pkg/types"
+
 type Otdel struct {
-	ID           int       `json:"id"`
-	Name         string    `json:"name"`
-	Status       Status    `json:"status"`
-	DepartmentID int       `json:"department_id"`
-	
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	StatusID     int    `json:"status_id"`
+	DepartmentsID int   `json:"departments_id"`
+
 	types.BaseEntity
 }

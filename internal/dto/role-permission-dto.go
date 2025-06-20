@@ -16,11 +16,10 @@ type RolePermissionDTO struct {
 	RoleID       int `json:"role_id"`
 	PermissionID int `json:"permission_id"`
 	CreatedAt    string `json:"created_at"`
-}	
+}
 
 type ShortRolePermissionDTO struct {
 	ID           int `json:"id"`
 	RoleID       int `json:"role_id"`
 	PermissionID int `json:"permission_id"`
 }
-

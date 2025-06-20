@@ -8,21 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var DbConn *pgxpool.Pool
-
-func GetDb() *pgxpool.Pool {
-	return DbConn
-}
-
 func ConnectDB() *pgxpool.Pool {
-	// postgres://user:password@localhost:5432/dbname
-	var path = fmt.Sprintf("postgres://%s:%s@%s:%d/%s", "postgres", "postgres", "localhost", 5432, "request-system")
+	var path = fmt.Sprintf("postgres://%s:%s@%s:%d/%s", "postgres", "postgres", "localhost", 5432, "request-system") //   192.168.56.226
 
-	DbConn, err := pgxpool.New(context.Background(), path)
+	dbpool, err := pgxpool.New(context.Background(), path)
 	if err != nil {
-		log.Fatal("Ошибка подключения к БД:", err)
+		log.Fatalf("Ошибка создания пула соединений к БД: %v", err)
+	}
+
+	if err := dbpool.Ping(context.Background()); err != nil {
+		log.Fatalf("Не удалось пинговать БД: %v", err)
 	}
 
 	log.Println("✅ Подключено к PostgreSQL")
-	return DbConn
+	return dbpool
 }

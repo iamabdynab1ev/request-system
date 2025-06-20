@@ -5,15 +5,22 @@ import (
 
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
+
+	"go.uber.org/zap"
+
 )
 
 type StatusService struct {
 	statusRepository repositories.StatusRepositoryInterface
+	logger      *zap.Logger
 }
 
-func NewStatusService(statusRepository repositories.StatusRepositoryInterface) *StatusService {
+func NewStatusService(statusRepository repositories.StatusRepositoryInterface,
+	logger *zap.Logger,
+	) *StatusService {
 	return &StatusService{
 		statusRepository: statusRepository,
+		logger : logger,
 	}
 }
 
@@ -28,9 +35,10 @@ func (s *StatusService) FindStatus(ctx context.Context, id uint64) (*dto.StatusD
 func (s *StatusService) CreateStatus(ctx context.Context, dto dto.CreateStatusDTO) (*dto.StatusDTO, error) {
 	err := s.statusRepository.CreateStatus(ctx, dto)
 	if err != nil {
+		s.logger.Error("ошибка при создании статуса", zap.Error(err))
 		return nil, err
 	}
-
+s.logger.Info("Статус успешно создан", zap.Any("payload:", dto))
 	return nil, err
 }
 

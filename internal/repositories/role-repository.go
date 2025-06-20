@@ -13,7 +13,8 @@ import (
 
 const (
 	ROLE_TABLE  = "roles"
-	ROLE_FIELDS = "id, name, description, status_id, created_at"
+	
+	ROLE_FIELDS = "id, name, description, status_id, created_at, updated_at"
 )
 
 type RoleRepositoryInterface interface {
@@ -52,20 +53,28 @@ func (r *RoleRepository) GetRoles(ctx context.Context, limit uint64, offset uint
 	for rows.Next() {
 		var role dto.RoleDTO
 		var createdAt time.Time
+        var updatedAt time.Time 
 
+		
 		err := rows.Scan(
 			&role.ID,
 			&role.Name,
 			&role.Description,
 			&role.StatusID,
 			&createdAt,
+            &updatedAt, 
 		)
 
 		if err != nil {
 			return nil, err
 		}
 
-		role.CreatedAt = createdAt.Format("2006-01-02, 15:04:05")
+        
+        createdAtLocal := createdAt.Local()
+        updatedAtLocal := updatedAt.Local()
+
+		role.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
+        role.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
 
 		roles = append(roles, role)
 	}
@@ -87,13 +96,16 @@ func (r *RoleRepository) FindRole(ctx context.Context, id uint64) (*dto.RoleDTO,
 
 	var role dto.RoleDTO
 	var createdAt time.Time
+	var updatedAt time.Time
 
+	
 	err := r.storage.QueryRow(ctx, query, id).Scan(
 		&role.ID,
 		&role.Name,
 		&role.Description,
 		&role.StatusID,
 		&createdAt,
+		&updatedAt, 
 	)
 
 	if err != nil {
@@ -102,8 +114,12 @@ func (r *RoleRepository) FindRole(ctx context.Context, id uint64) (*dto.RoleDTO,
 		}
 		return nil, err
 	}
+		
+		createdAtLocal := createdAt.Local()
+        updatedAtLocal := updatedAt.Local()
 
-	role.CreatedAt = createdAt.Format("2006-01-02, 15:04:05")
+		role.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
+        role.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
 
 	return &role, nil
 }

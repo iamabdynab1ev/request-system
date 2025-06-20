@@ -2,15 +2,26 @@ package routes
 
 import (
 	"request-system/internal/controllers"
+	"request-system/internal/repositories"
+	"request-system/internal/services"
+	"request-system/pkg/logger"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 )
 
-var proretyCtrl = controllers.NewProretyController()
+func RUN_PRORETY_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
+	var (
+		logger = logger.NewLogger()
 
-func RUN_PRORETY_ROUTER(e *echo.Echo) {
-	e.GET("prorety", proretyCtrl.GetProreties)
-	e.GET("prorety/:id", proretyCtrl.FindProreties)
-	e.POST("prorety", proretyCtrl.CreateProreties)
-	e.PUT("prorety/:id", proretyCtrl.UpdateProreties)
-	e.DELETE("prorety/:id", proretyCtrl.DeleteProreties)
+		proretyRepository = repositories.NewProretyRepository(dbConn)
+		proretyService    = services.NewProretyService(proretyRepository, logger)
+		proretyCtrl       = controllers.NewProretyController(proretyService, logger)
+	)
+
+	e.GET("/proreties", proretyCtrl.GetProreties)
+	e.GET("/prorety/:id", proretyCtrl.FindProrety)
+	e.POST("/prorety", proretyCtrl.CreateProrety)
+	e.PUT("/prorety/:id", proretyCtrl.UpdateProrety)
+	e.DELETE("/prorety/:id", proretyCtrl.DeleteProrety)
 }

@@ -1,6 +1,6 @@
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE equipment_types (
+CREATE TABLE equipment_type (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
   

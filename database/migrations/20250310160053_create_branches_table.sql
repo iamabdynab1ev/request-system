@@ -8,7 +8,7 @@ CREATE TABLE branches (
     phone_number VARCHAR(12) NOT NULL,
     email VARCHAR(255) NOT NULL,
     email_index VARCHAR(255) UNIQUE,
-    open_date TIMESTAMP NOT NULL,
+    open_date TIMESTAMP WITH TIME ZONE NOT NULL,
     status_id INTEGER NOT NULL,
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

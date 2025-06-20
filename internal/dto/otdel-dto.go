@@ -1,25 +1,26 @@
 package dto
 
 type CreateOtdelDTO struct {
-	Name         string `json:"name" validate:"required,max=50"`
-	StatusID     int    `json:"status_id" validate:"required"`
-	DepartmentID int    `json:"department_id" validate:"required"`
+	Name          string `json:"name" validate:"required"`
+	StatusID      int    `json:"status_id" validate:"required"`
+	DepartmentsID int    `json:"departments_id" validate:"required"`
 }
 
 type UpdateOtdelDTO struct {
-	ID           int    `json:"id" validate:"required"`
-	Name         string `json:"name" validate:"omitempty,max=50"`
-	StatusID     int    `json:"status_id" validate:"omitempty"`
-	DepartmentID int    `json:"department_id" validate:"omitempty"`
+	ID            int    `json:"id" validate:"required"`
+	Name          string `json:"name" validate:"omitempty"`
+	StatusID      int    `json:"status_id" validate:"omitempty"`
+	DepartmentsID int    `json:"departments_id" validate:"omitempty"`
 }
 
-
 type OtdelDTO struct {
-	ID          int                `json:"id"`
-	Name        string             `json:"name"`
-	Status      ShortStatusDTO     `json:"status"`
-	Department  ShortDepartmentDTO `json:"department"`
-	CreatedAt   string             `json:"created_at"`
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	StatusID      int    `json:"status_id"`
+	DepartmentsID int    `json:"departments_id"`
+
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type ShortOtdelDTO struct {

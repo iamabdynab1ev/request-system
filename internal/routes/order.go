@@ -2,15 +2,28 @@ package routes
 
 import (
 	"request-system/internal/controllers"
+	"request-system/internal/repositories"
+	"request-system/internal/services"
+	mid "request-system/pkg/middleware"
+	"request-system/pkg/service"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
-var orderCtrl = controllers.NewOrderController()
+func RUN_ORDER_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool, jwtSvc service.JWTService, logger *zap.Logger) {
+	// Создаем только те зависимости, которые нужны для ЗАЯВОК
+	orderRepo := repositories.NewOrderRepository(dbConn)
+	orderService := services.NewOrderService(orderRepo, logger) 
+	orderCtrl := controllers.NewOrderController(orderService, logger)
+	authMW := mid.NewAuthMiddleware(jwtSvc)
 
-func RUN_ORDER_ROUTER(e *echo.Echo) {
-	e.GET("order", orderCtrl.GetOrders)
-	e.GET("order/:id", orderCtrl.FindOrders)
-	e.POST("order", orderCtrl.CreateOrders)
-	e.PUT("order/:id", orderCtrl.UpdateOrders)
-	e.DELETE("order/:id", orderCtrl.DeleteOrders)
+	ordersGroup := e.Group("/api/orders", authMW.Auth)
+
+	ordersGroup.GET("", orderCtrl.GetOrders)
+	ordersGroup.POST("", orderCtrl.CreateOrder)
+	ordersGroup.GET("/:id", orderCtrl.FindOrder)
+	ordersGroup.PUT("/:id", orderCtrl.UpdateOrder)
+	ordersGroup.DELETE("/:id", orderCtrl.DeleteOrder)
 }

@@ -8,18 +8,23 @@ import (
 	"request-system/internal/services"
 	"request-system/pkg/utils"
 
+	"go.uber.org/zap"
+
 	"github.com/labstack/echo/v4"
 )
 
 type RoleController struct {
 	roleService *services.RoleService
+	logger      *zap.Logger
 }
 
 func NewRoleController(
-		roleService *services.RoleService,
+	roleService *services.RoleService,
+	logger *zap.Logger,
 ) *RoleController {
 	return &RoleController{
 		roleService: roleService,
+		logger:      logger,
 	}
 }
 
@@ -41,7 +46,6 @@ func (c *RoleController) GetRoles(ctx echo.Context) error {
 		http.StatusOK,
 	)
 }
-
 
 func (c *RoleController) FindRole(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
@@ -72,11 +76,19 @@ func (c *RoleController) CreateRole(ctx echo.Context) error {
 
 	var dto dto.CreateRoleDTO
 	if err := ctx.Bind(&dto); err != nil {
+		c.logger.Error("неверный запрос", zap.Error(err))
+		return utils.ErrorResponse(ctx, err)
+	}
+
+	if err := ctx.Validate(&dto); err != nil {
+		c.logger.Error("Ощибка при валидации данных: ", zap.Error(err))
+
 		return utils.ErrorResponse(ctx, err)
 	}
 
 	res, err := c.roleService.CreateRole(reqCtx, dto)
 	if err != nil {
+		c.logger.Error("Ощибка при создание: ", zap.Error(err))
 		return utils.ErrorResponse(
 			ctx,
 			err,

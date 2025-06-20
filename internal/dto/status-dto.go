@@ -1,6 +1,5 @@
 package dto
 
-
 type CreateStatusDTO struct {
 	Icon string `json:"icon" validate:"required"`
 	Name string `json:"name" validate:"required,max=50"`

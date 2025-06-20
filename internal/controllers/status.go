@@ -9,17 +9,21 @@ import (
 	"request-system/pkg/utils"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
 type StatusController struct {
 	statusService *services.StatusService
+	logger        *zap.Logger
 }
 
 func NewStatusController(
-		statusService *services.StatusService,
+	statusService *services.StatusService,
+	logger *zap.Logger,
 ) *StatusController {
 	return &StatusController{
 		statusService: statusService,
+		logger:        logger,
 	}
 }
 
@@ -41,7 +45,6 @@ func (c *StatusController) GetStatuses(ctx echo.Context) error {
 		http.StatusOK,
 	)
 }
-
 
 func (c *StatusController) FindStatus(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
@@ -72,11 +75,19 @@ func (c *StatusController) CreateStatus(ctx echo.Context) error {
 
 	var dto dto.CreateStatusDTO
 	if err := ctx.Bind(&dto); err != nil {
+		c.logger.Error("неверный запрос", zap.Error(err))
+		return utils.ErrorResponse(ctx, err)
+	}
+
+	if err := ctx.Validate(&dto); err != nil {
+		c.logger.Error("Ощибка при валидации данных: ", zap.Error(err))
+
 		return utils.ErrorResponse(ctx, err)
 	}
 
 	res, err := c.statusService.CreateStatus(reqCtx, dto)
 	if err != nil {
+		c.logger.Error("Ощибка при создание: ", zap.Error(err))
 		return utils.ErrorResponse(
 			ctx,
 			err,

@@ -56,7 +56,9 @@ func (r *StatusRepository) GetStatuses(ctx context.Context, limit uint64, offset
 			return nil, err
 		}
 
-		status.CreatedAt = createdAt.Format("2006-01-02, 15:04:05")
+		 createdAtLocal := createdAt.Local()
+
+		status.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
 
 		statuses = append(statuses, status)
 	}
@@ -86,7 +88,9 @@ func (r *StatusRepository) FindStatus(ctx context.Context, id uint64) (*dto.Stat
 		return nil, err
 	}
 
-	status.CreatedAt = createdAt.Format("2006-01-02, 15:04:05")
+		 createdAtLocal := createdAt.Local()
+
+		status.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
 
 	return &status, nil
 }

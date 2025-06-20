@@ -1,15 +1,34 @@
 {
-    "editor.guides.bracketPairs": true,
-    "sqltools.connections": [
-        {
-            "previewLimit": 50,
-            "server": "localhost",
-            "port": 5432,
-            "driver": "PostgreSQL",
-            "name": "request-system",
-            "username": "postgres",
-            "password": "postgres",
-            "database": "request-system"
-        }
-    ]
+  "editor.guides.bracketPairs": true,
+  "editor.formatOnSave": true,
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 1000,
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "go.formatTool": "gofumpt",
+  "go.lintTool": "staticcheck",
+  "go.lintOnSave": "package",
+  "go.vetOnSave": "package",
+  "go.useLanguageServer": true,
+  "go.toolsManagement.autoUpdate": true,
+  "gopls": {
+    "ui.completion.usePlaceholders": true,
+    "ui.documentation": true,
+    "analyses": {
+      "unusedparams": true,
+      "shadow": true
+    },
+    "staticcheck": true
+  },
+  "editor.fontFamily": "Fira Code, Consolas, monospace",
+  "editor.fontLigatures": true,
+  "terminal.integrated.fontFamily": "Consolas, 'Courier New', monospace",
+  "workbench.colorTheme": "Default Dark Modern",
+  "breadcrumbs.enabled": true,
+  "explorer.confirmDelete": false
 }

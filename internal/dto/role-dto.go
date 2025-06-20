@@ -20,6 +20,7 @@ type RoleDTO struct {
 	StatusID    int    `json:"status_id"`
 	
 	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 type ShortRoleDTO struct {
