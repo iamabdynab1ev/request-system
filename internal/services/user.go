@@ -2,27 +2,23 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	"request-system/internal/repositories"
+	"request-system/pkg/utils"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type UserService struct {
-	userRepository   repositories.UserRepositoryInterface
-	statusRepository repositories.StatusRepositoryInterface
+	userRepository repositories.UserRepositoryInterface
 }
 
-func NewUserService(
-	userRepository repositories.UserRepositoryInterface,
-	statusRepository repositories.StatusRepositoryInterface,
-) *UserService {
+func NewUserService(userRepository repositories.UserRepositoryInterface) *UserService {
 	return &UserService{
-		userRepository:   userRepository,
-		statusRepository: statusRepository,
+		userRepository: userRepository,
 	}
 }
 
@@ -34,86 +30,84 @@ func hashPassword(password string) (string, error) {
 	return string(bytes), nil
 }
 
-func statusDTOToShortStatusDTO(status *dto.StatusDTO) *dto.ShortStatusDTO {
-	if status == nil {
+func toInt64Pointer(ni sql.NullInt64) *int64 {
+	if !ni.Valid {
 		return nil
 	}
-	return &dto.ShortStatusDTO{
-		ID:   status.ID,
-		Name: status.Name,
-	}
+	return &ni.Int64
 }
 
-func userEntityToDTO(entity *entities.User, status *dto.ShortStatusDTO) *dto.UserDTO {
+func userEntityToDTO(entity *entities.User) *dto.UserDTO {
 	if entity == nil {
 		return nil
 	}
 
-	dto := &dto.UserDTO{
+	return &dto.UserDTO{
 		ID:          entity.ID,
-		Fio:         entity.FIO,
+		FIO:         entity.FIO,
 		Email:       entity.Email,
-		Position:    entity.Position,
 		PhoneNumber: entity.PhoneNumber,
+		Position:    entity.Position.String,
 
-		Role:       entity.RoleID,
-		Branch:     entity.BranchID,
-		Department: entity.DepartmentID,
-		Office:     entity.OfficeID,
-		Otdel:      entity.OtdelID,
+		Status: dto.ShortStatusDTO{
+			ID:   entity.StatusID,
+			Name: entity.StatusName.String,
+		},
+		Role: dto.ShortRoleDTO{
+			ID:   entity.RoleID,
+			Name: entity.RoleName.String,
+		},
+		Department: dto.ShortDepartmentDTO{
+			ID:   entity.DepartmentID,
+			Name: entity.DepartmentName.String,
+		},
 
-		Status: *status,
+		BranchID: toInt64Pointer(entity.BranchID),
+		OfficeID: toInt64Pointer(entity.OfficeID),
+		OtdelID:  toInt64Pointer(entity.OtdelID),
 
-		CreatedAt: entity.CreatedAt.Format("2006-01-02, 15:04:05"),
-		UpdatedAt: entity.UpdatedAt.Format("2006-01-02, 15:04:05"),
+		CreatedAt: entity.CreatedAt.Format("2006-01-02 15:04:05"),
+		UpdatedAt: entity.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
-
-	return dto
 }
 
-func userEntitiesToDTOs(entities []entities.User, statusRepo repositories.StatusRepositoryInterface) ([]dto.UserDTO, error) {
-	if entities == nil {
-		return nil, nil
+func userEntitiesToDTOs(entities []*entities.User) []dto.UserDTO {
+	if len(entities) == 0 {
+		return []dto.UserDTO{}
 	}
-	dtos := make([]dto.UserDTO, len(entities))
-	for i, entity := range entities {
-		statusDTO, err := statusRepo.FindStatus(context.Background(), uint64(entity.StatusID))
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve status for user %d: %w", entity.ID, err)
+	dtos := make([]dto.UserDTO, 0, len(entities))
+	for _, entity := range entities {
+		if entity != nil {
+			dtos = append(dtos, *userEntityToDTO(entity))
 		}
-
-		shortStatusDTO := statusDTOToShortStatusDTO(statusDTO)
-		dtos[i] = *userEntityToDTO(&entity, shortStatusDTO)
 	}
-	return dtos, nil
+	return dtos
 }
 
-func (service *UserService) GetUsers(ctx context.Context, limit uint64, offset uint64) ([]dto.UserDTO, error) {
-	users, err := service.userRepository.GetUsers(ctx, limit, offset)
+func (s *UserService) GetUsers(ctx context.Context, limit uint64, offset uint64) ([]dto.UserDTO, error) {
+	users, err := s.userRepository.GetUsers(ctx, limit, offset)
 	if err != nil {
 		return nil, err
 	}
-
-	return userEntitiesToDTOs(users, service.statusRepository)
+	return userEntitiesToDTOs(users), nil
 }
 
-func (service *UserService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error) {
-	user, err := service.userRepository.FindUser(ctx, id)
+func (s *UserService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error) {
+	user, err := s.userRepository.FindUser(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-
-	statusDTO, err := service.statusRepository.FindStatus(ctx, uint64(user.StatusID))
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve status for user %d: %w", user.ID, err)
-	}
-
-	shortStatusDTO := statusDTOToShortStatusDTO(statusDTO)
-
-	return userEntityToDTO(user, shortStatusDTO), nil
+	return userEntityToDTO(user), nil
 }
 
-func (service *UserService) CreateUser(ctx context.Context, payload dto.CreateUserDTO) (*dto.UserDTO, error) {
+func toSqlNullInt(p *int) sql.NullInt64 {
+	if p == nil {
+		return sql.NullInt64{Valid: false}
+	}
+	return sql.NullInt64{Int64: int64(*p), Valid: true}
+}
+
+func (s *UserService) CreateUser(ctx context.Context, payload dto.CreateUserDTO) (*dto.UserDTO, error) {
 	hashedPassword, err := hashPassword(payload.Password)
 	if err != nil {
 		return nil, err
@@ -124,97 +118,40 @@ func (service *UserService) CreateUser(ctx context.Context, payload dto.CreateUs
 		Email:        payload.Email,
 		PhoneNumber:  payload.PhoneNumber,
 		Password:     hashedPassword,
-		Position:     payload.Position,
 		StatusID:     payload.StatusID,
 		RoleID:       payload.RoleID,
-		BranchID:     payload.BranchID,
 		DepartmentID: payload.DepartmentID,
-		OfficeID:     payload.OfficeID,
-		OtdelID:      payload.OtdelID,
+
+		Position: sql.NullString{String: payload.Position, Valid: payload.Position != ""},
+		BranchID: toSqlNullInt(payload.BranchID),
+		OfficeID: toSqlNullInt(payload.OfficeID),
+		OtdelID:  toSqlNullInt(payload.OtdelID),
 	}
 
-	createdEntity, err := service.userRepository.CreateUser(ctx, userEntity)
+	createdEntity, err := s.userRepository.CreateUser(ctx, userEntity)
 	if err != nil {
-		if pgErr, ok := err.(*pgconn.PgError); ok {
-			fmt.Printf("Postgres error code: %s, message: %s, constraint: %s\n", pgErr.Code, pgErr.Message, pgErr.ConstraintName)
-		}
 		return nil, err
 	}
-
-	statusDTO, err := service.statusRepository.FindStatus(ctx, uint64(createdEntity.StatusID))
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve status for created user %d: %w", createdEntity.ID, err)
-	}
-
-	shortStatusDTO := statusDTOToShortStatusDTO(statusDTO)
-
-	return userEntityToDTO(createdEntity, shortStatusDTO), nil
+	return s.FindUser(ctx, createdEntity.ID)
 }
-
-func (service *UserService) UpdateUser(ctx context.Context, payload dto.UpdateUserDTO) (*dto.UserDTO, error) {
-	existingUser, err := service.userRepository.FindUser(ctx, uint64(payload.ID))
-	if err != nil {
-		return nil, err
+func (s *UserService) UpdateUser(ctx context.Context, userID uint64, payload dto.UpdateUserDTO) (*dto.UserDTO, error) {
+	if payload.Fio == nil && payload.Email == nil && payload.PhoneNumber == nil && payload.Password == nil && payload.Position == nil &&
+		payload.StatusID == nil && payload.DepartmentID == nil && payload.BranchID == nil && payload.OfficeID == nil && payload.OtdelID == nil {
+		return nil, fmt.Errorf("пустой запрос на обновление: %w", utils.ErrorBadRequest)
 	}
-
-	if payload.Fio != "" {
-		existingUser.FIO = payload.Fio
-	}
-	if payload.Email != "" {
-		existingUser.Email = payload.Email
-	}
-	if payload.PhoneNumber != "" {
-		existingUser.PhoneNumber = payload.PhoneNumber
-	}
-	if payload.Position != "" {
-		existingUser.Position = payload.Position
-	}
-
-	if payload.Password != "" {
-		hashedPassword, err := hashPassword(payload.Password)
+	if payload.Password != nil && *payload.Password != "" {
+		hashedPassword, err := hashPassword(*payload.Password)
 		if err != nil {
 			return nil, err
 		}
-		existingUser.Password = hashedPassword
+		payload.Password = &hashedPassword
 	}
-
-	if payload.StatusID != 0 {
-		existingUser.StatusID = payload.StatusID
-	}
-	if payload.RoleID != 0 {
-		existingUser.RoleID = payload.RoleID
-	}
-	if payload.BranchID != 0 {
-		existingUser.BranchID = payload.BranchID
-	}
-	if payload.DepartmentID != 0 {
-		existingUser.DepartmentID = payload.DepartmentID
-	}
-	if payload.OfficeID != nil {
-		existingUser.OfficeID = payload.OfficeID
-	}
-	if payload.OtdelID != nil {
-		existingUser.OtdelID = payload.OtdelID
-	}
-
-	existingUser.OfficeID = payload.OfficeID
-	existingUser.OtdelID = payload.OtdelID
-
-	updatedEntity, err := service.userRepository.UpdateUser(ctx, existingUser)
+	_, err := s.userRepository.UpdateUser(ctx, userID, payload)
 	if err != nil {
 		return nil, err
 	}
-
-	statusDTO, err := service.statusRepository.FindStatus(ctx, uint64(updatedEntity.StatusID))
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve status for updated user %d: %w", updatedEntity.ID, err)
-	}
-
-	shortStatusDTO := statusDTOToShortStatusDTO(statusDTO)
-
-	return userEntityToDTO(updatedEntity, shortStatusDTO), nil
+	return s.FindUser(ctx, userID)
 }
-
-func (service *UserService) DeleteUser(ctx context.Context, id uint64) error {
-	return service.userRepository.DeleteUser(ctx, id)
+func (s *UserService) DeleteUser(ctx context.Context, id uint64) error {
+	return s.userRepository.DeleteUser(ctx, id)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"request-system/internal/dto"
 	"request-system/pkg/contextkeys"
+	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 	"time"
 
@@ -14,9 +15,10 @@ import (
 )
 
 type OrderDelegationRepositoryInterface interface {
+	CreateOrderDelegation(ctx context.Context, payload dto.CreateOrderDelegationDTO) (int, error)
+	CreateOrderDelegationInTx(ctx context.Context, tx pgx.Tx, delegatorID int, dto dto.CreateOrderDelegationDTO) error
 	GetOrderDelegations(ctx context.Context, limit uint64, offset uint64) ([]dto.OrderDelegationDTO, uint64, error)
 	FindOrderDelegation(ctx context.Context, id uint64) (*dto.OrderDelegationDTO, error)
-	CreateOrderDelegation(ctx context.Context, payload dto.CreateOrderDelegationDTO) (int, error)
 	DeleteOrderDelegation(ctx context.Context, id uint64) error
 }
 
@@ -28,6 +30,37 @@ func NewOrderDelegationRepository(storage *pgxpool.Pool) OrderDelegationReposito
 	return &OrderDelegationRepository{storage: storage}
 }
 
+func (r *OrderDelegationRepository) CreateOrderDelegation(ctx context.Context, payload dto.CreateOrderDelegationDTO) (int, error) {
+	delegatorID, ok := ctx.Value(contextkeys.UserIDKey).(int)
+	if !ok || delegatorID == 0 {
+		return 0, apperrors.ErrInvalidUserID
+	}
+
+	query := `INSERT INTO order_delegations (order_id, delegation_user_id, delegated_user_id, status_id, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id`
+
+	var newID int
+	err := r.storage.QueryRow(ctx, query,
+		payload.OrderID,
+		delegatorID,
+		payload.DelegatedUserID,
+		payload.StatusID,
+	).Scan(&newID)
+	if err != nil {
+		return 0, fmt.Errorf("ошибка создания делегирования: %w", err)
+	}
+	return newID, nil
+}
+
+func (r *OrderDelegationRepository) CreateOrderDelegationInTx(ctx context.Context, tx pgx.Tx, delegatorID int, dto dto.CreateOrderDelegationDTO) error {
+	query := `INSERT INTO order_delegations (order_id, delegation_user_id, delegated_user_id, status_id, created_at, updated_at) 
+	          VALUES ($1, $2, $3, $4, NOW(), NOW())`
+
+	_, err := tx.Exec(ctx, query, dto.OrderID, delegatorID, dto.DelegatedUserID, dto.StatusID)
+	if err != nil {
+		return fmt.Errorf("ошибка создания записи в 'order_delegations': %w", err)
+	}
+	return nil
+}
 func (r *OrderDelegationRepository) GetOrderDelegations(ctx context.Context, limit uint64, offset uint64) ([]dto.OrderDelegationDTO, uint64, error) {
 	var total uint64
 	if err := r.storage.QueryRow(ctx, `SELECT COUNT(*) FROM order_delegations`).Scan(&total); err != nil {
@@ -80,11 +113,11 @@ func (r *OrderDelegationRepository) GetOrderDelegations(ctx context.Context, lim
 		}
 
 		if delegatorId.Valid {
-			// ИСПРАВЛЕНО: Создаем новый объект и присваиваем его указателю
+
 			d.Delegator = &dto.ShortUserDTO{ID: int(delegatorId.Int32), Fio: delegatorFio.String}
 		}
 		if delegateeId.Valid {
-			// ИСПРАВЛЕНО: То же самое здесь
+
 			d.Delegatee = &dto.ShortUserDTO{ID: int(delegateeId.Int32), Fio: delegateeFio.String}
 		}
 
@@ -149,27 +182,6 @@ func (r *OrderDelegationRepository) FindOrderDelegation(ctx context.Context, id 
 	d.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
 	d.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
 	return &d, nil
-}
-
-func (r *OrderDelegationRepository) CreateOrderDelegation(ctx context.Context, payload dto.CreateOrderDelegationDTO) (int, error) {
-	delegatorID, ok := ctx.Value(contextkeys.UserIDKey).(int)
-	if !ok || delegatorID == 0 {
-		return 0, fmt.Errorf("не удалось определить пользователя, выполняющего делегирование")
-	}
-
-	query := `INSERT INTO order_delegations (delegation_user_id, delegated_user_id, status_id, order_id, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id`
-
-	var newID int
-	err := r.storage.QueryRow(ctx, query,
-		delegatorID,
-		payload.DelegatedUserID,
-		payload.StatusID,
-		payload.OrderID,
-	).Scan(&newID)
-	if err != nil {
-		return 0, fmt.Errorf("ошибка создания делегирования: %w", err)
-	}
-	return newID, nil
 }
 
 func (r *OrderDelegationRepository) DeleteOrderDelegation(ctx context.Context, id uint64) error {

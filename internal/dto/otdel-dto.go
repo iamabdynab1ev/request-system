@@ -18,9 +18,8 @@ type OtdelDTO struct {
 	Name          string `json:"name"`
 	StatusID      int    `json:"status_id"`
 	DepartmentsID int    `json:"departments_id"`
-
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 type ShortOtdelDTO struct {

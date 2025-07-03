@@ -2,97 +2,199 @@ package services
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
 	"request-system/pkg/contextkeys"
 	apperrors "request-system/pkg/errors"
+	"request-system/pkg/utils"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
 type OrderServiceInterface interface {
 	GetOrders(ctx context.Context, limit uint64, offset uint64) ([]dto.OrderDTO, uint64, error)
 	FindOrder(ctx context.Context, id uint64) (*dto.OrderDTO, error)
+	SoftDeleteOrder(ctx context.Context, id uint64) error
 	CreateOrder(ctx context.Context, orderData dto.CreateOrderDTO) (int, error)
 	UpdateOrder(ctx context.Context, id uint64, orderData dto.UpdateOrderDTO) error
-	DeleteOrder(ctx context.Context, id uint64) error
 }
 
 type OrderService struct {
-	orderRepository repositories.OrderRepositoryInterface
-	logger          *zap.Logger
+	pool           *pgxpool.Pool
+	orderRepo      repositories.OrderRepositoryInterface
+	commentRepo    repositories.OrderCommentRepositoryInterface
+	delegationRepo repositories.OrderDelegationRepositoryInterface
+	logger         *zap.Logger
+	userRepo       repositories.UserRepositoryInterface
+	statusRepo     repositories.StatusRepositoryInterface
+	priorityRepo   repositories.ProretyRepositoryInterface
 }
 
 func NewOrderService(
-	orderRepository repositories.OrderRepositoryInterface,
+	pool *pgxpool.Pool,
+	orderRepo repositories.OrderRepositoryInterface,
+	commentRepo repositories.OrderCommentRepositoryInterface,
+	delegationRepo repositories.OrderDelegationRepositoryInterface,
 	logger *zap.Logger,
+	userRepo repositories.UserRepositoryInterface,
+	statusRepo repositories.StatusRepositoryInterface,
+	priorityRepo repositories.ProretyRepositoryInterface,
 ) OrderServiceInterface {
 	return &OrderService{
-		orderRepository: orderRepository,
-		logger:          logger,
+		pool:           pool,
+		orderRepo:      orderRepo,
+		commentRepo:    commentRepo,
+		delegationRepo: delegationRepo,
+		logger:         logger,
+		userRepo:       userRepo,
+		statusRepo:     statusRepo,
+		priorityRepo:   priorityRepo,
 	}
 }
 
-func (s *OrderService) GetOrders(ctx context.Context, limit uint64, offset uint64) ([]dto.OrderDTO, uint64, error) {
-	orders, total, err := s.orderRepository.GetOrders(ctx, limit, offset)
-	if err != nil {
-		s.logger.Error("ошибка при получении списка заявок в сервисе", zap.Error(err))
-		return nil, 0, err
-	}
-	return orders, total, nil
-}
-
-func (s *OrderService) FindOrder(ctx context.Context, id uint64) (*dto.OrderDTO, error) {
-	order, err := s.orderRepository.FindOrder(ctx, id)
-	if err != nil {
-		s.logger.Error("ошибка при поиске заявки в сервисе", zap.Uint64("id", id), zap.Error(err))
-		return nil, err
-	}
-	return order, nil
-}
-
-func (s *OrderService) CreateOrder(ctx context.Context, orderData dto.CreateOrderDTO) (int, error) {
-	s.logger.Info("Запрос на создание заявки получен (сервис)", zap.Any("orderData", orderData))
-
-	creatorUserIDInterface := ctx.Value(contextkeys.UserIDKey)
-	if creatorUserIDInterface == nil {
-		s.logger.Error("UserID не найден в контексте (сервис)")
-		return 0, apperrors.ErrUserIDNotFoundInContext
-	}
-
-	creatorUserID, ok := creatorUserIDInterface.(int)
-	if !ok || creatorUserID <= 0 {
-		s.logger.Error("UserID в контексте имеет неверный тип или равен нулю")
+func (s *OrderService) CreateOrder(ctx context.Context, orderData dto.CreateOrderDTO) (newOrderID int, err error) {
+	creatorUserID, ok := ctx.Value(contextkeys.UserIDKey).(int)
+	if !ok || creatorUserID == 0 {
 		return 0, apperrors.ErrInvalidUserID
 	}
 
-	s.logger.Info("ID создателя заявки получен", zap.Int("creatorUserID", creatorUserID))
+	if orderData.StatusID == 0 {
+		statusOpen, err := s.statusRepo.FindByCode(ctx, "OPEN")
+		if err != nil {
+			s.logger.Error("статус по умолчанию 'OPEN' не найден", zap.Error(err))
+			return 0, fmt.Errorf("ошибка конфигурации: статус 'Открыто' не найден")
+		}
+		orderData.StatusID = statusOpen.ID
+	}
 
-	newID, err := s.orderRepository.CreateOrder(ctx, creatorUserID, orderData)
+	if orderData.ProretyID == 0 {
+		priorityMedium, err := s.priorityRepo.FindByCode(ctx, "MEDIUM")
+		if err != nil {
+			s.logger.Error("приоритет по умолчанию 'MEDIUM' не найден", zap.Error(err))
+			return 0, fmt.Errorf("ошибка конфигурации: приоритет 'Средний' не найден")
+		}
+		orderData.ProretyID = priorityMedium.Id
+	}
+
+	departmentHead, err := s.userRepo.FindHeadByDepartmentID(ctx, orderData.DepartmentID)
 	if err != nil {
-		s.logger.Error("Ошибка репозитория при создании заявки", zap.Error(err))
+		s.logger.Warn("не удалось найти руководителя для департамента",
+			zap.Int("departmentId", orderData.DepartmentID), zap.Error(err))
+		if errors.Is(err, utils.ErrorNotFound) {
+			return 0, apperrors.NewInvalidInputError("Невозможно создать заявку: для указанного подразделения не назначен руководитель.")
+		}
+		return 0, fmt.Errorf("внутренняя ошибка при поиске руководителя: %w", err)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		s.logger.Error("Не удалось начать транзакцию", zap.Error(err))
+		return 0, fmt.Errorf("ошибка начала транзакции: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	newOrderID, err = s.orderRepo.CreateOrderInTx(ctx, tx, creatorUserID, orderData, int(departmentHead.ID))
+
+	if err != nil {
+		s.logger.Error("Ошибка в orderRepo.CreateOrderInTx", zap.Error(err))
 		return 0, err
 	}
-	return newID, nil
+
+	delegationDto := dto.CreateOrderDelegationDTO{
+		OrderID:         newOrderID,
+		DelegatedUserID: int(departmentHead.ID),
+		StatusID:        orderData.StatusID,
+	}
+	if err = s.delegationRepo.CreateOrderDelegationInTx(ctx, tx, creatorUserID, delegationDto); err != nil {
+		s.logger.Error("Ошибка в delegationRepo.CreateOrderDelegationInTx", zap.Error(err), zap.Int("orderId", newOrderID))
+		return 0, err
+	}
+
+	if orderData.Message != "" {
+		commentDto := dto.CreateOrderCommentDTO{
+			OrderID:  newOrderID,
+			Message:  orderData.Message,
+			StatusID: orderData.StatusID,
+		}
+		if err = s.commentRepo.CreateOrderCommentInTx(ctx, tx, creatorUserID, commentDto); err != nil {
+			s.logger.Error("Ошибка в commentRepo.CreateOrderCommentInTx", zap.Error(err), zap.Int("orderId", newOrderID))
+			return 0, err
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		s.logger.Error("Ошибка при коммите транзакции", zap.Error(err))
+		return 0, fmt.Errorf("ошибка коммита транзакции: %w", err)
+	}
+
+	return newOrderID, nil
 }
 
-func (s *OrderService) UpdateOrder(ctx context.Context, id uint64, dto dto.UpdateOrderDTO) error {
-	// В будущем здесь может быть бизнес-логика:
-	// - Проверка прав пользователя (может ли он обновлять эту заявку?)
-	// - Отправка уведомлений и т.д.
-	err := s.orderRepository.UpdateOrder(ctx, id, dto)
+func (s *OrderService) UpdateOrder(ctx context.Context, id uint64, updateData dto.UpdateOrderDTO) (err error) {
+	updatorUserID, ok := ctx.Value(contextkeys.UserIDKey).(int)
+	if !ok || updatorUserID == 0 {
+		return apperrors.ErrInvalidUserID
+	}
+
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		s.logger.Error("Ошибка репозитория при обновлении заявки", zap.Uint64("id", id), zap.Error(err))
+		return fmt.Errorf("ошибка начала транзакции: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(context.Background())
+		}
+	}()
+
+	orderState, err := s.orderRepo.FindOrderForUpdateInTx(ctx, tx, id)
+	if err != nil {
 		return err
 	}
-	return nil
+
+	if err = s.orderRepo.UpdateOrderInTx(ctx, tx, id, updateData); err != nil {
+		return err
+	}
+
+	if updateData.ExecutorID != 0 && int(orderState.CurrentExecutorID.Int32) != updateData.ExecutorID {
+		delegationDto := dto.CreateOrderDelegationDTO{
+			OrderID:         int(id),
+			DelegatedUserID: updateData.ExecutorID,
+			StatusID:        orderState.CurrentStatusID,
+		}
+		if updateData.StatusID != 0 {
+			delegationDto.StatusID = updateData.StatusID
+		}
+		if err = s.delegationRepo.CreateOrderDelegationInTx(ctx, tx, updatorUserID, delegationDto); err != nil {
+			return err
+		}
+	}
+
+	if updateData.StatusID != 0 && orderState.CurrentStatusID != updateData.StatusID {
+		commentMessage := fmt.Sprintf("Статус заявки изменен (старый ID: %d, новый ID: %d)", orderState.CurrentStatusID, updateData.StatusID)
+		commentDto := dto.CreateOrderCommentDTO{
+			OrderID:  int(id),
+			Message:  commentMessage,
+			StatusID: updateData.StatusID,
+		}
+		if err = s.commentRepo.CreateOrderCommentInTx(ctx, tx, updatorUserID, commentDto); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
-func (s *OrderService) DeleteOrder(ctx context.Context, id uint64) error {
-	err := s.orderRepository.DeleteOrder(ctx, id)
-	if err != nil {
-		s.logger.Error("Ошибка репозитория при удалении заявки", zap.Uint64("id", id), zap.Error(err))
-		return err
-	}
-	return nil
+func (s *OrderService) GetOrders(ctx context.Context, limit uint64, offset uint64) ([]dto.OrderDTO, uint64, error) {
+	return s.orderRepo.GetOrders(ctx, limit, offset)
+}
+
+func (s *OrderService) FindOrder(ctx context.Context, id uint64) (*dto.OrderDTO, error) {
+	return s.orderRepo.FindOrder(ctx, id)
+}
+
+func (s *OrderService) SoftDeleteOrder(ctx context.Context, id uint64) error {
+	return s.orderRepo.SoftDeleteOrder(ctx, id)
 }

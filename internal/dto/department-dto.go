@@ -1,7 +1,5 @@
 package dto
 
-
-
 type CreateDepartmentDTO struct {
 	Name     string `json:"name" validate:"required"`
 	StatusID int    `json:"status_id" validate:"required"`

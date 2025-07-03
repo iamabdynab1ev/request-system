@@ -32,8 +32,7 @@ func NewOrderDelegationService(
 }
 
 func (s *OrderDelegationService) GetOrderDelegations(ctx context.Context, limit uint64, offset uint64) ([]dto.OrderDelegationDTO, uint64, error) {
-	// Если нужно будет фильтровать по order_id, это будет делаться здесь,
-	// но пока просто получаем все с пагинацией.
+	
 	delegations, total, err := s.orderDelegationRepository.GetOrderDelegations(ctx, limit, offset)
 	if err != nil {
 		s.logger.Error("Ошибка получения списка делегирований в сервисе", zap.Error(err))

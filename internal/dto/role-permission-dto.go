@@ -12,10 +12,11 @@ type UpdateRolePermissionDTO struct {
 }
 
 type RolePermissionDTO struct {
-	ID           int `json:"id"`
-	RoleID       int `json:"role_id"`
-	PermissionID int `json:"permission_id"`
-	CreatedAt    string `json:"created_at"`
+	ID             int    `json:"id"`
+	RoleID         int    `json:"role_id"`
+	RoleName       string `json:"role_name"`
+	PermissionID   int    `json:"permission_id"`
+	PermissionName string `json:"permission_name"`
 }
 
 type ShortRolePermissionDTO struct {

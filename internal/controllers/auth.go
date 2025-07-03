@@ -1,48 +1,45 @@
-// internal/controllers/auth_controller.go
 package controllers
 
 import (
-	// Для reqCtx, если будете использовать
-	// Псевдоним для стандартного пакета errors (для errors.Is)
 	"fmt"
 	"net/http"
-	"request-system/internal/dto"
-	"request-system/internal/services"
-	apperrors "request-system/pkg/errors" // Псевдоним для вашего пакета ошибок
-	"request-system/pkg/service"
-	"request-system/pkg/utils"
 	"strings"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
+
+	"request-system/internal/dto"
+	"request-system/internal/services"
+	apperrors "request-system/pkg/errors"
+	"request-system/pkg/service"
+	"request-system/pkg/utils"
 )
 
 type AuthController struct {
 	authService *services.AuthService
-	jwtService  service.JWTService // Этот jwtService будет передан извне
+	jwtService  service.JWTService
 	logger      *zap.Logger
 }
 
 func NewAuthController(
 	authService *services.AuthService,
-	jwtService service.JWTService, // Принимаем jwtService
+	jwtService service.JWTService,
 	logger *zap.Logger,
 ) *AuthController {
 	return &AuthController{
 		authService: authService,
-		jwtService:  jwtService, // Используем переданный jwtService
+		jwtService:  jwtService,
 		logger:      logger,
 	}
 }
 
 func (c *AuthController) Login(ctx echo.Context) error {
-	// reqCtx := ctx.Request().Context() // Можно использовать, если нужно передавать дальше
 	c.logger.Info("Login запрос получен")
 
 	var payload dto.LoginDto
 	if err := ctx.Bind(&payload); err != nil {
 		c.logger.Warn("Login: Ошибка привязки тела запроса", zap.Error(err))
-		return utils.ErrorResponse(ctx, err) // Предполагается, что ErrorResponse корректно обрабатывает статус
+		return utils.ErrorResponse(ctx, err)
 	}
 
 	if err := ctx.Validate(&payload); err != nil {
@@ -50,21 +47,19 @@ func (c *AuthController) Login(ctx echo.Context) error {
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	user, err := c.authService.Login(ctx.Request().Context(), payload) // Используем контекст запроса Echo
+	user, err := c.authService.Login(ctx.Request().Context(), payload)
 	if err != nil {
 		c.logger.Error("Login: Ошибка авторизации пользователя", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
-	c.logger.Info("Login: Пользователь успешно авторизован", zap.Int("userID", user.ID))
 
-	accessToken, refreshToken, err := c.jwtService.GenerateTokens(user.ID)
+	c.logger.Info("Login: Пользователь успешно авторизован", zap.Uint64("userID", user.ID))
+	accessToken, refreshToken, err := c.jwtService.GenerateTokens(int(user.ID))
 	if err != nil {
 		c.logger.Error("Login: Не удалось сгенерировать токены", zap.Error(err))
-		// Здесь можно вернуть более специфичную ошибку из apperrors
 		return utils.ErrorResponse(ctx, fmt.Errorf("%w: %s", apperrors.ErrInvalidToken, "ошибка генерации токенов"))
 	}
-	c.logger.Info("Login: Токены успешно сгенерированы", zap.Int("userID", user.ID))
-
+	c.logger.Info("Login: Токены успешно сгенерированы", zap.Uint64("userID", user.ID))
 	accessTokenTTL := c.jwtService.GetAccessTokenTTL()
 	refreshTokenTTL := c.jwtService.GetRefreshTokenTTL()
 
@@ -73,42 +68,34 @@ func (c *AuthController) Login(ctx echo.Context) error {
 		zap.Duration("refreshTokenTTL", refreshTokenTTL),
 	)
 
-	// Предполагаем, что dto.User является DTO для ответа, а не entity.
-	// Если user это *entities.User, его нужно смапить в dto.User.
-	// var userDto dto.User // Замените на ваш User DTO
-	// userDto = mapEntityToUserDto(user) // Пример функции маппинга
-
 	res := dto.AuthResponse{
 		Token: dto.Token{
 			AccessToken:           accessToken,
 			RefreshToken:          refreshToken,
-			AccessTokenExpiredIn:  int(accessTokenTTL.Seconds()),  // TTL в секундах
-			RefreshTokenExpiredIn: int(refreshTokenTTL.Seconds()), // TTL в секундах
+			AccessTokenExpiredIn:  int(accessTokenTTL.Seconds()),
+			RefreshTokenExpiredIn: int(refreshTokenTTL.Seconds()),
 		},
-		User: *user, // Убедитесь, что user это DTO, а не entity, или смапьте его.
+		User: *user,
 	}
 
 	return utils.SuccessResponse(
 		ctx,
 		res,
-		"Авторизация прошла успешно", // Сообщение на русском
+		"Авторизация прошла успешно",
 		http.StatusOK,
 	)
 }
 
 func (c *AuthController) Logout(ctx echo.Context) error {
-	// Здесь может быть логика инвалидации токена (например, добавление в черный список)
 	c.logger.Info("Logout запрос получен")
 	return utils.SuccessResponse(ctx, nil, "Выход из системы успешно выполнен", http.StatusOK)
 }
 
 func (c *AuthController) Me(ctx echo.Context) error {
-	// Этот эндпоинт должен быть защищен AuthMiddleware
-	// UserID должен быть извлечен из контекста, который установил AuthMiddleware
-	userIDInterface := ctx.Get("UserID") // Ключ, который использует AuthMiddleware
+	userIDInterface := ctx.Get("UserID")
 	if userIDInterface == nil {
 		c.logger.Warn("Me: UserID не найден в контексте, возможно, middleware не отработал или токен невалиден")
-		return utils.ErrorResponse(ctx, apperrors.ErrInvalidToken) // Или другая ошибка "unauthorized"
+		return utils.ErrorResponse(ctx, apperrors.ErrInvalidToken)
 	}
 
 	userID, ok := userIDInterface.(int)
@@ -118,10 +105,6 @@ func (c *AuthController) Me(ctx echo.Context) error {
 	}
 
 	c.logger.Info("Me запрос получен", zap.Int("userID", userID))
-	// Здесь должна быть логика получения информации о пользователе по userID
-	// user, err := c.authService.GetUserByID(ctx.Request().Context(), userID)
-	// if err != nil { ... }
-	// return utils.SuccessResponse(ctx, userDto, "Информация о пользователе", http.StatusOK)
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{"message": "Me success (заглушка)", "userID": userID})
 }
@@ -136,16 +119,14 @@ func (h *AuthController) RefreshToken(ctx echo.Context) error {
 		return utils.ErrorResponse(ctx, apperrors.ErrInvalidAuthHeader)
 	}
 	refreshTokenString := parts[1]
-	h.logger.Info("RefreshToken: Получен refresh токен", zap.String("tokenPreview", refreshTokenString[:10]+"...")) // Логгируем только часть токена
 
 	claims, err := h.jwtService.ValidateToken(refreshTokenString)
 	if err != nil {
-	
 		h.logger.Warn("RefreshToken: Ошибка валидации refresh токена", zap.Error(err))
-		return utils.ErrorResponse(ctx, err) 
+		return utils.ErrorResponse(ctx, err)
 	}
 
-	if claims == nil { 
+	if claims == nil {
 		h.logger.Error("RefreshToken: ValidateToken вернул nil claims без ошибки (неожиданно)")
 		return utils.ErrorResponse(ctx, apperrors.ErrInvalidToken)
 	}
@@ -159,7 +140,6 @@ func (h *AuthController) RefreshToken(ctx echo.Context) error {
 	newAccessToken, newRefreshToken, errGenerate := h.jwtService.GenerateTokens(claims.UserID)
 	if errGenerate != nil {
 		h.logger.Error("RefreshToken: Ошибка генерации новой пары токенов", zap.Int("userID", claims.UserID), zap.Error(errGenerate))
-		
 		return utils.ErrorResponse(ctx, fmt.Errorf("%w: %s", apperrors.ErrInvalidToken, "ошибка генерации новой пары токенов"))
 	}
 	h.logger.Info("RefreshToken: Новая пара токенов успешно сгенерирована", zap.Int("userID", claims.UserID))
@@ -167,16 +147,11 @@ func (h *AuthController) RefreshToken(ctx echo.Context) error {
 	newAccessTokenTTL := h.jwtService.GetAccessTokenTTL()
 	newRefreshTokenTTL := h.jwtService.GetRefreshTokenTTL()
 
-	h.logger.Info("RefreshToken: Получены TTL для новых токенов",
-		zap.Duration("newAccessTokenTTL", newAccessTokenTTL),
-		zap.Duration("newRefreshTokenTTL", newRefreshTokenTTL),
-	)
-
 	tokenDto := &dto.Token{
 		AccessToken:           newAccessToken,
 		RefreshToken:          newRefreshToken,
-		AccessTokenExpiredIn:  int(newAccessTokenTTL.Seconds()),  
-		RefreshTokenExpiredIn: int(newRefreshTokenTTL.Seconds()), 
+		AccessTokenExpiredIn:  int(newAccessTokenTTL.Seconds()),
+		RefreshTokenExpiredIn: int(newRefreshTokenTTL.Seconds()),
 	}
 
 	return utils.SuccessResponse(
@@ -186,7 +161,6 @@ func (h *AuthController) RefreshToken(ctx echo.Context) error {
 		http.StatusOK,
 	)
 }
-
 
 func (c *AuthController) Register(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, "Регистрация прошла успешно (заглушка)")

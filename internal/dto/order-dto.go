@@ -1,18 +1,18 @@
 package dto
 
+import "database/sql"
+
 type CreateOrderDTO struct {
 	Name         string `json:"name" validate:"required"`
 	DepartmentID int    `json:"department_id" validate:"required"`
-	OtdelID      int    `json:"otdel_id" validate:"required"`
-	ProretyID    int    `json:"prorety_id" validate:"required"`
-	StatusID     int    `json:"status_id" validate:"required"`
-	BranchID     int    `json:"branch_id" validate:"required"`
-	OfficeID     int    `json:"office_id" validate:"required"`
-	EquipmentID  int    `json:"equipment_id" validate:"required"`
-	ExecutorID   int    `json:"executor_id" validate:"required"`
-	Duration     string `json:"duration" validate:"required"`
+	Message      string `json:"message" validate:"required"`
 	Address      string `json:"address" validate:"required"`
-	Massage      string `json:"message" validate:"required"`
+	OtdelID      int    `json:"otdel_id" validate:"omitempty,gt=0"`
+	ProretyID    int    `json:"prorety_id" validate:"omitempty,gt=0"`
+	StatusID     int    `json:"status_id" validate:"omitempty,gt=0"`
+	BranchID     int    `json:"branch_id" validate:"omitempty,gt=0"`
+	OfficeID     int    `json:"office_id" validate:"omitempty,gt=0"`
+	EquipmentID  int    `json:"equipment_id" validate:"omitempty,gt=0"`
 }
 
 type UpdateOrderDTO struct {
@@ -34,15 +34,15 @@ type OrderDTO struct {
 	ID           int             `json:"id"`
 	Name         string          `json:"name"`
 	DepartmentID int             `json:"department_id"`
-	OtdelID      int             `json:"otdel_id"`
+	OtdelID      int             `json:"otdel_id,omitempty"`
 	Prorety      ShortProretyDTO `json:"prorety"`
 	Status       ShortStatusDTO  `json:"status"`
 	Creator      ShortUserDTO    `json:"creator"`
 	Executor     *ShortUserDTO   `json:"executor,omitempty"`
-	BranchID     int             `json:"branch_id"`
-	OfficeID     int             `json:"office_id"`
+	BranchID     int             `json:"branch_id,omitempty"`
+	OfficeID     int             `json:"office_id,omitempty"`
 	EquipmentID  int             `json:"equipment_id"`
-	Duration     string          `json:"duration"`
+	Duration     string          `json:"duration,omitempty"`
 	Address      string          `json:"address"`
 	CreatedAt    string          `json:"created_at"`
 }
@@ -50,4 +50,8 @@ type OrderDTO struct {
 type ShortOrderDTO struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
+}
+type OrderForUpdate struct {
+	CurrentExecutorID sql.NullInt32
+	CurrentStatusID   int
 }

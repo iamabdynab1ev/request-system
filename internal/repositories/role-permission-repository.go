@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"request-system/internal/dto"
 	"request-system/pkg/utils"
-	
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,7 +23,7 @@ type RolePermissionRepositoryInterface interface {
 	DeleteRolePermission(ctx context.Context, id uint64) error
 }
 
-type RolePermissionRepository struct{
+type RolePermissionRepository struct {
 	storage *pgxpool.Pool
 }
 
@@ -36,47 +35,60 @@ func NewRolePermissionRepository(storage *pgxpool.Pool) RolePermissionRepository
 }
 
 func (r *RolePermissionRepository) GetRolePermissions(ctx context.Context, limit uint64, offset uint64) ([]dto.RolePermissionDTO, error) {
-	query := fmt.Sprintf(`
+
+	query := `
 		SELECT
-			%s
-		FROM %s r
-		`, ROLE_PERMISSION_FIELDS, ROLE_PERMISSION_TABLE)
+			rp.id,
+			rp.role_id,
+			r.name,
+			rp.permission_id,
+			p.name
+		FROM role_permission rp
+		JOIN roles r ON rp.role_id = r.id
+		JOIN permissions p ON rp.permission_id = p.id
+		ORDER BY rp.id`
 
 	rows, err := r.storage.Query(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ошибка получения списка связей: %w", err)
 	}
-
 	defer rows.Close()
 
 	rolePermissions := make([]dto.RolePermissionDTO, 0)
 
 	for rows.Next() {
-		var rp dto.RolePermissionDTO
-		
+
+		var id, roleID, permissionID int
+		var roleName, permissionName string
 
 		err := rows.Scan(
-			&rp.ID,
-			&rp.RoleID,
-			&rp.PermissionID,
-		
+			&id,
+			&roleID,
+			&roleName,
+			&permissionID,
+			&permissionName,
 		)
-
-		
-
 		if err != nil {
-			return nil, err
+
+			return nil, fmt.Errorf("ошибка сканирования связи: %w", err)
 		}
 
+		rp := dto.RolePermissionDTO{
+			ID:             id,
+			RoleID:         roleID,
+			RoleName:       roleName,
+			PermissionID:   permissionID,
+			PermissionName: permissionName,
+		}
 		rolePermissions = append(rolePermissions, rp)
 	}
 
-	if err:= rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
 	return rolePermissions, nil
 }
-
 func (r *RolePermissionRepository) FindRolePermission(ctx context.Context, id uint64) (*dto.RolePermissionDTO, error) {
 	query := fmt.Sprintf(`
 		SELECT
@@ -91,7 +103,6 @@ func (r *RolePermissionRepository) FindRolePermission(ctx context.Context, id ui
 		&rp.ID,
 		&rp.RoleID,
 		&rp.PermissionID,
-		
 	)
 
 	if err != nil {
@@ -112,7 +123,7 @@ func (r *RolePermissionRepository) CreateRolePermission(ctx context.Context, dto
 
 	_, err := r.storage.Exec(ctx, query,
 		dto.RoleID,
-        dto.PermissionID,
+		dto.PermissionID,
 	)
 
 	if err != nil {
@@ -129,10 +140,10 @@ func (r *RolePermissionRepository) UpdateRolePermission(ctx context.Context, id 
     `, ROLE_PERMISSION_TABLE)
 
 	result, err := r.storage.Exec(ctx, query,
-        dto.RoleID,
-        dto.PermissionID,
-        id,
-    )
+		dto.RoleID,
+		dto.PermissionID,
+		id,
+	)
 
 	if err != nil {
 		return err
@@ -143,7 +154,6 @@ func (r *RolePermissionRepository) UpdateRolePermission(ctx context.Context, id 
 	}
 	return nil
 }
-
 
 func (r *RolePermissionRepository) DeleteRolePermission(ctx context.Context, id uint64) error {
 	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", ROLE_PERMISSION_TABLE)

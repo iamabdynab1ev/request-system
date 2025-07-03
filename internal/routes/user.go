@@ -12,11 +12,10 @@ import (
 
 func RUN_USER_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
 	var (
-		logger           *zap.Logger
-		userRepository   = repositories.NewUserRepository(dbConn)
-		statusRepository = repositories.NewStatusRepository(dbConn)
+		logger         *zap.Logger
+		userRepository = repositories.NewUserRepository(dbConn)
 
-		userService = services.NewUserService(userRepository, statusRepository)
+		userService = services.NewUserService(userRepository)
 		userCtrl    = controllers.NewUserController(userService, logger)
 	)
 	e.GET("/users", userCtrl.GetUsers)

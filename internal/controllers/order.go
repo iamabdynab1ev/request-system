@@ -11,7 +11,6 @@ import (
 	"go.uber.org/zap"
 )
 
-
 type OrderController struct {
 	orderService services.OrderServiceInterface
 	logger       *zap.Logger
@@ -93,13 +92,13 @@ func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, nil, "Заявка успешно обновлена", http.StatusOK)
 }
 
-func (c *OrderController) DeleteOrder(ctx echo.Context) error {
+func (c *OrderController) SoftDeleteOrder(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Некорректный ID"))
 	}
-	err = c.orderService.DeleteOrder(reqCtx, id)
+	err = c.orderService.SoftDeleteOrder(reqCtx, id)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}

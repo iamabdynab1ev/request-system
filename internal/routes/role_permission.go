@@ -18,7 +18,7 @@ func RUN_ROLE_PERMISSION_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
 		rpCtrl       = controllers.NewRolePermissionController(rpService, logger)
 	)
 
-	e.GET("/role-permission", rpCtrl.GetRolePermissions)
+	e.GET("/role-permissions", rpCtrl.GetRolePermissions)
 	e.GET("/role-permission/:id", rpCtrl.FindRolePermission)
 	e.POST("/role-permission", rpCtrl.CreateRolePermission)
 	e.PUT("/role-permission/:id", rpCtrl.UpdateRolePermission)

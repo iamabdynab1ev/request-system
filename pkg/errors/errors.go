@@ -1,28 +1,40 @@
 package errors
 
-import "errors"
+import "fmt"
 
-// Здесь будут храниться ВСЕ переиспользуемые ошибки нашего приложения.
 var (
-	// --- Ошибки, связанные с JWT и токенами ---
-	ErrInvalidSigningMethod = errors.New("неверный метод подписи токена")
-	ErrInvalidToken         = errors.New("недопустимый токен")
-	ErrTokenExpired         = errors.New("срок действия токена истёк")
-	ErrTokenNotYetValid     = errors.New("токен ещё не активен")
-	ErrTokenNotFound        = errors.New("токен не найден")
-	ErrTokenIsNotRefresh    = errors.New("токен не является refresh-токеном")
+	// JWT и токены
+	ErrInvalidSigningMethod = fmt.Errorf("неверный метод подписи токена")
+	ErrInvalidToken         = fmt.Errorf("недопустимый токен")
+	ErrTokenExpired         = fmt.Errorf("срок действия токена истёк")
+	ErrTokenNotYetValid     = fmt.Errorf("токен ещё не активен")
+	ErrTokenNotFound        = fmt.Errorf("токен не найден")
+	ErrTokenIsNotRefresh    = fmt.Errorf("токен не является refresh-токеном")
 
-	// --- Ошибки авторизации и аутентификации ---
-	ErrEmptyAuthHeader    = errors.New("заголовок авторизации отсутствует")
-	ErrInvalidAuthHeader  = errors.New("неверный формат заголовка авторизации")
-	ErrInvalidCredentials = errors.New("неверные учётные данные")
+	// Авторизация
+	ErrEmptyAuthHeader    = fmt.Errorf("заголовок авторизации отсутствует")
+	ErrInvalidAuthHeader  = fmt.Errorf("неверный формат заголовка авторизации")
+	ErrInvalidCredentials = fmt.Errorf("неверные учётные данные")
+	ErrUnauthorized       = fmt.Errorf("неавторизован")   // <--- ДОБАВЛЕНО
+	ErrForbidden          = fmt.Errorf("доступ запрещён") // <--- ДОБАВЛЕНО
 
-	// --- Ошибки, связанные с данными из контекста ---
-	// ↓↓↓ Вот они, недостающие! ↓↓↓
-	ErrUserIDNotFoundInContext = errors.New("UserID не найден в контексте запроса")
-	ErrInvalidUserID           = errors.New("недопустимый UserID (неверный тип или нулевое значение)")
+		
+	// Контекст
+	ErrUserIDNotFoundInContext = fmt.Errorf("UserID не найден в контексте запроса")
+	ErrInvalidUserID           = fmt.Errorf("недопустимый UserID")
 
-	// --- Общие ошибки ---
-	ErrNotFound   = errors.New("данные не найдены")
-	ErrBadRequest = errors.New("неверный запрос")
+	// Общие
+	ErrNotFound   = fmt.Errorf("запись не найдена")
+	ErrBadRequest = fmt.Errorf("неверный запрос")
 )
+
+// Кастомные типы ошибок
+type InvalidInputError struct {
+	Message string
+}
+
+func (e *InvalidInputError) Error() string { return e.Message }
+
+func NewInvalidInputError(format string, args ...interface{}) error {
+	return &InvalidInputError{Message: fmt.Sprintf(format, args...)}
+}
