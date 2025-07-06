@@ -16,20 +16,15 @@ type HttpResponse struct {
 }
 
 func SuccessResponse(ctx echo.Context, body interface{}, message string, code int, total ...uint64) error {
-	var response *HttpResponse = &HttpResponse{
+	response := &HttpResponse{
 		Status:  true,
-		Body:    struct{}{},
 		Message: message,
 	}
 
 	withPagination, _ := strconv.ParseBool(ctx.QueryParam("withPagination"))
-	if !withPagination {
-		response.Body = body
-	}
 
 	if withPagination {
-
-		var limit, _, page = ParsePaginationParams(ctx.QueryParams())
+		limit, _, page := ParsePaginationParams(ctx.QueryParams())
 
 		var totalCount uint64 = 0
 		if len(total) > 0 {
@@ -44,34 +39,37 @@ func SuccessResponse(ctx echo.Context, body interface{}, message string, code in
 				Limit:      limit,
 			},
 		}
+	} else {
+
+		if body != nil {
+			response.Body = body
+		} else {
+
+			response.Body = struct{}{}
+		}
 	}
 
-	return ctx.JSON(
-		code,
-		response,
-	)
+	return ctx.JSON(code, response)
 }
 
-func ErrorResponse(ctx echo.Context, err error) error {
-	var message string = err.Error()
-	var code int = http.StatusInternalServerError
+func ErrorResponse(ctx echo.Context, incomingErr error) error {
+	// Значения по умолчанию
+	message := incomingErr.Error()
+	code := http.StatusInternalServerError
 
-	for err, statusCode := range ErrorStatusCode {
-		if errors.Is(err, err) {
-			message = err.Error()
+	for errType, statusCode := range ErrorStatusCode {
+		if errors.Is(incomingErr, errType) {
+
+			message = errType.Error()
 			code = statusCode
 			break
 		}
 	}
 
-	var response *HttpResponse = &HttpResponse{
+	response := &HttpResponse{
 		Status:  false,
-		Body:    struct{}{},
 		Message: message,
 	}
 
-	return ctx.JSON(
-		code,
-		response,
-	)
+	return ctx.JSON(code, response)
 }

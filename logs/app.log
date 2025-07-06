@@ -1,58 +1,204 @@
-1.7501397221854746e+09	info	app/main.go:45	main: Успешное подключение к базе данных
-1.7501397221854746e+09	info	app/main.go:64	main: JWTService успешно создан
-1.7501397221854746e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.7501397221872344e+09	info	routes/routes.go:37	INIT_ROUTER: Создание маршрутов завершено
-1.7501397221872344e+09	info	app/main.go:70	🚀 Сервер запущен на :8080
-1.7501407332375057e+09	info	app/main.go:45	main: Успешное подключение к базе данных
-1.7501407332391746e+09	info	app/main.go:64	main: JWTService успешно создан
-1.7501407332391746e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.750140733241447e+09	info	routes/routes.go:37	INIT_ROUTER: Создание маршрутов завершено
-1.750140733241447e+09	info	app/main.go:70	🚀 Сервер запущен на :8080
-1.750221869337186e+09	info	app/main.go:45	main: Успешное подключение к базе данных
-1.7502218693377573e+09	info	app/main.go:64	main: JWTService успешно создан
-1.7502218693377573e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.7502218693388731e+09	info	routes/routes.go:37	INIT_ROUTER: Создание маршрутов завершено
-1.7502218693388731e+09	info	app/main.go:70	🚀 Сервер запущен на :8080
-1.750221950106464e+09	info	controllers/auth.go:40	Login запрос получен
-1.7502219502541592e+09	info	controllers/auth.go:58	Login: Пользователь успешно авторизован	{"userID": 4}
-1.7502219502551582e+09	info	controllers/auth.go:66	Login: Токены успешно сгенерированы	{"userID": 4}
-1.7502219502551582e+09	info	controllers/auth.go:71	Login: Получены TTL для токенов	{"accessTokenTTL": 3600, "refreshTokenTTL": 604800}
-1.7502258357425308e+09	info	app/main.go:45	main: Успешное подключение к базе данных
-1.7502258357425308e+09	info	app/main.go:64	main: JWTService успешно создан
-1.7502258357431355e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.7502258357454712e+09	info	routes/routes.go:37	INIT_ROUTER: Создание маршрутов завершено
-1.7502258357460463e+09	info	app/main.go:70	🚀 Сервер запущен на :8080
-1.7502258479781451e+09	info	controllers/auth.go:40	Login запрос получен
-1.7502258480628822e+09	info	controllers/auth.go:58	Login: Пользователь успешно авторизован	{"userID": 4}
-1.7502258480639262e+09	info	controllers/auth.go:66	Login: Токены успешно сгенерированы	{"userID": 4}
-1.7502258480639262e+09	info	controllers/auth.go:71	Login: Получены TTL для токенов	{"accessTokenTTL": 3600, "refreshTokenTTL": 604800}
-1.7503899871300206e+09	info	app/main.go:45	main: Успешное подключение к базе данных
-1.7503899871324096e+09	info	app/main.go:64	main: JWTService успешно создан
-1.7503899871329916e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.750389987136714e+09	info	routes/routes.go:37	INIT_ROUTER: Создание маршрутов завершено
-1.750389987137259e+09	info	app/main.go:70	🚀 Сервер запущен на :8080
-1.750390074088794e+09	info	controllers/auth.go:40	Login запрос получен
-1.7503900742406244e+09	info	controllers/auth.go:58	Login: Пользователь успешно авторизован	{"userID": 4}
-1.750390074241624e+09	info	controllers/auth.go:66	Login: Токены успешно сгенерированы	{"userID": 4}
-1.750390074241624e+09	info	controllers/auth.go:71	Login: Получены TTL для токенов	{"accessTokenTTL": 3600, "refreshTokenTTL": 604800}
-1.7503900780178437e+09	info	controllers/auth.go:40	Login запрос получен
-1.7503900780926552e+09	info	controllers/auth.go:58	Login: Пользователь успешно авторизован	{"userID": 4}
-1.7503900780926552e+09	info	controllers/auth.go:66	Login: Токены успешно сгенерированы	{"userID": 4}
-1.7503900780926552e+09	info	controllers/auth.go:71	Login: Получены TTL для токенов	{"accessTokenTTL": 3600, "refreshTokenTTL": 604800}
-1.7503900839319685e+09	info	controllers/auth.go:40	Login запрос получен
-1.7503900840120296e+09	info	controllers/auth.go:58	Login: Пользователь успешно авторизован	{"userID": 4}
-1.7503900840120296e+09	info	controllers/auth.go:66	Login: Токены успешно сгенерированы	{"userID": 4}
-1.7503900840120296e+09	info	controllers/auth.go:71	Login: Получены TTL для токенов	{"accessTokenTTL": 3600, "refreshTokenTTL": 604800}
-1.75039009375506e+09	info	controllers/auth.go:40	Login запрос получен
-1.7503900938292253e+09	info	controllers/auth.go:58	Login: Пользователь успешно авторизован	{"userID": 4}
-1.7503900938292253e+09	info	controllers/auth.go:66	Login: Токены успешно сгенерированы	{"userID": 4}
-1.7503900938292253e+09	info	controllers/auth.go:71	Login: Получены TTL для токенов	{"accessTokenTTL": 3600, "refreshTokenTTL": 604800}
-1.7503900949085314e+09	info	controllers/auth.go:40	Login запрос получен
-1.750390094986613e+09	info	controllers/auth.go:58	Login: Пользователь успешно авторизован	{"userID": 4}
-1.7503900949873319e+09	info	controllers/auth.go:66	Login: Токены успешно сгенерированы	{"userID": 4}
-1.7503900949873319e+09	info	controllers/auth.go:71	Login: Получены TTL для токенов	{"accessTokenTTL": 3600, "refreshTokenTTL": 604800}
-1.750390401628303e+09	info	app/main.go:45	main: Успешное подключение к базе данных
-1.7503904016293538e+09	info	app/main.go:64	main: JWTService успешно создан
-1.7503904016293538e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.7503904016332452e+09	info	routes/routes.go:37	INIT_ROUTER: Создание маршрутов завершено
-1.7503904016337814e+09	info	app/main.go:70	🚀 Сервер запущен на :8080
+1.7518048034029903e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518048034029903e+09	info	app/main.go:82	main: JWTService успешно создан
+1.7518048034035041e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
+1.7518048034068165e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
+1.7518048034068165e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518048147416918e+09	info	controllers/auth.go:99	Токены успешно сгенерированы	{"userID": 62}
+1.7518048181051586e+09	info	services/auth.go:92	Код верификации сгенерирован	{"userID": 62}
+1.7518051103175364e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518051103180795e+09	info	app/main.go:82	main: JWTService успешно создан
+1.7518051103186166e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
+1.7518051103207862e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
+1.7518051103207862e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518051196935763e+09	info	services/auth.go:91	Код верификации сгенерирован (для теста)	{"userID": 62, "code": "3217"}
+1.7518052092939353e+09	info	controllers/auth.go:99	Токены успешно сгенерированы	{"userID": 62}
+1.751805213184539e+09	info	services/auth.go:91	Код верификации сгенерирован (для теста)	{"userID": 62, "code": "4473"}
+1.7518053819880161e+09	info	controllers/auth.go:99	Токены успешно сгенерированы	{"userID": 62}
+1.751806258894568e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.751806258895089e+09	info	app/main.go:82	main: JWTService успешно создан
+1.751806258895089e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
+1.7518062588972528e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
+1.7518062588972528e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518062828269427e+09	warn	middleware/auth.go:40	AuthMiddleware: Неверный формат заголовка Authorization
+1.751806291597508e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518062916468828e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
+request-system/internal/services.(*OrderService).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:34
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518062916468828e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518063060915318e+09	info	controllers/auth.go:99	Токены успешно сгенерированы	{"userID": 62}
+1.7518063092613099e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518063092661421e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
+request-system/internal/services.(*OrderService).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:34
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518063092661421e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518063152777016e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751806537222582e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518065372233608e+09	info	app/main.go:82	main: JWTService успешно создан
+1.7518065372233608e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
+1.7518065372254486e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
+1.7518065372260902e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518065459482343e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518065459710839e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+request-system/internal/services.(*OrderService).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:34
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518065459710839e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518065474530423e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518065474562201e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+request-system/internal/services.(*OrderService).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:34
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518065474562201e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518066532466378e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518066532466378e+09	info	app/main.go:82	main: JWTService успешно создан
+1.751806653247228e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
+1.751806653248843e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
+1.751806653248843e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.751806664007378e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751806664011875e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+request-system/internal/services.(*OrderService).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:34
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.751806664012383e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+request-system/internal/controllers.(*OrderController).GetOrders
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.751806774950765e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.751806774950765e+09	info	app/main.go:82	main: JWTService успешно создан
+1.751806774950765e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
+1.7518067749527705e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
+1.7518067749527705e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518067833257e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518068008135643e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518068008146229e+09	error	controllers/order.go:66	Ошибка валидации данных заявки	{"error": "Key: 'CreateOrderDTO.OtdelID' Error:Field validation for 'OtdelID' failed on the 'required' tag\nKey: 'CreateOrderDTO.ProretyID' Error:Field validation for 'ProretyID' failed on the 'required' tag\nKey: 'CreateOrderDTO.StatusID' Error:Field validation for 'StatusID' failed on the 'required' tag\nKey: 'CreateOrderDTO.BranchID' Error:Field validation for 'BranchID' failed on the 'required' tag\nKey: 'CreateOrderDTO.OfficeID' Error:Field validation for 'OfficeID' failed on the 'required' tag\nKey: 'CreateOrderDTO.EquipmentID' Error:Field validation for 'EquipmentID' failed on the 'required' tag\nKey: 'CreateOrderDTO.ExecutorID' Error:Field validation for 'ExecutorID' failed on the 'required' tag\nKey: 'CreateOrderDTO.Duration' Error:Field validation for 'Duration' failed on the 'required' tag"}
+request-system/internal/controllers.(*OrderController).CreateOrder
+	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:66
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.751807502551032e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518075025522459e+09	info	app/main.go:82	main: JWTService успешно создан
+1.7518075025528743e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
+1.751807502558254e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
+1.7518075025588522e+09	info	app/main.go:88	🚀 Сервер запущен на :8080

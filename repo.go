@@ -10,21 +10,17 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// pgxQuerier интерфейс для совместимости с *pgx.Conn, *pgx.Pool, pgx.Tx
 type pgxQuerier interface {
 	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
 }
 
-// --- Именованные ошибки для более детальной обработки ---
 var (
 	ErrValidation          = errors.New("validation error")
 	ErrDBInteraction       = errors.New("database interaction error")
 	ErrInputParameter      = errors.New("invalid input parameter")
-	ErrInternalLogic       = errors.New("internal logic error") // Для ошибок, которые не должны возникать при корректной логике
+	ErrInternalLogic       = errors.New("internal logic error")
 	ErrFeatureNotSupported = errors.New("feature not supported or not recommended due to security concerns")
 )
-
-// --- ENUM-подобные типы для ясности ---
 
 type JoinType string
 
@@ -35,30 +31,22 @@ const (
 	JoinFull  JoinType = "FULL OUTER JOIN"
 )
 
-// --- Структуры для параметров запроса ---
-
 type QueryParams struct {
 	FromTable     string
 	FromAlias     string
 	SelectColumns []string
 	Joins         []JoinData
-	WhereClause   string        // Безопасность структуры - ответственность вызывающей стороны. Значения через WhereArgs.
-	WhereArgs     []interface{} // Если WhereClause содержит плейсхолдеры $N, здесь должны быть соответствующие значения.
+	WhereClause   string
+	WhereArgs     []interface{}
 	OrderBy       string
 	Limit         int
 	Offset        int
 }
 
 type JoinData struct {
-	Type  JoinType
-	Table string
-	Alias string
-	// OnClause: Важно! Если этот OnClause должен содержать динамические *значения*,
-	// то эти значения должны передаваться через основной QueryParams.WhereArgs,
-	// а сама строка OnClause должна содержать соответствующие плейсхолдеры ($N),
-	// которые корректно указывают на позиции аргументов в QueryParams.WhereArgs.
-	// validateRawSQLClause защищает от опасных *ключевых слов*, но не от внедрения
-	// через неверно сформированные значения, если они не параметризованы.
+	Type     JoinType
+	Table    string
+	Alias    string
 	OnClause string
 }
 
@@ -67,20 +55,15 @@ type QueryResult struct {
 	Total int64
 }
 
-// --- Валидаторы и мэппинги ---
-
-// ValidColumns определяет разрешенные таблицы и их столбцы.
-// Ключ - имя таблицы, значение - слайс разрешенных столбцов.
 var ValidColumns = map[string][]string{
 	"order_delegations": {"id", "delegation_user_id", "delegated_user_id", "status_id", "order_id", "created_at", "updated_at"},
-	"orders":            {"id", "name", "customer_id", "equipment_id", "order_date", "status", "description"}, // Добавлены для примера из main
-	"customers":         {"id", "name", "region", "company_notes"},                                          // Добавлены
-	"equipment":         {"id", "serial_number", "type_id", "description"},                                  // Добавлены
-	"equipment_types":   {"id", "type_name"},                                                                 // Добавлены
+	"orders":            {"id", "name", "customer_id", "equipment_id", "order_date", "status", "description"},
+	"customers":         {"id", "name", "region", "company_notes"},
+	"equipment":         {"id", "serial_number", "type_id", "description"},
+	"equipment_types":   {"id", "type_name"},
 	"statuses":          {"id", "name"},
 }
 
-// Регулярное выражение для валидации псевдонимов (простой SQL идентификатор).
 var validAliasRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 func isFieldInWhitelist(actualTableName string, columnName string, params QueryParams) bool {
@@ -186,19 +169,18 @@ func validateOrderBy(orderByClause string, params QueryParams) error {
 			if direction == "ASC" || direction == "DESC" {
 				validDirection = true
 			}
-			
-			// Проверка NULLS FIRST/LAST после ASC/DESC
+
 			if validDirection && len(parts) > 2 {
-                 nullsOpt := strings.ToUpper(strings.Join(parts[2:], " "))
-                 if nullsOpt != "NULLS FIRST" && nullsOpt != "NULLS LAST" {
-                     return fmt.Errorf("%w: недопустимая опция NULLS '%s' после направления сортировки в ORDER BY для сегмента: '%s'", ErrValidation, nullsOpt, segment)
-                 }
-            } else if direction == "NULLS" { // Проверка column_name NULLS FIRST/LAST
+				nullsOpt := strings.ToUpper(strings.Join(parts[2:], " "))
+				if nullsOpt != "NULLS FIRST" && nullsOpt != "NULLS LAST" {
+					return fmt.Errorf("%w: недопустимая опция NULLS '%s' после направления сортировки в ORDER BY для сегмента: '%s'", ErrValidation, nullsOpt, segment)
+				}
+			} else if direction == "NULLS" {
 				if len(parts) != 3 || (strings.ToUpper(parts[2]) != "FIRST" && strings.ToUpper(parts[2]) != "LAST") {
 					return fmt.Errorf("%w: недопустимая опция NULLS '%s' в ORDER BY для сегмента: '%s'", ErrValidation, strings.Join(parts[1:], " "), segment)
 				}
-			} else if !validDirection && direction != "NULLS" { // Если первое слово после колонки - невалидное направление и не NULLS
-				 return fmt.Errorf("%w: недопустимое направление или опция '%s' в ORDER BY для сегмента: '%s'", ErrValidation, direction, segment)
+			} else if !validDirection && direction != "NULLS" {
+				return fmt.Errorf("%w: недопустимое направление или опция '%s' в ORDER BY для сегмента: '%s'", ErrValidation, direction, segment)
 			}
 		}
 	}
@@ -235,7 +217,6 @@ func FetchDataAndCount(ctx context.Context, db pgxQuerier, params QueryParams) (
 		return result, fmt.Errorf("%w: database connection (pgxQuerier) is nil", ErrInputParameter)
 	}
 
-	// 1. Валидация FromTable и FromAlias
 	if params.FromTable == "" {
 		return result, fmt.Errorf("%w: FromTable is required", ErrInputParameter)
 	}
@@ -252,18 +233,16 @@ func FetchDataAndCount(ctx context.Context, db pgxQuerier, params QueryParams) (
 		}
 	}
 
-	// 2. Валидация SelectColumns
 	if len(params.SelectColumns) == 0 {
 		return result, fmt.Errorf("%w: SelectColumns не может быть пустым", ErrInputParameter)
 	}
 	for _, col := range params.SelectColumns {
-		if err := validateSelectColumn(col, params); err != nil { // err уже обернут в ErrValidation или ErrInternalLogic
+		if err := validateSelectColumn(col, params); err != nil {
 			return result, fmt.Errorf("ошибка валидации SELECT колонки: %w", err)
 		}
 	}
 	selectSQL := strings.Join(params.SelectColumns, ", ")
 
-	// 3. Валидация и сборка JOINs
 	var joinSQLs []string
 	for i, join := range params.Joins {
 		if _, tableWhitelisted := ValidColumns[join.Table]; !tableWhitelisted {
@@ -273,7 +252,7 @@ func FetchDataAndCount(ctx context.Context, db pgxQuerier, params QueryParams) (
 			return result, fmt.Errorf("%w: недопустимый формат для JOIN alias: '%s' (JOIN #%d)", ErrValidation, join.Alias, i+1)
 		}
 		if err := validateRawSQLClause(join.OnClause, fmt.Sprintf("JOIN #%d OnClause", i+1)); err != nil {
-			return result, err // err уже обернут в ErrValidation
+			return result, err
 		}
 
 		joinTablePart := join.Table
@@ -284,17 +263,15 @@ func FetchDataAndCount(ctx context.Context, db pgxQuerier, params QueryParams) (
 	}
 	joinsCombinedSQL := strings.Join(joinSQLs, "\n")
 
-	// 4. Валидация WhereClause
 	if err := validateRawSQLClause(params.WhereClause, "WHERE"); err != nil {
-		return result, err // err уже обернут в ErrValidation
+		return result, err
 	}
 	whereSQL := ""
 	if strings.TrimSpace(params.WhereClause) != "" {
 		whereSQL = "WHERE " + params.WhereClause
 	}
 
-	// 5. Валидация OrderBy
-	if err := validateOrderBy(params.OrderBy, params); err != nil { // err уже обернут в ErrValidation
+	if err := validateOrderBy(params.OrderBy, params); err != nil {
 		return result, fmt.Errorf("ошибка валидации ORDER BY: %w", err)
 	}
 	orderBySQL := ""
@@ -302,24 +279,22 @@ func FetchDataAndCount(ctx context.Context, db pgxQuerier, params QueryParams) (
 		orderBySQL = "ORDER BY " + params.OrderBy
 	}
 
-	// 6. PAGINATION
 	var paginationSQLBuilder strings.Builder
-	if params.Offset >= 0 { // 0 - валидное смещение
+	if params.Offset >= 0 {
 		fmt.Fprintf(&paginationSQLBuilder, "OFFSET %d", params.Offset)
-	} else if params.Offset < -1 { // -1 может использоваться как "не применять смещение", но здесь делаем строже
+	} else if params.Offset < -1 {
 		return result, fmt.Errorf("%w: Offset не может быть отрицательным (кроме -1 для отсутствия): %d", ErrInputParameter, params.Offset)
 	}
 	if params.Limit > 0 {
-		if paginationSQLBuilder.Len() > 0 && params.Offset >=0 { // Добавляем пробел, если есть OFFSET
+		if paginationSQLBuilder.Len() > 0 && params.Offset >= 0 {
 			paginationSQLBuilder.WriteString(" ")
 		}
 		fmt.Fprintf(&paginationSQLBuilder, "LIMIT %d", params.Limit)
-	} else if params.Limit < -1 { // -1 может использоваться как "не применять лимит"
+	} else if params.Limit < -1 {
 		return result, fmt.Errorf("%w: Limit не может быть отрицательным (кроме -1 для отсутствия): %d", ErrInputParameter, params.Limit)
 	}
 	paginationSQL := paginationSQLBuilder.String()
 
-	// 7. Сборка итогового запроса
 	var queryBuilder strings.Builder
 	fmt.Fprintf(&queryBuilder, "SELECT %s, COUNT(*) OVER() AS total_count\n", selectSQL)
 
@@ -344,25 +319,20 @@ func FetchDataAndCount(ctx context.Context, db pgxQuerier, params QueryParams) (
 
 	finalQueryString := queryBuilder.String()
 
-	// 8. Выполнение запроса
 	rows, err := db.Query(ctx, finalQueryString, params.WhereArgs...)
 	if err != nil {
-		// Включаем SQL в ошибку только если это не ErrValidation (чтобы не раскрывать потенциально чувствительные части WHERE)
-		// или если включен специальный режим отладки. Для простоты пока так:
 		return result, fmt.Errorf("%w: ошибка выполнения запроса '%s': %v. SQL: %s. Args: %v", ErrDBInteraction, finalQueryString, err, finalQueryString, params.WhereArgs)
 	}
 	defer rows.Close()
 
 	rawData, errCollect := pgx.CollectRows(rows, pgx.RowToMap)
 	if errCollect != nil {
-		// Здесь rows.Err() тоже может быть полезен
 		return result, fmt.Errorf("%w: ошибка сбора строк: %v (rows.Err(): %v)", ErrDBInteraction, errCollect, rows.Err())
 	}
-	// rows.Err() должен проверяться *после* rows.Close() или после полного чтения из rows (CollectRows это делает)
 	if err := rows.Err(); err != nil {
 		return result, fmt.Errorf("%w: ошибка итерации по строкам после сбора: %v", ErrDBInteraction, err)
 	}
-	
+
 	if len(rawData) > 0 {
 		totalVal, ok := rawData[0]["total_count"]
 		if !ok {
@@ -374,12 +344,12 @@ func FetchDataAndCount(ctx context.Context, db pgxQuerier, params QueryParams) (
 		}
 		result.Total = total
 	} else {
-		result.Total = 0 // Если нет данных, то и общее количество 0
+		result.Total = 0
 	}
 
 	result.Data = make([]map[string]interface{}, len(rawData))
 	for i, rowMap := range rawData {
-		cleanMap := make(map[string]interface{}, len(rowMap)-1) // -1 для total_count
+		cleanMap := make(map[string]interface{}, len(rowMap)-1)
 		for k, v := range rowMap {
 			if k != "total_count" {
 				cleanMap[k] = v

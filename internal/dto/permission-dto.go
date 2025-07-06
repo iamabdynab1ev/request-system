@@ -16,6 +16,7 @@ type PermissionDTO struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	CreatedAt   string `json:"created_at"`
+
 }
 
 type ShortPermissionDTO struct {

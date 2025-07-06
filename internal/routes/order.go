@@ -1,10 +1,10 @@
 package routes
 
 import (
-	"request-system/internal/controllers"
+	"request-system/internal/controllers" // <-- Импортируем middleware (можно с псевдонимом)
 	"request-system/internal/repositories"
 	"request-system/internal/services"
-	mid "request-system/pkg/middleware"
+	"request-system/pkg/middleware"
 	"request-system/pkg/service"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,18 +12,26 @@ import (
 	"go.uber.org/zap"
 )
 
+// Убедитесь, что эта функция вызывается в INIT_ROUTER
 func RUN_ORDER_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool, jwtSvc service.JWTService, logger *zap.Logger) {
-	// Создаем только те зависимости, которые нужны для ЗАЯВОК
+	// Сборка зависимостей для заявок (Order)
 	orderRepo := repositories.NewOrderRepository(dbConn)
-	orderService := services.NewOrderService(orderRepo, logger) 
+	orderService := services.NewOrderService(orderRepo, logger)
 	orderCtrl := controllers.NewOrderController(orderService, logger)
-	authMW := mid.NewAuthMiddleware(jwtSvc)
 
+	// Создаем экземпляр AuthMiddleware со всеми зависимостями
+	authMW := middleware.NewAuthMiddleware(jwtSvc, logger) // <-- ИСПРАВЛЕНО
+
+	// Создаем группу роутов и сразу применяем к ней middleware
+	// Этот способ применения middleware полностью корректен.
 	ordersGroup := e.Group("/api/orders", authMW.Auth)
 
-	ordersGroup.GET("", orderCtrl.GetOrders)
-	ordersGroup.POST("", orderCtrl.CreateOrder)
-	ordersGroup.GET("/:id", orderCtrl.FindOrder)
-	ordersGroup.PUT("/:id", orderCtrl.UpdateOrder)
-	ordersGroup.DELETE("/:id", orderCtrl.DeleteOrder)
+	// Все роуты внутри этой группы теперь защищены
+	{
+		ordersGroup.GET("", orderCtrl.GetOrders)
+		ordersGroup.POST("", orderCtrl.CreateOrder)
+		ordersGroup.GET("/:id", orderCtrl.FindOrder)
+		ordersGroup.PUT("/:id", orderCtrl.UpdateOrder)
+		ordersGroup.DELETE("/:id", orderCtrl.DeleteOrder)
+	}
 }

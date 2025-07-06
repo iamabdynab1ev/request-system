@@ -16,7 +16,7 @@ func RUN_ORDER_DELEGATION_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool, jwtSvc serv
 	repo := repositories.NewOrderDelegationRepository(dbConn)
 	service := services.NewOrderDelegationService(repo, logger)
 	ctrl := controllers.NewOrderDelegationController(service, logger)
-	authMW := mid.NewAuthMiddleware(jwtSvc)
+	authMW := mid.NewAuthMiddleware(jwtSvc, logger)
 
 	apiGroup := e.Group("/api", authMW.Auth)
 	apiGroup.GET("/order-delegations", ctrl.GetOrderDelegations)

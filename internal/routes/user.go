@@ -10,18 +10,25 @@ import (
 	"go.uber.org/zap"
 )
 
-func RUN_USER_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
+// ИСПРАВЛЕНО: Добавлен logger в аргументы
+func RUN_USER_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool, logger *zap.Logger) {
 	var (
-		logger           *zap.Logger
+		// logger здесь больше не объявляется
 		userRepository   = repositories.NewUserRepository(dbConn)
 		statusRepository = repositories.NewStatusRepository(dbConn)
 
 		userService = services.NewUserService(userRepository, statusRepository)
-		userCtrl    = controllers.NewUserController(userService, logger)
+		// ИСПРАВЛЕНО: Передаем logger в контроллер
+		userCtrl = controllers.NewUserController(userService, logger)
 	)
-	e.GET("/users", userCtrl.GetUsers)
-	e.GET("/user/:id", userCtrl.FindUser)
-	e.POST("/user", userCtrl.CreateUser)
-	e.PUT("/user/:id", userCtrl.UpdateUser)
-	e.DELETE("/user/:id", userCtrl.DeleteUser)
+
+	// Группируем роуты для пользователей
+	userGroup := e.Group("/api")
+	// Здесь можно добавить middleware для проверки авторизации
+
+	userGroup.GET("/users", userCtrl.GetUsers)
+	userGroup.GET("/user/:id", userCtrl.FindUser)
+	userGroup.POST("/user", userCtrl.CreateUser)
+	userGroup.PUT("/user/:id", userCtrl.UpdateUser)
+	userGroup.DELETE("/user/:id", userCtrl.DeleteUser)
 }

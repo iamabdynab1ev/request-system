@@ -35,7 +35,7 @@ func (c *UserController) GetUsers(ctx echo.Context) error {
 	limit := uint64(10)
 	limitStr := ctx.QueryParam("limit")
 	if limitStr != "" {
-		parsedLimit, err := strconv.ParseUint(limitStr, 10, 64)
+		parsedLimit, err := strconv.ParseUint(limitStr, 20, 64)
 		if err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		} else {

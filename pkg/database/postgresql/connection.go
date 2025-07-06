@@ -1,3 +1,6 @@
+// Файл: pkg/database/postgresql/postgresql.go
+// КОНЕЧНАЯ РАБОЧАЯ ВЕРСИЯ
+
 package postgresql
 
 import (
@@ -9,9 +12,15 @@ import (
 )
 
 func ConnectDB() *pgxpool.Pool {
-	var path = fmt.Sprintf("postgres://%s:%s@%s:%d/%s", "postgres", "postgres", "localhost", 5432, "request-system") //   192.168.56.226
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		"postgres",       // Имя пользователя
+		"postgres",       // Пароль
+		"localhost",      // Хост
+		5432,             // Порт
+		"request-system", // Имя базы данных
+	)
 
-	dbpool, err := pgxpool.New(context.Background(), path)
+	dbpool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
 		log.Fatalf("Ошибка создания пула соединений к БД: %v", err)
 	}

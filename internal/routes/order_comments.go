@@ -16,7 +16,7 @@ func RUN_ORDER_COMMENT_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool, jwtSvc service
 	repo := repositories.NewOrderCommentRepository(dbConn)
 	service := services.NewOrderCommentService(repo, logger)
 	ctrl := controllers.NewOrderCommentController(service)
-	authMW := mid.NewAuthMiddleware(jwtSvc)
+	authMW := mid.NewAuthMiddleware(jwtSvc, logger)
 
 	apiGroup := e.Group("/api", authMW.Auth)
 	apiGroup.GET("/order-comments", ctrl.GetOrderComments)

@@ -1,50 +1,40 @@
 package dto
 
-import "request-system/internal/entities"
-
-type LoginDto struct {
-	Email    string `json:"email" validate:"required,email"`
+type LoginDTO struct {
+	Login    string `json:"login" validate:"required"`
 	Password string `json:"password" validate:"required,min=6"`
 }
 
-type Token struct {
-	AccessToken           string `json:"access_token"`
-	RefreshToken          string `json:"refresh_token"`
-	AccessTokenExpiredIn  int    `json:"access_token_expired_in"`
-	RefreshTokenExpiredIn int    `json:"refresh_token_expired_in"`
+type SendCodeDTO struct {
+	Email string `json:"email" validate:"omitempty,email"`
+	Phone string `json:"phone" validate:"omitempty,e164_TJ"`
 }
 
-type AuthResponse struct {
-	Token Token         `json:"token"`
-	User  entities.User `json:"user"`
+type VerifyCodeDTO struct {
+	Email string `json:"email" validate:"omitempty,email"`
+	Phone string `json:"phone" validate:"omitempty,e164_TJ"`
+	Code  string `json:"code" validate:"required,len=4,numeric"`
 }
 
-type RegisterDto struct {
-	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required,min=6"`
+type ForgotPasswordDTO struct {
+	Email string `json:"email" validate:"required,email"`
 }
 
-type ChangePasswordDto struct {
-	OldPassword string `json:"old_password" validate:"required"`
+type ResetPasswordDTO struct {
+	Token       string `json:"token" validate:"required"`
 	NewPassword string `json:"new_password" validate:"required,min=6"`
 }
 
-type ForgetPasswordDto struct {
-	Email string `json:"email" validate:"required,email"`
+type AuthResponseDTO struct {
+	AccessToken  string        `json:"accessToken"`
+	RefreshToken string        `json:"refreshToken"`
+	User         UserPublicDTO `json:"user"`
 }
 
-type ResetPasswordDto struct {
-	Password string `json:"password" validate:"required,min=6"`
+type UserPublicDTO struct {
+	ID     int    `json:"id"`
+	Email  string `json:"email"`
+	Phone  string `json:"phone,omitempty"`
+	Fio    string `json:"fio"`
+	RoleID int    `json:"role_id"`
 }
-
-type CheckCodeDto struct {
-	Code string `json:"code" validate:"required,len=6"`
-}
-
-type GenCodeDto struct {
-	Email string `json:"email" validate:"required,email"`
-}
-
-type LogoutDto struct{}
-
-type RefreshTokenDto struct{}

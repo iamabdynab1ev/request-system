@@ -28,9 +28,20 @@ services:
     networks:
       - request-system
 
+  redis:
+    image: redis:latest
+    container_name: redis_for_request_system
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - request-system
+
 networks: 
   request-system:
     driver: bridge
 
 volumes:
-  pg_data:
+  pg_data: 
+  redis_data:

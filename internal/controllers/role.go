@@ -2,26 +2,21 @@ package controllers
 
 import (
 	"net/http"
-	"strconv"
-
 	"request-system/internal/dto"
 	"request-system/internal/services"
 	"request-system/pkg/utils"
-
-	"go.uber.org/zap"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
 type RoleController struct {
-	roleService *services.RoleService
+	roleService services.RoleServiceInterface
 	logger      *zap.Logger
 }
 
-func NewRoleController(
-	roleService *services.RoleService,
-	logger *zap.Logger,
-) *RoleController {
+func NewRoleController(roleService services.RoleServiceInterface, logger *zap.Logger) *RoleController {
 	return &RoleController{
 		roleService: roleService,
 		logger:      logger,
@@ -29,129 +24,73 @@ func NewRoleController(
 }
 
 func (c *RoleController) GetRoles(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
-	res, err := c.roleService.GetRoles(reqCtx, 6, 10)
+	limit, offset, _ := utils.ParsePaginationParams(ctx.QueryParams())
+	res, total, err := c.roleService.GetRoles(ctx.Request().Context(), limit, offset)
 	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
+		return utils.ErrorResponse(ctx, err)
 	}
-
-	return utils.SuccessResponse(
-		ctx,
-		res,
-		"Successfully",
-		http.StatusOK,
-	)
+	return utils.SuccessResponse(ctx, res, "Список ролей успешно получен", http.StatusOK, total)
 }
 
 func (c *RoleController) FindRole(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		c.logger.Error("некорректный ID роли", zap.String("id", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Некорректный ID роли"))
+	}
+	res, err := c.roleService.FindRole(ctx.Request().Context(), id)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	res, err := c.roleService.FindRole(reqCtx, id)
-	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
-	}
-
-	return utils.SuccessResponse(
-		ctx,
-		res,
-		"Successfully",
-		http.StatusOK,
-	)
+	return utils.SuccessResponse(ctx, res, "Роль успешно найдена", http.StatusOK)
 }
 
 func (c *RoleController) CreateRole(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	var dto dto.CreateRoleDTO
 	if err := ctx.Bind(&dto); err != nil {
-		c.logger.Error("неверный запрос", zap.Error(err))
+		c.logger.Error("неверный запрос на создание роли (bind)", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
-
 	if err := ctx.Validate(&dto); err != nil {
-		c.logger.Error("Ощибка при валидации данных: ", zap.Error(err))
-
+		c.logger.Error("ошибка валидации данных для новой роли", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	res, err := c.roleService.CreateRole(reqCtx, dto)
+	res, err := c.roleService.CreateRole(ctx.Request().Context(), dto)
 	if err != nil {
-		c.logger.Error("Ощибка при создание: ", zap.Error(err))
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
+		c.logger.Error("ошибка при создании роли в контроллере", zap.Error(err))
+		return utils.ErrorResponse(ctx, err)
 	}
-
-	return utils.SuccessResponse(
-		ctx,
-		res,
-		"Successfully",
-		http.StatusOK,
-	)
+	return utils.SuccessResponse(ctx, res, "Роль успешно создана", http.StatusCreated)
 }
 
 func (c *RoleController) UpdateRole(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, err)
+		c.logger.Error("некорректный ID роли для обновления", zap.String("id", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Некорректный ID роли"))
 	}
-
 	var dto dto.UpdateRoleDTO
 	if err := ctx.Bind(&dto); err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	res, err := c.roleService.UpdateRole(reqCtx, id, dto)
-	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
+	if err := ctx.Validate(&dto); err != nil {
+		return utils.ErrorResponse(ctx, err)
 	}
-
-	return utils.SuccessResponse(
-		ctx,
-		res,
-		"Successfully",
-		http.StatusOK,
-	)
-}
-
-func (c *RoleController) DeleteRole(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
-	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	res, err := c.roleService.UpdateRole(ctx.Request().Context(), id, dto)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
+	return utils.SuccessResponse(ctx, res, "Роль успешно обновлена", http.StatusOK)
+}
 
-	err = c.roleService.DeleteRole(reqCtx, id)
+func (c *RoleController) DeleteRole(ctx echo.Context) error {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
+		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Некорректный ID роли"))
 	}
-
-	return utils.SuccessResponse(
-		ctx,
-		struct{}{},
-		"Successfully",
-		http.StatusOK,
-	)
+	err = c.roleService.DeleteRole(ctx.Request().Context(), id)
+	if err != nil {
+		return utils.ErrorResponse(ctx, err)
+	}
+	return utils.SuccessResponse(ctx, struct{}{}, "Роль успешно удалена", http.StatusOK)
 }

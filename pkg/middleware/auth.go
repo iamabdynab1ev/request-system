@@ -2,91 +2,68 @@ package middleware
 
 import (
 	"context"
-	"log"
 	"request-system/pkg/contextkeys"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/service"
+	"request-system/pkg/utils"
 	"strings"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
 type AuthMiddleware struct {
-	jwt service.JWTService
+	jwtService service.JWTService
+	logger     *zap.Logger
 }
 
-func NewAuthMiddleware(jwtSvc service.JWTService) *AuthMiddleware {
-	log.Printf("[NewAuthMiddleware] INFO: Экземпляр JWTService получен.")
-	if jwtSvc == nil {
-		log.Fatal("[NewAuthMiddleware] FATAL: Экземпляр JWTService не может быть nil!")
-	}
+func NewAuthMiddleware(jwtSvc service.JWTService, logger *zap.Logger) *AuthMiddleware {
 	return &AuthMiddleware{
-		jwt: jwtSvc,
+		jwtService: jwtSvc,
+		logger:     logger,
 	}
 }
 
+// Auth - это основная функция middleware.
 func (m *AuthMiddleware) Auth(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		log.Println("[AuthMiddleware.Auth] INFO: Получен запрос.")
+		// 1. Извлекаем токен из заголовка
+		authHeader := c.Request().Header.Get("Authorization")
+		if authHeader == "" {
+			m.logger.Warn("AuthMiddleware: Пустой заголовок Authorization")
+			return utils.ErrorResponse(c, apperrors.ErrEmptyAuthHeader)
+		}
 
-		claims, err := m.extractTokenClaims(c)
+		// 2. Проверяем формат заголовка "Bearer <token>"
+		parts := strings.Split(authHeader, " ")
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			m.logger.Warn("AuthMiddleware: Неверный формат заголовка Authorization")
+			return utils.ErrorResponse(c, apperrors.ErrInvalidAuthHeader)
+		}
+
+		tokenString := parts[1]
+
+		// 3. Валидируем токен
+		claims, err := m.jwtService.ValidateToken(tokenString)
 		if err != nil {
-			log.Printf("[AuthMiddleware.Auth] ERROR: Ошибка при извлечении claims из токена: %v (Тип ошибки: %T)", err, err)
-			return c.JSON(401, map[string]string{"error": err.Error()})
+			m.logger.Warn("AuthMiddleware: Ошибка валидации токена", zap.Error(err))
+			return utils.ErrorResponse(c, err) // ErrorResponse сам определит нужный статус (401)
 		}
 
-		if claims.UserID == 0 {
-			log.Printf("[AuthMiddleware.Auth] WARN: Полученный UserID в claims равен нулю, что неожиданно. Claims: %+v", *claims)
-			return c.JSON(401, map[string]string{"error": apperrors.ErrInvalidToken.Error()})
+		// 4. Убеждаемся, что это не refresh токен
+		if claims.IsRefreshToken {
+			m.logger.Warn("AuthMiddleware: Попытка доступа с refresh токеном")
+			return utils.ErrorResponse(c, apperrors.ErrTokenIsNotAccess)
 		}
 
-		log.Printf("[AuthMiddleware.Auth] INFO: Claims успешно получены, UserID: %d (Тип: %T)", claims.UserID, claims.UserID)
-
+		// 5. Записываем UserID в контекст запроса для дальнейшего использования
 		ctx := c.Request().Context()
 		newCtx := context.WithValue(ctx, contextkeys.UserIDKey, claims.UserID)
 		c.SetRequest(c.Request().WithContext(newCtx))
 
-		log.Println("[AuthMiddleware.Auth] INFO: UserID был записан в контекст под ключом 'UserID'.")
+		m.logger.Info("AuthMiddleware: Пользователь успешно аутентифицирован", zap.Int("userID", claims.UserID))
 
+		// 6. Если все в порядке, передаем управление следующему обработчику
 		return next(c)
 	}
-}
-
-func (m *AuthMiddleware) extractTokenClaims(c echo.Context) (*service.JwtCustomClaim, error) {
-	authHeader := c.Request().Header.Get("Authorization")
-	log.Printf("[AuthMiddleware.extractTokenClaims] INFO: Заголовок Authorization: '%s'", authHeader)
-
-	if authHeader == "" {
-		log.Println("[AuthMiddleware.extractTokenClaims] WARN: Заголовок Authorization пустой.")
-		return nil, apperrors.ErrEmptyAuthHeader
-	}
-
-	parts := strings.Split(authHeader, " ")
-	log.Printf("[AuthMiddleware.extractTokenClaims] DEBUG: Части заголовка: %v (количество: %d)", parts, len(parts))
-
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		log.Printf("[AuthMiddleware.extractTokenClaims] WARN: Неверный формат заголовка Authorization. parts[0]='%s'", parts[0])
-		return nil, apperrors.ErrInvalidAuthHeader
-	}
-
-	tokenString := parts[1]
-	if tokenString == "" {
-		log.Println("[AuthMiddleware.extractTokenClaims] WARN: Строка токена пустая.")
-		return nil, apperrors.ErrTokenNotFound
-	}
-	log.Printf("[AuthMiddleware.extractTokenClaims] INFO: Получен токен (строка): %s", tokenString)
-
-	claims, err := m.jwt.ValidateToken(tokenString)
-	if err != nil {
-		log.Printf("[AuthMiddleware.extractTokenClaims] ERROR: m.jwt.ValidateToken вернул ошибку: %v (Тип ошибки: %T)", err, err)
-		return nil, err
-	}
-
-	if claims.IsRefreshToken {
-		log.Println("[AuthMiddleware.extractTokenClaims] WARN: Предоставленный токен является refresh токеном, но ожидался access токен.")
-		return nil, apperrors.ErrTokenIsNotRefresh
-	}
-
-	log.Printf("[AuthMiddleware.extractTokenClaims] INFO: Токен успешно проверен, получен access токен claims: UserID: %d", claims.UserID)
-	return claims, nil
 }
