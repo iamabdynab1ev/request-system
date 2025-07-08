@@ -11,16 +11,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	EQUIPMENT_TABLE_FOR_JOIN_FINAL                 = "equipments"
-	EQUIPMENT_FIELDS_FOR_JOIN_FINAL                = "e.id, e.name, e.address, e.branch_id, e.office_id, e.status_id, e.equipment_type_id, e.created_at, e.updated_at"
-	BRANCH_TABLE_FOR_EQUIPMENT_JOIN_FINAL          = "branches"
-	BRANCH_FIELDS_FOR_EQUIPMENT_JOIN_FINAL         = "b.id, b.name"
-	OFFICE_TABLE_FOR_EQUIPMENT_JOIN_FINAL          = "offices"
-	OFFICE_FIELDS_FOR_EQUIPMENT_JOIN_FINAL         = "o.id, o.name"
-	EQUIPMENT_TYPE_TABLE_FOR_EQUIPMENT_JOIN_FINAL  = "equipment_types"
-	EQUIPMENT_TYPE_FIELDS_FOR_EQUIPMENT_JOIN_FINAL = "et.id, et.name"
-)
+const equipmentTableForJoinFinal = "equipments"
+const equipmentFieldsForJoinFinal = "e.id, e.name, e.address, e.branch_id, e.office_id, e.status_id, e.equipment_type_id, e.created_at, e.updated_at"
+const branchTableForEquipmentJoinFinal = "branches"
+const branchFieldsForEquipmentJoinFinal = "b.id, b.name"
+const officeTableForEquipmentJoinFinal = "offices"
+const officeFieldsForEquipmentJoinFinal = "o.id, o.name"
+const equipmentTypeTableForEquipmentJoinFinal = "equipment_types"
+const equipmentTypeFieldsForEquipmentJoinFinal = "et.id, et.name"
 
 type EquipmentRepositoryInterface interface {
 	GetEquipments(ctx context.Context, limit uint64, offset uint64) (interface{}, uint64, error)
@@ -72,14 +70,14 @@ func (r *EquipmentRepository) FindEquipment(ctx context.Context, id uint64) (*dt
 			LEFT JOIN %s et ON e.equipment_type_id = et.id
 		WHERE e.id = $1
 	`,
-		EQUIPMENT_FIELDS_FOR_JOIN_FINAL,
-		BRANCH_FIELDS_FOR_EQUIPMENT_JOIN_FINAL,
-		OFFICE_FIELDS_FOR_EQUIPMENT_JOIN_FINAL,
-		EQUIPMENT_TYPE_FIELDS_FOR_EQUIPMENT_JOIN_FINAL,
-		EQUIPMENT_TABLE_FOR_JOIN_FINAL,
-		BRANCH_TABLE_FOR_EQUIPMENT_JOIN_FINAL,
-		OFFICE_TABLE_FOR_EQUIPMENT_JOIN_FINAL,
-		EQUIPMENT_TYPE_TABLE_FOR_EQUIPMENT_JOIN_FINAL,
+		equipmentFieldsForJoinFinal,
+		branchFieldsForEquipmentJoinFinal,
+		officeFieldsForEquipmentJoinFinal,
+		equipmentTypeFieldsForEquipmentJoinFinal,
+		equipmentTableForJoinFinal,
+		branchTableForEquipmentJoinFinal,
+		officeTableForEquipmentJoinFinal,
+		equipmentTypeTableForEquipmentJoinFinal,
 	)
 
 	var equipment dto.EquipmentDTO
@@ -89,20 +87,20 @@ func (r *EquipmentRepository) FindEquipment(ctx context.Context, id uint64) (*dt
 
 	var createdAt time.Time
 	var updatedAt time.Time
-	var branchesIdFromEquipmentTable int
-	var officeIdFromEquipmentTable int
-	var statusIdFromEquipmentTable int
-	var equipmentTypeIdFromEquipmentTable int
+	var branchesIDFromEquipmentTable int
+	var officeIDFromEquipmentTable int
+	var statusIDFromEquipmentTable int
+	var equipmentTypeIDFromEquipmentTable int
 
 	err := r.storage.QueryRow(ctx, query, id).Scan(
 		&equipment.ID,
 		&equipment.Name,
 		&equipment.Address,
 
-		&branchesIdFromEquipmentTable,
-		&officeIdFromEquipmentTable,
-		&statusIdFromEquipmentTable,
-		&equipmentTypeIdFromEquipmentTable,
+		&branchesIDFromEquipmentTable,
+		&officeIDFromEquipmentTable,
+		&statusIDFromEquipmentTable,
+		&equipmentTypeIDFromEquipmentTable,
 
 		&createdAt,
 		&updatedAt,
@@ -129,7 +127,7 @@ func (r *EquipmentRepository) FindEquipment(ctx context.Context, id uint64) (*dt
 	equipment.Branch = branch
 	equipment.Office = office
 	equipment.EquipmentType = equipmentType
-	equipment.StatusID = statusIdFromEquipmentTable
+	equipment.StatusID = statusIDFromEquipmentTable
 
 	return &equipment, nil
 }
@@ -140,7 +138,7 @@ func (r *EquipmentRepository) CreateEquipment(ctx context.Context, dto dto.Creat
         INSERT INTO %s (name, address, branch_id, office_id, status_id, equipment_type_id)
         VALUES ($1, $2, $3, $4, $5, $6)
     `,
-		EQUIPMENT_TABLE_FOR_JOIN_FINAL)
+		equipmentTableForJoinFinal)
 
 	_, err := r.storage.Exec(ctx, query,
 		dto.Name,
@@ -163,7 +161,7 @@ func (r *EquipmentRepository) UpdateEquipment(ctx context.Context, id uint64, dt
         UPDATE %s
         SET name = $1, address = $2, branch_id = $3, office_id = $4, status_id = $5, equipment_type_id = $6, updated_at = CURRENT_TIMESTAMP
 		WHERE id = $7
-    `, EQUIPMENT_TABLE_FOR_JOIN_FINAL)
+    `, equipmentTableForJoinFinal)
 
 	result, err := r.storage.Exec(ctx, query,
 		dto.Name,
@@ -187,7 +185,7 @@ func (r *EquipmentRepository) UpdateEquipment(ctx context.Context, id uint64, dt
 
 func (r *EquipmentRepository) DeleteEquipment(ctx context.Context, id uint64) error {
 
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", EQUIPMENT_TABLE_FOR_JOIN_FINAL)
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", equipmentTableForJoinFinal)
 
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {

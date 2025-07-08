@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-func RUN_ROLE_PERMISSION_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
+func runRolePermissionRouter(e *echo.Echo, dbConn *pgxpool.Pool) {
 	var (
 		logger = logger.NewLogger()
 

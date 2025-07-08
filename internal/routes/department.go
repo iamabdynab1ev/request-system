@@ -1,25 +1,25 @@
+// Package routes содержит настройку маршрутов HTTP для различных сущностей приложения.
+// Здесь определяются группы маршрутов, связываются контроллеры с HTTP-эндпоинтами и инициализи
 package routes
 
 import (
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
-	"request-system/pkg/logger"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
-func RUN_DEPARTMENT_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
-	var (
-		logger               = logger.NewLogger()
-		departmentRepository = repositories.NewDepartmentRepository(dbConn)
-		departmentService    = services.NewDepartmentService(departmentRepository, logger)
-		departmentCtrl       = controllers.NewDepartmentController(departmentService, logger)
-	)
-	e.GET("/departments", departmentCtrl.GetDepartments)
-	e.GET("/department/:id", departmentCtrl.FindDepartment)
-	e.POST("/department", departmentCtrl.CreateDepartment)
-	e.PUT("/department/:id", departmentCtrl.UpdateDepartment)
-	e.DELETE("/department/:id", departmentCtrl.DeleteDepartment)
+func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) {
+	departmentRepository := repositories.NewDepartmentRepository(dbConn)
+	departmentService := services.NewDepartmentService(departmentRepository, logger)
+	departmentCtrl := controllers.NewDepartmentController(departmentService, logger)
+
+	secureGroup.GET("/departments", departmentCtrl.GetDepartments)
+	secureGroup.GET("/department/:id", departmentCtrl.FindDepartment)
+	secureGroup.POST("/department", departmentCtrl.CreateDepartment)
+	secureGroup.PUT("/department/:id", departmentCtrl.UpdateDepartment)
+	secureGroup.DELETE("/department/:id", departmentCtrl.DeleteDepartment)
 }

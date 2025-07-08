@@ -11,10 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	EQUIPMENT_TYPE_TABLE  = "equipment_types"
-	EQUIPMENT_TYPE_FIELDS = "id, name, created_at, updated_at"
-)
+const equipmentTypeTable = "equipment_types"
+const equipmentTypeFields = "id, name, created_at, updated_at"
 
 type EquipmentTypeRepositoryInterface interface {
 	GetEquipmentTypes(ctx context.Context, limit uint64, offset uint64) ([]dto.EquipmentTypeDTO, error)
@@ -24,7 +22,7 @@ type EquipmentTypeRepositoryInterface interface {
 	DeleteEquipmentType(ctx context.Context, id uint64) error
 }
 
-type EquipmentTypeRepository struct{
+type EquipmentTypeRepository struct {
 	storage *pgxpool.Pool
 }
 
@@ -40,7 +38,7 @@ func (r *EquipmentTypeRepository) GetEquipmentTypes(ctx context.Context, limit u
 		SELECT
 			%s
 		FROM %s r
-		`, EQUIPMENT_TYPE_FIELDS, EQUIPMENT_TYPE_TABLE)
+		`, equipmentTypeFields, equipmentTypeTable)
 
 	rows, err := r.storage.Query(ctx, query)
 	if err != nil {
@@ -54,30 +52,29 @@ func (r *EquipmentTypeRepository) GetEquipmentTypes(ctx context.Context, limit u
 	for rows.Next() {
 		var equipmentType dto.EquipmentTypeDTO
 		var createdAt time.Time
-        var updatedAt time.Time
+		var updatedAt time.Time
 
 		err := rows.Scan(
 			&equipmentType.ID,
 			&equipmentType.Name,
 			&createdAt,
-            &updatedAt,
+			&updatedAt,
 		)
 
 		if err != nil {
 			return nil, err
 		}
 
-        createdAtLocal := createdAt.Local()
-        updatedAtLocal := updatedAt.Local()
+		createdAtLocal := createdAt.Local()
+		updatedAtLocal := updatedAt.Local()
 
 		equipmentType.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
-        equipmentType.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
-
+		equipmentType.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
 
 		equipmentTypes = append(equipmentTypes, equipmentType)
 	}
 
-	if err:= rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return equipmentTypes, nil
@@ -89,18 +86,17 @@ func (r *EquipmentTypeRepository) FindEquipmentType(ctx context.Context, id uint
 			%s
 		FROM %s r
 		WHERE r.id = $1
-	`, EQUIPMENT_TYPE_FIELDS, EQUIPMENT_TYPE_TABLE)
+	`, equipmentTypeFields, equipmentTypeTable)
 
 	var equipmentType dto.EquipmentTypeDTO
 	var createdAt time.Time
-    var updatedAt time.Time
-
+	var updatedAt time.Time
 
 	err := r.storage.QueryRow(ctx, query, id).Scan(
 		&equipmentType.ID,
 		&equipmentType.Name,
 		&createdAt,
-        &updatedAt,
+		&updatedAt,
 	)
 
 	if err != nil {
@@ -110,12 +106,11 @@ func (r *EquipmentTypeRepository) FindEquipmentType(ctx context.Context, id uint
 		return nil, err
 	}
 
-    createdAtLocal := createdAt.Local()
-    updatedAtLocal := updatedAt.Local()
+	createdAtLocal := createdAt.Local()
+	updatedAtLocal := updatedAt.Local()
 
 	equipmentType.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
-    equipmentType.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
-
+	equipmentType.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
 
 	return &equipmentType, nil
 }
@@ -124,7 +119,7 @@ func (r *EquipmentTypeRepository) CreateEquipmentType(ctx context.Context, dto d
 	query := fmt.Sprintf(`
         INSERT INTO %s (name)
         VALUES ($1)
-    `, EQUIPMENT_TYPE_TABLE)
+    `, equipmentTypeTable)
 
 	_, err := r.storage.Exec(ctx, query,
 		dto.Name,
@@ -141,11 +136,11 @@ func (r *EquipmentTypeRepository) UpdateEquipmentType(ctx context.Context, id ui
         UPDATE %s
         SET name = $1, updated_at = CURRENT_TIMESTAMP
         WHERE id = $2
-    `, EQUIPMENT_TYPE_TABLE)
+    `, equipmentTypeTable)
 
 	result, err := r.storage.Exec(ctx, query,
 		dto.Name,
-        id,
+		id,
 	)
 
 	if err != nil {
@@ -159,7 +154,7 @@ func (r *EquipmentTypeRepository) UpdateEquipmentType(ctx context.Context, id ui
 }
 
 func (r *EquipmentTypeRepository) DeleteEquipmentType(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", EQUIPMENT_TYPE_TABLE)
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", equipmentTypeTable)
 
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {

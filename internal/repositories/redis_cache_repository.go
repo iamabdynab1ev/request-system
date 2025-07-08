@@ -2,53 +2,44 @@ package repositories
 
 import (
 	"context"
-	"fmt"
-	apperrors "request-system/pkg/errors"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 )
 
+// RedisCacheRepository - реализация кеша на Redis.
 type RedisCacheRepository struct {
 	client *redis.Client
 }
 
+// NewRedisCacheRepository - конструктор для репозитория.
+// Он возвращает объект, который соответствует CacheRepositoryInterface.
 func NewRedisCacheRepository(client *redis.Client) CacheRepositoryInterface {
-	return &RedisCacheRepository{
-		client: client,
-	}
+	return &RedisCacheRepository{client: client}
 }
 
-func (r *RedisCacheRepository) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
-	err := r.client.Set(ctx, key, value, expiration).Err()
-	if err != nil {
-		return fmt.Errorf("ошибка установки значения в Redis: %w", err)
-	}
-	return nil
-}
-
+// Get получает значение из кеша по ключу.
 func (r *RedisCacheRepository) Get(ctx context.Context, key string) (string, error) {
-	val, err := r.client.Get(ctx, key).Result()
-	if err == redis.Nil {
-		return "", apperrors.ErrNotFound
-	} else if err != nil {
-		return "", fmt.Errorf("ошибка получения значения из Redis: %w", err)
-	}
-	return val, nil
+	return r.client.Get(ctx, key).Result()
 }
 
-func (r *RedisCacheRepository) Del(ctx context.Context, key ...string) error {
-	err := r.client.Del(ctx, key...).Err()
-	if err != nil {
-		return fmt.Errorf("ошибка удаления ключа из Redis: %w", err)
-	}
-	return nil
+// Set устанавливает значение в кеш.
+func (r *RedisCacheRepository) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
+	return r.client.Set(ctx, key, value, expiration).Err()
 }
 
+// Del удаляет ключи из кеша.
+func (r *RedisCacheRepository) Del(ctx context.Context, keys ...string) error {
+	return r.client.Del(ctx, keys...).Err()
+}
+
+// Incr атомарно увеличивает значение ключа на 1.
 func (r *RedisCacheRepository) Incr(ctx context.Context, key string) (int64, error) {
-	val, err := r.client.Incr(ctx, key).Result()
-	if err != nil {
-		return 0, fmt.Errorf("ошибка инкремента значения в Redis: %w", err)
-	}
-	return val, nil
+	return r.client.Incr(ctx, key).Result()
+}
+
+// Expire устанавливает время жизни для ключа.
+// ЭТОТ МЕТОД РЕШАЕТ ВАШУ ОШИБКУ КОМПИЛЯЦИИ.
+func (r *RedisCacheRepository) Expire(ctx context.Context, key string, expiration time.Duration) (bool, error) {
+	return r.client.Expire(ctx, key, expiration).Result()
 }

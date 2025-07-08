@@ -18,12 +18,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	USER_TABLE_REPO                    = "users"
-	USER_SELECT_FIELDS_FOR_ENTITY_REPO = "id, fio, email, phone_number, password, position, status_id, role_id, branch_id, department_id, office_id, otdel_id, created_at, updated_at, deleted_at"
-)
+const userTableRepo = "users"
+const userSelectFieldsForEntityRepo = "id, fio, email, phone_number, password, position, status_id, role_id, branch_id, department_id, office_id, otdel_id, created_at, updated_at, deleted_at"
 
-// ... интерфейс UserRepositoryInterface остается без изменений ...
 type UserRepositoryInterface interface {
 	GetUsers(ctx context.Context, limit uint64, offset uint64) ([]entities.User, error)
 	FindUser(ctx context.Context, id uint64) (*entities.User, error)
@@ -33,6 +30,7 @@ type UserRepositoryInterface interface {
 	FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error)
 	FindUserByPhone(ctx context.Context, phone string) (*entities.User, error)
 	UpdatePassword(ctx context.Context, userID int, newPasswordHash string) error
+	FindUserByID(ctx context.Context, id int) (*entities.User, error)
 }
 
 type UserRepository struct {
@@ -60,11 +58,27 @@ func (r *UserRepository) scanUser(row pgx.Row, user *entities.User) error {
 	user.UpdatedAt = &updatedAt
 	return nil
 }
+func (r *UserRepository) FindUserByID(ctx context.Context, id int) (*entities.User, error) {
+	query := fmt.Sprintf(`
+		SELECT %s FROM %s
+		WHERE id = $1 AND deleted_at IS NULL`, userSelectFieldsForEntityRepo, userTableRepo)
+
+	var user entities.User
+	row := r.storage.QueryRow(ctx, query, id)
+	if err := r.scanUser(row, &user); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+
+			return nil, apperrors.ErrUserNotFound
+		}
+		return nil, fmt.Errorf("ошибка поиска пользователя по ID: %w", err)
+	}
+	return &user, nil
+}
 
 func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error) {
 	query := fmt.Sprintf(`
         SELECT %s FROM %s 
-        WHERE email = $1 AND deleted_at IS NULL`, USER_SELECT_FIELDS_FOR_ENTITY_REPO, USER_TABLE_REPO)
+        WHERE email = $1 AND deleted_at IS NULL`, userSelectFieldsForEntityRepo, userTableRepo)
 
 	var user entities.User
 	row := r.storage.QueryRow(ctx, query, login)
@@ -82,7 +96,7 @@ func (r *UserRepository) GetUsers(ctx context.Context, limit uint64, offset uint
 		SELECT %s FROM %s
         WHERE deleted_at IS NULL
         ORDER BY id
-        LIMIT $1 OFFSET $2`, USER_SELECT_FIELDS_FOR_ENTITY_REPO, USER_TABLE_REPO)
+        LIMIT $1 OFFSET $2`, userSelectFieldsForEntityRepo, userTableRepo)
 
 	rows, err := r.storage.Query(ctx, query, limit, offset)
 	if err != nil {
@@ -93,7 +107,7 @@ func (r *UserRepository) GetUsers(ctx context.Context, limit uint64, offset uint
 	users := make([]entities.User, 0)
 	for rows.Next() {
 		var user entities.User
-		if err := r.scanUser(rows, &user); err != nil { // ИСПОЛЬЗУЕМ хелпер
+		if err := r.scanUser(rows, &user); err != nil { 
 			return nil, err
 		}
 		users = append(users, user)
@@ -108,7 +122,7 @@ func (r *UserRepository) GetUsers(ctx context.Context, limit uint64, offset uint
 func (r *UserRepository) FindUser(ctx context.Context, id uint64) (*entities.User, error) {
 	query := fmt.Sprintf(`
 		SELECT %s FROM %s
-		WHERE id = $1 AND deleted_at IS NULL`, USER_SELECT_FIELDS_FOR_ENTITY_REPO, USER_TABLE_REPO)
+		WHERE id = $1 AND deleted_at IS NULL`, userSelectFieldsForEntityRepo, userTableRepo)
 
 	var user entities.User
 	row := r.storage.QueryRow(ctx, query, id)
@@ -124,7 +138,7 @@ func (r *UserRepository) FindUser(ctx context.Context, id uint64) (*entities.Use
 func (r *UserRepository) FindUserByPhone(ctx context.Context, phone string) (*entities.User, error) {
 	query := fmt.Sprintf(`
         SELECT %s FROM %s
-        WHERE phone_number = $1 AND deleted_at IS NULL`, USER_SELECT_FIELDS_FOR_ENTITY_REPO, USER_TABLE_REPO)
+        WHERE phone_number = $1 AND deleted_at IS NULL`, userSelectFieldsForEntityRepo, userTableRepo)
 
 	var user entities.User
 	row := r.storage.QueryRow(ctx, query, phone)
@@ -155,7 +169,7 @@ func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) 
         INSERT INTO %s (fio, email, phone_number, password, position, status_id, role_id, branch_id, department_id, office_id, otdel_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING %s
-    `, USER_TABLE_REPO, USER_SELECT_FIELDS_FOR_ENTITY_REPO)
+    `, userTableRepo, userSelectFieldsForEntityRepo)
 
 	createdEntity := &entities.User{}
 	row := r.storage.QueryRow(ctx, query,
@@ -200,7 +214,7 @@ func (r *UserRepository) UpdateUser(ctx context.Context, entity *entities.User) 
             office_id = $10, otdel_id = $11, updated_at = CURRENT_TIMESTAMP
         WHERE id = $12 AND deleted_at IS NULL
         RETURNING %s
-    `, USER_TABLE_REPO, USER_SELECT_FIELDS_FOR_ENTITY_REPO)
+    `, userTableRepo, userSelectFieldsForEntityRepo)
 
 	updatedEntity := &entities.User{}
 	row := r.storage.QueryRow(ctx, query,
@@ -245,7 +259,7 @@ func (r *UserRepository) DeleteUser(ctx context.Context, id uint64) error {
         UPDATE %s
         SET deleted_at = CURRENT_TIMESTAMP
         WHERE id = $1 AND deleted_at IS NULL
-    `, USER_TABLE_REPO)
+    `, userTableRepo)
 
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {

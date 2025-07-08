@@ -1,27 +1,25 @@
+
 package routes
 
 import (
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
-	"request-system/pkg/logger"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
-func RUN_OTDEL_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
-	var (
-		logger = logger.NewLogger()
+func runOtdelRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) {
 
-		otdelRepository = repositories.NewOtdelRepository(dbConn)
-		otdelService    = services.NewOtdelService(otdelRepository, logger)
-		otdelCtrl       = controllers.NewOtdelController(otdelService, logger)
-	)
+	otdelRepository := repositories.NewOtdelRepository(dbConn)
+	otdelService := services.NewOtdelService(otdelRepository, logger)
+	otdelCtrl := controllers.NewOtdelController(otdelService, logger)
 
-	e.GET("/otdels", otdelCtrl.GetOtdels)
-	e.GET("/otdel/:id", otdelCtrl.FindOtdel)
-	e.POST("/otdel", otdelCtrl.CreateOtdel)
-	e.PUT("/otdel/:id", otdelCtrl.UpdateOtdel)
-	e.DELETE("/otdel/:id", otdelCtrl.DeleteOtdel)
+	secureGroup.GET("/otdels", otdelCtrl.GetOtdels)
+	secureGroup.GET("/otdel/:id", otdelCtrl.FindOtdel)
+	secureGroup.POST("/otdel", otdelCtrl.CreateOtdel)
+	secureGroup.PUT("/otdel/:id", otdelCtrl.UpdateOtdel)
+	secureGroup.DELETE("/otdel/:id", otdelCtrl.DeleteOtdel)
 }

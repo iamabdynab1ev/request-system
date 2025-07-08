@@ -4,24 +4,20 @@ import (
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
-	"request-system/pkg/logger"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
-	
-	
+	"go.uber.org/zap"
 )
 
-func RUN_EQUIPMENT_TYPE_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
-	var (
-		logger  = logger.NewLogger()
+func runEquipmentTypeRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) {
+	equipmentTypeRepository := repositories.NewEquipmentTypeRepository(dbConn)
+	equipmentTypeService := services.NewEquipmentTypeService(equipmentTypeRepository, logger)
+	equipmentTypeCtrl := controllers.NewEquipmentTypeController(equipmentTypeService, logger)
 
-		equipmentTypeRepository = repositories.NewEquipmentTypeRepository(dbConn)
-		equipmentTypeService    = services.NewEquipmentTypeService(equipmentTypeRepository, logger)
-		equipmentTypeCtrl       = controllers.NewEquipmentTypeController(equipmentTypeService, logger)
-	)
-	e.GET("/equipment-types", equipmentTypeCtrl.GetEquipmentTypes)
-	e.GET("/equipment-type/:id", equipmentTypeCtrl.FindEquipmentType)
-	e.POST("/equipment-type", equipmentTypeCtrl.CreateEquipmentType)
-	e.PUT("/equipment-type/:id", equipmentTypeCtrl.UpdateEquipmentType)
-	e.DELETE("/equipment-type/:id", equipmentTypeCtrl.DeleteEquipmentType)
+	secureGroup.GET("/equipment-types", equipmentTypeCtrl.GetEquipmentTypes)
+	secureGroup.GET("/equipment-type/:id", equipmentTypeCtrl.FindEquipmentType)
+	secureGroup.POST("/equipment-type", equipmentTypeCtrl.CreateEquipmentType)
+	secureGroup.PUT("/equipment-type/:id", equipmentTypeCtrl.UpdateEquipmentType)
+	secureGroup.DELETE("/equipment-type/:id", equipmentTypeCtrl.DeleteEquipmentType)
 }

@@ -1,3 +1,4 @@
+// Package controllers содержит HTTP контроллеры для обработки запросов API.
 package controllers
 
 import (
@@ -26,7 +27,6 @@ func NewBranchController(
 		logger:        logger,
 	}
 }
-
 
 func (c *BranchController) GetBranches(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()

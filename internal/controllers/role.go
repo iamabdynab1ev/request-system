@@ -24,14 +24,21 @@ func NewRoleController(roleService services.RoleServiceInterface, logger *zap.Lo
 }
 
 func (c *RoleController) GetRoles(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
 	limit, offset, _ := utils.ParsePaginationParams(ctx.QueryParams())
-	res, total, err := c.roleService.GetRoles(ctx.Request().Context(), limit, offset)
+	paginatedResponse, err := c.roleService.GetRoles(reqCtx, limit, offset)
 	if err != nil {
+		c.logger.Error("ошибка в контроллере при получении списка ролей", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
-	return utils.SuccessResponse(ctx, res, "Список ролей успешно получен", http.StatusOK, total)
-}
 
+	return utils.SuccessResponse(
+		ctx,
+		paginatedResponse,
+		"Список ролей успешно получен",
+		http.StatusOK,
+	)
+}
 func (c *RoleController) FindRole(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {

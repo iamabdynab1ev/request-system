@@ -1,27 +1,30 @@
 package entities
 
-import "request-system/pkg/types"
-import "time"
+import (
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+)
 
 type Order struct {
-	ID           int    `json:"id"`
-	Name         string `json:"name"`
+	ID          int
+	Name        string
+	Description pgtype.Text
+	Address     string
+	Duration    pgtype.Text
 
-	DepartmentID int `json:"department_id"`
-	OtdelID      int `json:"otdel_id"`
-	ProretyID    int `json:"prorety_id"`
-	StatusID     int `json:"status_id"`
-	BranchID     int `json:"branch_id"`
-	OfficeID     int `json:"office_id"`
-	EquipmentID  int `json:"equipment_id"`
-	UserID       int `json:"user_id"`
+	DepartmentID int
+	ProretyID    int
+	StatusID     int
+	BranchID     int
+	EquipmentID  int
+	CreatorID    int
 
-	Massage      string `json:"message"`
-	ExecutorID   int    `json:"executor_id"`
+	OtdelID    pgtype.Int4
+	OfficeID   pgtype.Int4
+	ExecutorID pgtype.Int4
 
-	Duration     time.Duration `json:"duration"`
-	Address      string        `json:"address"`
-
-	types.BaseEntity
-	types.SoftDelete
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt pgtype.Timestamp
 }

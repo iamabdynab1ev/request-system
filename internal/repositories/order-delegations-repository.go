@@ -55,37 +55,35 @@ func (r *OrderDelegationRepository) GetOrderDelegations(ctx context.Context, lim
 	for rows.Next() {
 		var d dto.OrderDelegationDTO
 		var createdAt, updatedAt time.Time
-		var statusId, orderId, delegatorId, delegateeId sql.NullInt32
+		var statusID, orderID, delegatorID, delegateeID sql.NullInt32
 		var statusName, orderName, delegatorFio, delegateeFio sql.NullString
 
 		err := rows.Scan(
-			&d.ID, &createdAt, &updatedAt, &statusId, &statusName, &orderId, &orderName,
-			&delegatorId, &delegatorFio, &delegateeId, &delegateeFio,
+			&d.ID, &createdAt, &updatedAt, &statusID, &statusName, &orderID, &orderName,
+			&delegatorID, &delegatorFio, &delegateeID, &delegateeFio,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("ошибка сканирования делегирования: %w", err)
 		}
 
-		if statusId.Valid {
-			d.Status.ID = int(statusId.Int32)
+		if statusID.Valid {
+			d.Status.ID = int(statusID.Int32)
 		}
 		if statusName.Valid {
 			d.Status.Name = statusName.String
 		}
-		if orderId.Valid {
-			d.Order.ID = int(orderId.Int32)
+		if orderID.Valid {
+			d.Order.ID = int(orderID.Int32)
 		}
 		if orderName.Valid {
 			d.Order.Name = orderName.String
 		}
 
-		if delegatorId.Valid {
-			// ИСПРАВЛЕНО: Создаем новый объект и присваиваем его указателю
-			d.Delegator = &dto.ShortUserDTO{ID: int(delegatorId.Int32), Fio: delegatorFio.String}
+		if delegatorID.Valid {
+			d.Delegator = &dto.ShortUserDTO{ID: int(delegatorID.Int32), Fio: delegatorFio.String}
 		}
-		if delegateeId.Valid {
-			// ИСПРАВЛЕНО: То же самое здесь
-			d.Delegatee = &dto.ShortUserDTO{ID: int(delegateeId.Int32), Fio: delegateeFio.String}
+		if delegateeID.Valid {
+			d.Delegatee = &dto.ShortUserDTO{ID: int(delegateeID.Int32), Fio: delegateeFio.String}
 		}
 
 		d.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
@@ -109,13 +107,13 @@ func (r *OrderDelegationRepository) FindOrderDelegation(ctx context.Context, id 
 
 	var d dto.OrderDelegationDTO
 	var createdAt, updatedAt time.Time
-	var statusId, orderId, delegatorId, delegateeId sql.NullInt32
+	var statusID, orderID, delegatorID, delegateeID sql.NullInt32
 	var statusName, orderName, delegatorFio, delegateeFio sql.NullString
 
 	err := r.storage.QueryRow(ctx, query, id).Scan(
 		&d.ID, &createdAt, &updatedAt,
-		&statusId, &statusName, &orderId, &orderName,
-		&delegatorId, &delegatorFio, &delegateeId, &delegateeFio,
+		&statusID, &statusName, &orderID, &orderName,
+		&delegatorID, &delegatorFio, &delegateeID, &delegateeFio,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -124,26 +122,26 @@ func (r *OrderDelegationRepository) FindOrderDelegation(ctx context.Context, id 
 		return nil, fmt.Errorf("ошибка при поиске делегирования %d: %w", id, err)
 	}
 
-	if statusId.Valid {
-		d.Status.ID = int(statusId.Int32)
+	if statusID.Valid {
+		d.Status.ID = int(statusID.Int32)
 	}
 	if statusName.Valid {
 		d.Status.Name = statusName.String
 	}
-	if orderId.Valid {
-		d.Order.ID = int(orderId.Int32)
+	if orderID.Valid {
+		d.Order.ID = int(orderID.Int32)
 	}
 	if orderName.Valid {
 		d.Order.Name = orderName.String
 	}
 
-	if delegatorId.Valid {
+	if delegatorID.Valid {
 
-		d.Delegator = &dto.ShortUserDTO{ID: int(delegatorId.Int32), Fio: delegatorFio.String}
+		d.Delegator = &dto.ShortUserDTO{ID: int(delegatorID.Int32), Fio: delegatorFio.String}
 	}
-	if delegateeId.Valid {
+	if delegateeID.Valid {
 
-		d.Delegatee = &dto.ShortUserDTO{ID: int(delegateeId.Int32), Fio: delegateeFio.String}
+		d.Delegatee = &dto.ShortUserDTO{ID: int(delegateeID.Int32), Fio: delegateeFio.String}
 	}
 
 	d.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")

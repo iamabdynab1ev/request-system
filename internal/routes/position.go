@@ -4,24 +4,20 @@ import (
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
-	"request-system/pkg/logger"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
-func RUN_POSITION_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
-	var (
-		logger = logger.NewLogger()
+func runPositionRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) {
+	positionRepository := repositories.NewPositionRepository(dbConn)
+	positionService := services.NewPositionService(positionRepository, logger)
+	positionCtrl := controllers.NewPositionController(positionService, logger)
 
-		positionRepository = repositories.NewPositionRepository(dbConn)
-		positionService    = services.NewPositionService(positionRepository, logger)
-		positionCtrl       = controllers.NewPositionController(positionService, logger)
-	)
-
-	e.GET("/positions", positionCtrl.GetPositions)
-	e.GET("/position/:id", positionCtrl.FindPosition)
-	e.POST("/position", positionCtrl.CreatePosition)
-	e.PUT("/position/:id", positionCtrl.UpdatePosition)
-	e.DELETE("/position/:id", positionCtrl.DeletePosition)
+	secureGroup.GET("/positions", positionCtrl.GetPositions)
+	secureGroup.GET("/position/:id", positionCtrl.FindPosition)
+	secureGroup.POST("/position", positionCtrl.CreatePosition)
+	secureGroup.PUT("/position/:id", positionCtrl.UpdatePosition)
+	secureGroup.DELETE("/position/:id", positionCtrl.DeletePosition)
 }

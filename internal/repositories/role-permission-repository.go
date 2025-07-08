@@ -5,16 +5,13 @@ import (
 	"fmt"
 	"request-system/internal/dto"
 	"request-system/pkg/utils"
-	
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	ROLE_PERMISSION_TABLE  = "role_permission"
-	ROLE_PERMISSION_FIELDS = "id, role_id, permission_id"
-)
+const rolePermissionTable = "role_permission"
+const rolePermissionFields = "id, role_id, permission_id"
 
 type RolePermissionRepositoryInterface interface {
 	GetRolePermissions(ctx context.Context, limit uint64, offset uint64) ([]dto.RolePermissionDTO, error)
@@ -24,7 +21,7 @@ type RolePermissionRepositoryInterface interface {
 	DeleteRolePermission(ctx context.Context, id uint64) error
 }
 
-type RolePermissionRepository struct{
+type RolePermissionRepository struct {
 	storage *pgxpool.Pool
 }
 
@@ -40,7 +37,7 @@ func (r *RolePermissionRepository) GetRolePermissions(ctx context.Context, limit
 		SELECT
 			%s
 		FROM %s r
-		`, ROLE_PERMISSION_FIELDS, ROLE_PERMISSION_TABLE)
+		`, rolePermissionFields, rolePermissionTable)
 
 	rows, err := r.storage.Query(ctx, query)
 	if err != nil {
@@ -53,16 +50,12 @@ func (r *RolePermissionRepository) GetRolePermissions(ctx context.Context, limit
 
 	for rows.Next() {
 		var rp dto.RolePermissionDTO
-		
 
 		err := rows.Scan(
 			&rp.ID,
 			&rp.RoleID,
 			&rp.PermissionID,
-		
 		)
-
-		
 
 		if err != nil {
 			return nil, err
@@ -71,7 +64,7 @@ func (r *RolePermissionRepository) GetRolePermissions(ctx context.Context, limit
 		rolePermissions = append(rolePermissions, rp)
 	}
 
-	if err:= rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return rolePermissions, nil
@@ -83,7 +76,7 @@ func (r *RolePermissionRepository) FindRolePermission(ctx context.Context, id ui
 			%s
 		FROM %s r
 		WHERE r.id = $1
-	`, ROLE_PERMISSION_FIELDS, ROLE_PERMISSION_TABLE)
+	`, rolePermissionFields, rolePermissionTable)
 
 	var rp dto.RolePermissionDTO
 
@@ -91,7 +84,6 @@ func (r *RolePermissionRepository) FindRolePermission(ctx context.Context, id ui
 		&rp.ID,
 		&rp.RoleID,
 		&rp.PermissionID,
-		
 	)
 
 	if err != nil {
@@ -108,11 +100,11 @@ func (r *RolePermissionRepository) CreateRolePermission(ctx context.Context, dto
 	query := fmt.Sprintf(`
         INSERT INTO %s (role_id, permission_id)
         VALUES ($1, $2)
-    `, ROLE_PERMISSION_TABLE)
+    `, rolePermissionTable)
 
 	_, err := r.storage.Exec(ctx, query,
 		dto.RoleID,
-        dto.PermissionID,
+		dto.PermissionID,
 	)
 
 	if err != nil {
@@ -126,13 +118,13 @@ func (r *RolePermissionRepository) UpdateRolePermission(ctx context.Context, id 
         UPDATE %s
         SET role_id = $1, permission_id = $2
         WHERE id = $3
-    `, ROLE_PERMISSION_TABLE)
+    `, rolePermissionTable)
 
 	result, err := r.storage.Exec(ctx, query,
-        dto.RoleID,
-        dto.PermissionID,
-        id,
-    )
+		dto.RoleID,
+		dto.PermissionID,
+		id,
+	)
 
 	if err != nil {
 		return err
@@ -144,9 +136,8 @@ func (r *RolePermissionRepository) UpdateRolePermission(ctx context.Context, id 
 	return nil
 }
 
-
 func (r *RolePermissionRepository) DeleteRolePermission(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", ROLE_PERMISSION_TABLE)
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", rolePermissionTable)
 
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {

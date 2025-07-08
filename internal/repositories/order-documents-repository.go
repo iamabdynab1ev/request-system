@@ -11,10 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	ORDER_DOCUMENT_TABLE_REPO  = "order_documents"
-	ORDER_DOCUMENT_FIELDS_REPO = "id, name, path, type, order_id, created_at, updated_at"
-)
+const orderDocumentTableRepo = "order_documents"
+const orderDocumentFieldsRepo = "id, name, path, type, order_id, created_at, updated_at"
 
 type OrderDocumentRepositoryInterface interface {
 	GetOrderDocuments(ctx context.Context, limit uint64, offset uint64) ([]dto.OrderDocumentDTO, error)
@@ -24,7 +22,7 @@ type OrderDocumentRepositoryInterface interface {
 	DeleteOrderDocument(ctx context.Context, id uint64) error
 }
 
-type OrderDocumentRepository struct{
+type OrderDocumentRepository struct {
 	storage *pgxpool.Pool
 }
 
@@ -39,7 +37,7 @@ func (r *OrderDocumentRepository) GetOrderDocuments(ctx context.Context, limit u
 		SELECT
 			%s
 		FROM %s r
-		`, ORDER_DOCUMENT_FIELDS_REPO, ORDER_DOCUMENT_TABLE_REPO)
+		`, orderDocumentFieldsRepo, orderDocumentTableRepo)
 
 	rows, err := r.storage.Query(ctx, query)
 	if err != nil {
@@ -52,7 +50,7 @@ func (r *OrderDocumentRepository) GetOrderDocuments(ctx context.Context, limit u
 	for rows.Next() {
 		var orderDocument dto.OrderDocumentDTO
 		var createdAt time.Time
-        var updatedAt time.Time
+		var updatedAt time.Time
 
 		err := rows.Scan(
 			&orderDocument.ID,
@@ -61,23 +59,23 @@ func (r *OrderDocumentRepository) GetOrderDocuments(ctx context.Context, limit u
 			&orderDocument.Type,
 			&orderDocument.OrderID,
 			&createdAt,
-            &updatedAt,
+			&updatedAt,
 		)
 
 		if err != nil {
 			return nil, err
 		}
 
-        createdAtLocal := createdAt.Local()
+		createdAtLocal := createdAt.Local()
 		updatedAtLocal := updatedAt.Local()
 
-        orderDocument.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
-        orderDocument.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
+		orderDocument.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
+		orderDocument.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
 
 		orderDocuments = append(orderDocuments, orderDocument)
 	}
 
-	if err:= rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return orderDocuments, nil
@@ -89,11 +87,11 @@ func (r *OrderDocumentRepository) FindOrderDocument(ctx context.Context, id uint
 			%s
 		FROM %s r
 		WHERE r.id = $1
-	`, ORDER_DOCUMENT_FIELDS_REPO, ORDER_DOCUMENT_TABLE_REPO)
+	`, orderDocumentFieldsRepo, orderDocumentTableRepo)
 
 	var orderDocument dto.OrderDocumentDTO
 	var createdAt time.Time
-    var updatedAt time.Time
+	var updatedAt time.Time
 
 	err := r.storage.QueryRow(ctx, query, id).Scan(
 		&orderDocument.ID,
@@ -102,7 +100,7 @@ func (r *OrderDocumentRepository) FindOrderDocument(ctx context.Context, id uint
 		&orderDocument.Type,
 		&orderDocument.OrderID,
 		&createdAt,
-        &updatedAt,
+		&updatedAt,
 	)
 
 	if err != nil {
@@ -112,11 +110,11 @@ func (r *OrderDocumentRepository) FindOrderDocument(ctx context.Context, id uint
 		return nil, err
 	}
 
-	 	createdAtLocal := createdAt.Local()
-		updatedAtLocal := updatedAt.Local()
+	createdAtLocal := createdAt.Local()
+	updatedAtLocal := updatedAt.Local()
 
-        orderDocument.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
-        orderDocument.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
+	orderDocument.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
+	orderDocument.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
 
 	return &orderDocument, nil
 }
@@ -125,13 +123,13 @@ func (r *OrderDocumentRepository) CreateOrderDocument(ctx context.Context, dto d
 	query := fmt.Sprintf(`
         INSERT INTO %s (name, path, type, order_id)
         VALUES ($1, $2, $3, $4)
-    `, ORDER_DOCUMENT_TABLE_REPO)
+    `, orderDocumentTableRepo)
 
 	_, err := r.storage.Exec(ctx, query,
 		dto.Name,
-        dto.Path,
-        dto.Type,
-        dto.OrderID,
+		dto.Path,
+		dto.Type,
+		dto.OrderID,
 	)
 
 	if err != nil {
@@ -145,19 +143,19 @@ func (r *OrderDocumentRepository) UpdateOrderDocument(ctx context.Context, id ui
         UPDATE %s
         SET name = $1, path = $2, type = $3, order_id = $4, updated_at = CURRENT_TIMESTAMP
         WHERE id = $5
-    `, ORDER_DOCUMENT_TABLE_REPO) 
+    `, orderDocumentTableRepo)
 
 	result, err := r.storage.Exec(ctx, query,
 		dto.Name,
-        dto.Path,
-        dto.Type,
-        dto.OrderID,
-        id,
+		dto.Path,
+		dto.Type,
+		dto.OrderID,
+		id,
 	)
 
-    if err != nil { 
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
 	if result.RowsAffected() == 0 {
 		return utils.ErrorNotFound
@@ -166,10 +164,10 @@ func (r *OrderDocumentRepository) UpdateOrderDocument(ctx context.Context, id ui
 }
 
 func (r *OrderDocumentRepository) DeleteOrderDocument(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", ORDER_DOCUMENT_TABLE_REPO) 
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", orderDocumentTableRepo)
 
 	result, err := r.storage.Exec(ctx, query, id)
-	if err != nil { 
+	if err != nil {
 		return err
 	}
 

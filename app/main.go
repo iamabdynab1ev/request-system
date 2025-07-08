@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"regexp"
@@ -18,7 +19,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// CustomValidator для интеграции go-playground/validator с Echo
 type CustomValidator struct {
 	validator *validator.Validate
 }
@@ -30,32 +30,27 @@ func (cv *CustomValidator) Validate(i interface{}) error {
 	return nil
 }
 
-// isTajikPhoneNumber - кастомная функция валидации для номеров Таджикистана.
 func isTajikPhoneNumber(fl validator.FieldLevel) bool {
 	re := regexp.MustCompile(`^\+992\d{9}$`)
 	return re.MatchString(fl.Field().String())
 }
 
 func main() {
-	// Загрузка переменных окружения из .env файла
 	if err := godotenv.Load(); err != nil {
 		log.Println("Warning: .env file not found or could not be loaded.")
 	}
 
 	e := echo.New()
 
-	// Настройка кастомного валидатора
 	v := validator.New()
-	v.RegisterValidation("e164_TJ", isTajikPhoneNumber) // Регистрируем валидатор для таджикских номеров
+	v.RegisterValidation("e164_TJ", isTajikPhoneNumber)
 	e.Validator = &CustomValidator{validator: v}
 
 	logger := applogger.NewLogger()
 
-	// Подключение к PostgreSQL
 	dbConn := postgresql.ConnectDB()
 	defer dbConn.Close()
 
-	// Подключение к Redis
 	redisAddr := os.Getenv("REDIS_ADDRESS")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
@@ -70,7 +65,6 @@ func main() {
 	}
 	logger.Info("main: Успешное подключение к Redis")
 
-	// Настройка JWT сервиса
 	jwtSecretKey := os.Getenv("JWT_SECRET_KEY")
 	if jwtSecretKey == "" {
 		logger.Warn("main: JWT_SECRET_KEY не найден в .env. Используется небезопасный запасной ключ.")
@@ -81,10 +75,14 @@ func main() {
 	jwtSvc := service.NewJWTService(jwtSecretKey, accessTokenTTL, refreshTokenTTL)
 	logger.Info("main: JWTService успешно создан")
 
-	// Инициализация всех роутов приложения
-	routes.INIT_ROUTER(e, dbConn, redisClient, jwtSvc, logger)
+	routes.InitRouter(e, dbConn, redisClient, jwtSvc, logger)
 
-	// Запуск сервера
+	fmt.Println("\n\n==================== Зарегистрированные маршруты ====================")
+	for _, r := range e.Routes() {
+		fmt.Printf("МЕТОД: %-7s | ПУТЬ: %-50s | ОБРАБОТЧИК: %s\n", r.Method, r.Path, r.Name)
+	}
+	fmt.Print("===================================================================\n\n")
+
 	logger.Info("🚀 Сервер запущен на :8080")
 	if err := e.Start(":8080"); err != nil {
 		logger.Fatal("Ошибка запуска сервера", zap.Error(err))

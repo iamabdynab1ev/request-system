@@ -11,10 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	STATUS_TABLE  = "statuses"
-	STATUS_FIELDS = "id, icon, name, type, created_at"
-)
+const statusTable = "statuses"
+const statusFields = "id, icon, name, type, created_at"
 
 type StatusRepositoryInterface interface {
 	GetStatuses(ctx context.Context, limit uint64, offset uint64) ([]dto.StatusDTO, error)
@@ -35,7 +33,7 @@ func NewStatusRepository(storage *pgxpool.Pool) StatusRepositoryInterface {
 }
 
 func (r *StatusRepository) GetStatuses(ctx context.Context, limit uint64, offset uint64) ([]dto.StatusDTO, error) {
-	query := fmt.Sprintf("SELECT %s FROM %s", STATUS_FIELDS, STATUS_TABLE)
+	query := fmt.Sprintf("SELECT %s FROM %s", statusFields, statusTable)
 
 	rows, err := r.storage.Query(ctx, query)
 	if err != nil {
@@ -56,7 +54,7 @@ func (r *StatusRepository) GetStatuses(ctx context.Context, limit uint64, offset
 			return nil, err
 		}
 
-		 createdAtLocal := createdAt.Local()
+		createdAtLocal := createdAt.Local()
 
 		status.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
 
@@ -71,14 +69,14 @@ func (r *StatusRepository) GetStatuses(ctx context.Context, limit uint64, offset
 }
 
 func (r *StatusRepository) FindStatus(ctx context.Context, id uint64) (*dto.StatusDTO, error) {
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", STATUS_FIELDS, STATUS_TABLE)
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", statusFields, statusTable)
 
 	var status dto.StatusDTO
 	var createdAt time.Time
 
 	err := r.storage.QueryRow(ctx, query, id).Scan(
 		&status.ID, &status.Icon, &status.Name, &status.Type, &createdAt,
-    )
+	)
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -88,15 +86,15 @@ func (r *StatusRepository) FindStatus(ctx context.Context, id uint64) (*dto.Stat
 		return nil, err
 	}
 
-		 createdAtLocal := createdAt.Local()
+	createdAtLocal := createdAt.Local()
 
-		status.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
+	status.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
 
 	return &status, nil
 }
 
 func (r *StatusRepository) CreateStatus(ctx context.Context, payload dto.CreateStatusDTO) error {
-	query := fmt.Sprintf("INSERT INTO %s (icon, name, type) VALUES($1, $2, $3)", STATUS_TABLE)
+	query := fmt.Sprintf("INSERT INTO %s (icon, name, type) VALUES($1, $2, $3)", statusTable)
 
 	_, err := r.storage.Exec(ctx, query, payload.Icon, payload.Name, payload.Type)
 	if err != nil {
@@ -107,7 +105,7 @@ func (r *StatusRepository) CreateStatus(ctx context.Context, payload dto.CreateS
 }
 
 func (r *StatusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO) error {
-	query := fmt.Sprintf("UPDATE %s SET icon = $1, name = $2, type = $3 WHERE id = $4", STATUS_TABLE)
+	query := fmt.Sprintf("UPDATE %s SET icon = $1, name = $2, type = $3 WHERE id = $4", statusTable)
 
 	result, err := r.storage.Exec(ctx, query, dto.Icon, dto.Name, dto.Type, id)
 	if err != nil {
@@ -122,7 +120,7 @@ func (r *StatusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.
 }
 
 func (r *StatusRepository) DeleteStatus(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", STATUS_TABLE)
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", statusTable)
 
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {

@@ -4,20 +4,16 @@ import (
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
-	"request-system/pkg/logger"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
-func RUN_PRORETY_ROUTER(e *echo.Echo, dbConn *pgxpool.Pool) {
-	var (
-		logger = logger.NewLogger()
-
-		proretyRepository = repositories.NewProretyRepository(dbConn)
-		proretyService    = services.NewProretyService(proretyRepository, logger)
-		proretyCtrl       = controllers.NewProretyController(proretyService, logger)
-	)
+func RunProretyRouter(e *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) {
+	proretyRepository := repositories.NewProretyRepository(dbConn)
+	proretyService := services.NewProretyService(proretyRepository, logger)
+	proretyCtrl := controllers.NewProretyController(proretyService, logger)
 
 	e.GET("/proreties", proretyCtrl.GetProreties)
 	e.GET("/prorety/:id", proretyCtrl.FindProrety)

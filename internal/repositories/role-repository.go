@@ -10,10 +10,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool" // ИСПРАВЛЕНИЕ: Убрана опечатка "comcom"
+	"github.com/jackc/pgx/v5/pgxpool" 
 )
 
-// RoleRepositoryInterface определяет контракт для репозитория ролей.
 type RoleRepositoryInterface interface {
 	GetRoles(ctx context.Context, limit uint64, offset uint64) ([]dto.RoleDTO, uint64, error)
 	FindRoleByID(ctx context.Context, id uint64) (*dto.RoleDTO, error)
@@ -57,7 +56,7 @@ func (r *RoleRepository) GetRoles(ctx context.Context, limit uint64, offset uint
 	for rows.Next() {
 		var role dto.RoleDTO
 		var createdAt, updatedAt time.Time
-		err := rows.Scan(
+		err = rows.Scan(
 			&role.ID,
 			&role.Name,
 			&role.Description,
@@ -94,8 +93,6 @@ func (r *RoleRepository) FindRoleByID(ctx context.Context, id uint64) (*dto.Role
 	}
 	role.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
 	role.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
-
-	// Запрос прав для роли
 	queryPerms := `
 		SELECT p.id, p.name, p.description FROM permissions p
 		INNER JOIN role_permissions rp ON p.id = rp.permission_id
@@ -110,7 +107,7 @@ func (r *RoleRepository) FindRoleByID(ctx context.Context, id uint64) (*dto.Role
 	permissions := make([]dto.PermissionDTO, 0)
 	for rows.Next() {
 		var p dto.PermissionDTO
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description); err != nil {
+		if err = rows.Scan(&p.ID, &p.Name, &p.Description); err != nil {
 			return nil, fmt.Errorf("ошибка сканирования права: %w", err)
 		}
 		permissions = append(permissions, p)

@@ -11,10 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	POSITION_TABLE  = "positions"
-	POSITION_FIELDS = "id, name, created_at, updated_at"
-)
+const positionTable = "positions"
+const positionFields = "id, name, created_at, updated_at"
 
 type PositionRepositoryInterface interface {
 	GetPositions(ctx context.Context, limit uint64, offset uint64) (interface{}, uint64, error)
@@ -55,7 +53,7 @@ func (r *PositionRepository) FindPosition(ctx context.Context, id uint64) (*dto.
 			%s	
 		FROM %s	
 		WHERE id = $1		
-	`, POSITION_FIELDS, POSITION_TABLE)
+	`, positionFields, positionTable)
 
 	var position dto.PositionDTO
 	var createdAt *time.Time
@@ -90,7 +88,7 @@ func (r *PositionRepository) CreatePosition(ctx context.Context, dto dto.CreateP
 	query := fmt.Sprintf(`
         INSERT INTO %s (name)
 		VALUES ($1)
-    `, POSITION_TABLE)
+    `, positionTable)
 
 	_, err := r.storage.Exec(ctx, query,
 		dto.Name,
@@ -107,7 +105,7 @@ func (r *PositionRepository) UpdatePosition(ctx context.Context, id uint64, dto 
 		UPDATE %s
 		SET name = $1, updated_at = CURRENT_TIMESTAMP
 		WHERE id = $2
-	`, POSITION_TABLE)
+	`, positionTable)
 
 	result, err := r.storage.Exec(ctx, query, dto.Name, id)
 	if err != nil {
@@ -124,7 +122,7 @@ func (r *PositionRepository) UpdatePosition(ctx context.Context, id uint64, dto 
 
 func (r *PositionRepository) DeletePosition(ctx context.Context, id uint64) error {
 
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", POSITION_TABLE)
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", positionTable)
 
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {

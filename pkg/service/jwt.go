@@ -1,11 +1,8 @@
-// Файл: pkg/service/jwt.go (или как он у вас называется)
-// КОНЕЧНАЯ, ИСПРАВЛЕННАЯ ВЕРСИЯ
-
 package service
 
 import (
-	"errors"                              // Убедитесь, что этот стандартный пакет импортирован
-	apperrors "request-system/pkg/errors" // Используем ваш пакет ошибок
+	"errors"
+	apperrors "request-system/pkg/errors"
 	"time"
 
 	jwt "github.com/golang-jwt/jwt/v5"
@@ -21,6 +18,7 @@ type JwtCustomClaim struct {
 type JWTService interface {
 	GenerateTokens(userId int) (string, string, error)
 	ValidateToken(tokenString string) (*JwtCustomClaim, error)
+	ValidateRefreshToken(tokenString string) (int, error)
 	GetAccessTokenTTL() time.Duration
 	GetRefreshTokenTTL() time.Duration
 }
@@ -39,13 +37,11 @@ func NewJWTService(secretKey string, accessTokenExp, refreshTokenExp time.Durati
 	}
 }
 
-// ИЗМЕНЕНО: Генерируем время в UTC
 func (service *jwtService) GenerateTokens(userId int) (string, string, error) {
-	// Используем .UTC(), чтобы гарантировать единый часовой пояс
+
 	accessTokenExp := time.Now().UTC().Add(service.AccessTokenExp)
 	refreshTokenExp := time.Now().UTC().Add(service.RefreshTokenExp)
 
-	
 	issuedAt := time.Now().UTC()
 
 	accessTokenClaims := &JwtCustomClaim{
@@ -112,7 +108,18 @@ func (service *jwtService) ValidateToken(tokenString string) (*JwtCustomClaim, e
 	log.Warn("Токен невалиден по неизвестной причине")
 	return nil, apperrors.ErrInvalidToken
 }
+func (s *jwtService) ValidateRefreshToken(tokenString string) (int, error) {
+	claims, err := s.ValidateToken(tokenString)
+	if err != nil {
+		return 0, err
+	}
+	if !claims.IsRefreshToken {
+		log.Warnf("Попытка использовать access токен для обновления (userID: %d)", claims.UserID)
+		return 0, apperrors.ErrInvalidToken
+	}
 
+	return claims.UserID, nil
+}
 func (s *jwtService) GetAccessTokenTTL() time.Duration {
 	return s.AccessTokenExp
 }

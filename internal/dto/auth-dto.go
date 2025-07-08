@@ -16,13 +16,32 @@ type VerifyCodeDTO struct {
 	Code  string `json:"code" validate:"required,len=4,numeric"`
 }
 
-type ForgotPasswordDTO struct {
+type ForgotPasswordInitDTO struct {
 	Email string `json:"email" validate:"required,email"`
 }
 
-type ResetPasswordDTO struct {
-	Token       string `json:"token" validate:"required"`
-	NewPassword string `json:"new_password" validate:"required,min=6"`
+type ForgotPasswordOptionsDTO struct {
+	Options []string `json:"options"`
+}
+
+type ForgotPasswordSendDTO struct {
+	Email  string `json:"email"  validate:"required,email"`
+	Method string `json:"method" validate:"required,oneof=email phone"`
+}
+
+type ResetPasswordEmailDTO struct {
+	Token       string `json:"token"        validate:"required"`
+	NewPassword string `json:"newPassword"  validate:"required,min=6"`
+}
+
+type ResetPasswordPhoneDTO struct {
+	Email       string `json:"email"        validate:"required,email"`
+	Code        string `json:"code"         validate:"required,len=4,numeric"`
+	NewPassword string `json:"newPassword"  validate:"required,min=6"`
+}
+
+type RefreshTokenDTO struct {
+	RefreshToken string `json:"refreshToken" validate:"required"`
 }
 
 type AuthResponseDTO struct {

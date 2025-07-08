@@ -1,27 +1,138 @@
-1.7518048034029903e+09	info	app/main.go:71	main: Успешное подключение к Redis
-1.7518048034029903e+09	info	app/main.go:82	main: JWTService успешно создан
-1.7518048034035041e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.7518048034068165e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
-1.7518048034068165e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
-1.7518048147416918e+09	info	controllers/auth.go:99	Токены успешно сгенерированы	{"userID": 62}
-1.7518048181051586e+09	info	services/auth.go:92	Код верификации сгенерирован	{"userID": 62}
-1.7518051103175364e+09	info	app/main.go:71	main: Успешное подключение к Redis
-1.7518051103180795e+09	info	app/main.go:82	main: JWTService успешно создан
-1.7518051103186166e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.7518051103207862e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
-1.7518051103207862e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
-1.7518051196935763e+09	info	services/auth.go:91	Код верификации сгенерирован (для теста)	{"userID": 62, "code": "3217"}
-1.7518052092939353e+09	info	controllers/auth.go:99	Токены успешно сгенерированы	{"userID": 62}
-1.751805213184539e+09	info	services/auth.go:91	Код верификации сгенерирован (для теста)	{"userID": 62, "code": "4473"}
-1.7518053819880161e+09	info	controllers/auth.go:99	Токены успешно сгенерированы	{"userID": 62}
-1.751806258894568e+09	info	app/main.go:71	main: Успешное подключение к Redis
-1.751806258895089e+09	info	app/main.go:82	main: JWTService успешно создан
-1.751806258895089e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.7518062588972528e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
-1.7518062588972528e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
-1.7518062828269427e+09	warn	middleware/auth.go:40	AuthMiddleware: Неверный формат заголовка Authorization
-1.751806291597508e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
-1.7518062916468828e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
+1.751859662855166e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.7518596695818846e+09	info	controllers/auth.go:117	Токены успешно сгенерированы	{"userID": 62}
+1.751859681628358e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.7518596946953087e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518597014547727e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518597057705252e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.7518597510729384e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.7518597836774096e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518598202633672e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.75185982722394e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.751859828147227e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.751859831107856e+09	info	controllers/auth.go:117	Токены успешно сгенерированы	{"userID": 62}
+1.7518598349939632e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.7518598641425056e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.7518598651545687e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.7518619775874732e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.751861977589071e+09	info	app/main.go:82	main: JWTService успешно создан
+1.751861977589071e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.751861977590268e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.751861977590268e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518619869459953e+09	info	controllers/auth.go:117	Токены успешно сгенерированы	{"userID": 62}
+1.7518620625195868e+09	info	controllers/auth.go:117	Токены успешно сгенерированы	{"userID": 62}
+1.7518621468902915e+09	info	controllers/auth.go:117	Токены успешно сгенерированы	{"userID": 62}
+1.751862393727071e+09	info	controllers/auth.go:117	Токены успешно сгенерированы	{"userID": 62}
+1.7518626765442467e+09	info	controllers/auth.go:117	Токены успешно сгенерированы	{"userID": 62}
+1.7518626777106757e+09	info	controllers/auth.go:117	Токены успешно сгенерированы	{"userID": 62}
+1.7518628187710128e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518628187713184e+09	info	app/main.go:82	main: JWTService успешно создан
+1.751862818771824e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.751862818771824e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518628187723927e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.751862835828287e+09	info	controllers/auth.go:105	--- ДИАГНОСТИКА REFRESH-TOKEN ---	{"raw_body": "{\r\n    \"email\": \"Executor5@gmail.com\"\r\n}"}
+1.7518628954791617e+09	info	controllers/auth.go:105	--- ДИАГНОСТИКА REFRESH-TOKEN ---	{"raw_body": ""}
+1.7518629509078033e+09	info	controllers/auth.go:105	--- ДИАГНОСТИКА REFRESH-TOKEN ---	{"raw_body": "{\r\n    \"refreshToken\": eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjYyLCJJc1JlZnJlc2hUb2tlbiI6dHJ1ZSwiZXhwIjoxNzUyNDY3NDc3LCJpYXQiOjE3NTE4NjI2Nzd9.-s0aZWfy8uJD4KzMkSLid926oG23tLk19wUvc8qMeKvVtbF71aFumTo0C7LnZnpZ97OTXuCluF1brFFY5vE0CA\r\n}"}
+1.7518629509078033e+09	error	controllers/auth.go:114	RefreshToken: не удалось сделать Bind() тела запроса	{"error": "code=400, message=Syntax error: offset=24, error=invalid character 'e' looking for beginning of value, internal=invalid character 'e' looking for beginning of value"}
+request-system/internal/controllers.(*AuthController).RefreshToken
+	C:/projects/go/src/myApps/request-system/internal/controllers/auth.go:114
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518629525748658e+09	info	controllers/auth.go:105	--- ДИАГНОСТИКА REFRESH-TOKEN ---	{"raw_body": "{\r\n    \"refreshToken\": eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjYyLCJJc1JlZnJlc2hUb2tlbiI6dHJ1ZSwiZXhwIjoxNzUyNDY3NDc3LCJpYXQiOjE3NTE4NjI2Nzd9.-s0aZWfy8uJD4KzMkSLid926oG23tLk19wUvc8qMeKvVtbF71aFumTo0C7LnZnpZ97OTXuCluF1brFFY5vE0CA\r\n}"}
+1.7518629525748658e+09	error	controllers/auth.go:114	RefreshToken: не удалось сделать Bind() тела запроса	{"error": "code=400, message=Syntax error: offset=24, error=invalid character 'e' looking for beginning of value, internal=invalid character 'e' looking for beginning of value"}
+request-system/internal/controllers.(*AuthController).RefreshToken
+	C:/projects/go/src/myApps/request-system/internal/controllers/auth.go:114
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518631319743466e+09	info	controllers/auth.go:105	--- ДИАГНОСТИКА REFRESH-TOKEN ---	{"raw_body": "{\r\n    \"refreshToken\": \"eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjYyLCJJc1JlZnJlc2hUb2tlbiI6dHJ1ZSwiZXhwIjoxNzUyNDY3NDc3LCJpYXQiOjE3NTE4NjI2Nzd9.-s0aZWfy8uJD4KzMkSLid926oG23tLk19wUvc8qMeKvVtbF71aFumTo0C7LnZnpZ97OTXuCluF1brFFY5vE0CA\"\r\n}"}
+1.7518631319807053e+09	info	controllers/auth.go:141	Токены успешно сгенерированы	{"userID": 62}
+1.7518631407725313e+09	info	controllers/auth.go:105	--- ДИАГНОСТИКА REFRESH-TOKEN ---	{"raw_body": "{\r\n    \"refreshToken\": \"eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjYyLCJJc1JlZnJlc2hUb2tlbiI6dHJ1ZSwiZXhwIjoxNzUyNDY3NDc3LCJpYXQiOjE3NTE4NjI2Nzd9.-s0aZWfy8uJD4KzMkSLid926oG23tLk19wUvc8qMeKvVtbF71aFumTo0C7LnZnpZ97OTXuCluF1brFFY5vE0CA\"\r\n}"}
+1.751863140775045e+09	info	controllers/auth.go:141	Токены успешно сгенерированы	{"userID": 62}
+1.7518631556439579e+09	info	services/auth.go:92	Код верификации сгенерирован (для теста)	{"userID": 62, "code": "7650"}
+1.751863168972542e+09	info	controllers/auth.go:141	Токены успешно сгенерированы	{"userID": 62}
+1.7518675934011436e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518675934016523e+09	info	app/main.go:82	main: JWTService успешно создан
+1.7518675934022155e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.751867593402811e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.751867593402811e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518678232444115e+09	info	controllers/auth.go:141	Токены успешно сгенерированы	{"userID": 62}
+1.7518683536252255e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518683536263506e+09	info	app/main.go:82	main: JWTService успешно создан
+1.7518683536263506e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.7518683536275027e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518683536275027e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518684269685912e+09	info	services/auth.go:173	Проверка опций восстановления пароля	{"email": "Executor5@gmail.com"}
+1.751868426977941e+09	info	services/auth.go:187	Опции восстановления найдены	{"email": "Executor5@gmail.com", "options": ["email", "phone"]}
+1.7518685580210974e+09	warn	controllers/auth.go:149	SendRecoveryInstructions: невалидные данные	{"error": "Key: 'ForgotPasswordSendDTO.Email' Error:Field validation for 'Email' failed on the 'required' tag\nKey: 'ForgotPasswordSendDTO.Method' Error:Field validation for 'Method' failed on the 'required' tag"}
+1.7518685718840897e+09	info	services/auth.go:193	Отправка инструкций для восстановления	{"email": "Executor5@gmail.com", "method": "email"}
+1.7518685718950164e+09	info	services/auth.go:273	Сгенерирован токен для сброса по email	{"token": "c8fe1946-7bc2-4576-8491-ad79c8ad49c6", "userID": 62}
+1.751868790789983e+09	info	services/auth.go:217	Сброс пароля по email токену	{"token_suffix": "49c6"}
+1.751868790910387e+09	info	services/auth.go:307	Пароль для пользователя успешно сброшен	{"token_suffix": "49c6"}
+1.7518688563618276e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.751868872667667e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518689257740028e+09	info	services/auth.go:193	Отправка инструкций для восстановления	{"email": "Executor5@gmail.com", "method": "phone"}
+1.751868925793934e+09	info	services/auth.go:290	Сгенерирован код для сброса по телефону	{"code": "8484", "userID": 62}
+1.7518690797732685e+09	info	services/auth.go:236	Сброс пароля по коду с телефона	{"email": "Executor5@gmail.com"}
+1.7518690798716605e+09	info	services/auth.go:307	Пароль для пользователя успешно сброшен	{"email": "Executor5@gmail.com"}
+1.7518691036366997e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518699217875705e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.751869921788371e+09	info	app/main.go:82	main: JWTService успешно создан
+1.751869921788371e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.751869921788922e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.751869921788922e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518701126531098e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518701126536171e+09	info	app/main.go:82	main: JWTService успешно создан
+1.7518701126536171e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.7518701126541994e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518701126541994e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518702300888138e+09	info	app/main.go:71	main: Успешное подключение к Redis
+1.7518702300888138e+09	info	app/main.go:82	main: JWTService успешно создан
+1.751870230089358e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.751870230089358e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518702300899012e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.7518707145838342e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.7518707145838342e+09	info	app/main.go:83	main: JWTService успешно создан
+1.7518707145844946e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.7518707145850601e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518707145905685e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.751870780549458e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.7518707805498106e+09	info	app/main.go:83	main: JWTService успешно создан
+1.7518707805503168e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.7518707805503168e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518707805552697e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.7518713512414806e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.751871351243377e+09	info	app/main.go:83	main: JWTService успешно создан
+1.751871351243377e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.751871351243943e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518713512542481e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.7518713783394399e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518713967860103e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518714364305134e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518714443354323e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.751871452893466e+09	warn	middleware/auth.go:55	AuthMiddleware: Попытка доступа с refresh токеном
+1.751871526287602e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.751871536088597e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751871544932815e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518715464724362e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518715593866298e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518715662331018e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518715779374993e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518715833857932e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518715960657635e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518716006717293e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518716235315928e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751871623581915e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
 request-system/internal/services.(*OrderService).GetOrders
 	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
 request-system/internal/controllers.(*OrderController).GetOrders
@@ -36,7 +147,7 @@ net/http.serverHandler.ServeHTTP
 	C:/Program Files/Go/src/net/http/server.go:3301
 net/http.(*conn).serve
 	C:/Program Files/Go/src/net/http/server.go:2102
-1.7518062916468828e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
+1.7518716235831382e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
 request-system/internal/controllers.(*OrderController).GetOrders
 	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
 request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
@@ -49,9 +160,32 @@ net/http.serverHandler.ServeHTTP
 	C:/Program Files/Go/src/net/http/server.go:3301
 net/http.(*conn).serve
 	C:/Program Files/Go/src/net/http/server.go:2102
-1.7518063060915318e+09	info	controllers/auth.go:99	Токены успешно сгенерированы	{"userID": 62}
-1.7518063092613099e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
-1.7518063092661421e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
+1.751871750288404e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518717656331496e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518717722491105e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518717844467082e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518717958107214e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751871803498064e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.75187576678393e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518757761828277e+09	warn	middleware/auth.go:49	AuthMiddleware: Ошибка валидации токена	{"error": "code: 401, message: Срок действия токена истёк"}
+1.7518757828827844e+09	warn	middleware/auth.go:49	AuthMiddleware: Ошибка валидации токена	{"error": "code: 401, message: Срок действия токена истёк"}
+1.7518757958410954e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.751875804419309e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518758107678587e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518758245188532e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518758406609974e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518758641989408e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518758676162674e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518759058244941e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518759296313536e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518759544232564e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518759763603904e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.751875981631046e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518759945822282e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518759999786017e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.75187601282619e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518760263711104e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518760263801448e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
 request-system/internal/services.(*OrderService).GetOrders
 	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
 request-system/internal/controllers.(*OrderController).GetOrders
@@ -66,7 +200,7 @@ net/http.serverHandler.ServeHTTP
 	C:/Program Files/Go/src/net/http/server.go:3301
 net/http.(*conn).serve
 	C:/Program Files/Go/src/net/http/server.go:2102
-1.7518063092661421e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
+1.7518760263801448e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
 request-system/internal/controllers.(*OrderController).GetOrders
 	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
 request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
@@ -79,14 +213,26 @@ net/http.serverHandler.ServeHTTP
 	C:/Program Files/Go/src/net/http/server.go:3301
 net/http.(*conn).serve
 	C:/Program Files/Go/src/net/http/server.go:2102
-1.7518063152777016e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
-1.751806537222582e+09	info	app/main.go:71	main: Успешное подключение к Redis
-1.7518065372233608e+09	info	app/main.go:82	main: JWTService успешно создан
-1.7518065372233608e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.7518065372254486e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
-1.7518065372260902e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
-1.7518065459482343e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
-1.7518065459710839e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+1.7518760360943346e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518760467179735e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751876068480978e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518760820745451e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.75187608814685e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751876093740504e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518761048128262e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518761100262713e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518761169244196e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518761234492354e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518761291552908e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518761309473176e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751876136511067e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.751876141879034e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518761495921798e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518761574600384e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518761656051288e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518761703105109e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751876174054958e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751876174058563e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
 request-system/internal/services.(*OrderService).GetOrders
 	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
 request-system/internal/controllers.(*OrderController).GetOrders
@@ -101,7 +247,7 @@ net/http.serverHandler.ServeHTTP
 	C:/Program Files/Go/src/net/http/server.go:3301
 net/http.(*conn).serve
 	C:/Program Files/Go/src/net/http/server.go:2102
-1.7518065459710839e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+1.751876174059335e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
 request-system/internal/controllers.(*OrderController).GetOrders
 	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
 request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
@@ -114,8 +260,205 @@ net/http.serverHandler.ServeHTTP
 	C:/Program Files/Go/src/net/http/server.go:3301
 net/http.(*conn).serve
 	C:/Program Files/Go/src/net/http/server.go:2102
-1.7518065474530423e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
-1.7518065474562201e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+1.7518761775102768e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518800044028504e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518800123870795e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518800135656073e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518800215916865e+09	info	services/auth.go:101	Код верификации сгенерирован (для теста)	{"userID": 62, "code": "6634"}
+1.7518800373974566e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.751880041410289e+09	info	services/auth.go:173	Проверка опций восстановления пароля	{"email": "Executor5@gmail.com"}
+1.7518800414136698e+09	info	services/auth.go:187	Опции восстановления найдены	{"email": "Executor5@gmail.com", "options": ["email", "phone"]}
+1.751880055177384e+09	info	services/auth.go:193	Отправка инструкций для восстановления	{"email": "Executor5@gmail.com", "method": "phone"}
+1.7518800551854641e+09	info	services/auth.go:290	Сгенерирован код для сброса по телефону	{"code": "7638", "userID": 62}
+1.7518800689860418e+09	info	services/auth.go:236	Сброс пароля по коду с телефона	{"email": "Executor5@gmail.com"}
+1.7518800691382692e+09	info	services/auth.go:307	Пароль для пользователя успешно сброшен	{"email": "Executor5@gmail.com"}
+1.751880078495175e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518818631668744e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518818702856154e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518818803431392e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518826237016127e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518832920907013e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751883331622622e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518833376602848e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518833421436234e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751883356926964e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751883359930229e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518833635953226e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518833670741038e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518852683695116e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518852723733227e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518852782590935e+09	warn	middleware/auth.go:49	AuthMiddleware: Ошибка валидации токена	{"error": "code: 401, message: Срок действия токена истёк"}
+1.7518852902112908e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518852969111135e+09	warn	middleware/auth.go:49	AuthMiddleware: Ошибка валидации токена	{"error": "code: 401, message: Срок действия токена истёк"}
+1.7518853061550374e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518853240541916e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518853600751374e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518853660162327e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518853660472555e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"View:Orders:Own","description":"Просматривать только свои заявки"}}
+1.7518853781713915e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518853781912806e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"View:Orders:Department","description":"Просматривать все заявки своего департамента"}}
+1.7518853885777118e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751885388599318e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"View:Orders:All","description":"Просматривать абсолютно все заявки в системе"}}
+1.7518853973219383e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751885397342271e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Change:Status:ToInProgress","description":"Разрешить менять статус заявки на 'В работе'"}}
+1.7518854057698874e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854057757366e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Change:Status:ToCompleted","description":"Разрешить менять статус на 'Выполнено'"}}
+1.751885412281997e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854123058856e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Change:Status:ToClosed","description":"Разрешить закрывать заявку"}}
+1.751885420451926e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854204715219e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Change:Status:ToReopened","description":"Разрешить переоткрывать уже закрытую заявку"}}
+1.7518854287849002e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854288069086e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Add:Comment","description":"Разрешить добавлять комментарии к заявке"}}
+1.7518854368319225e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854368503256e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Add:Attachment","description":"Разрешить прикреплять файлы к заявке"}}
+1.7518854440851648e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854440901663e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"View:Attachments","description":"Разрешить просматривать прикрепленные файлы"}}
+1.7518854509514856e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854509587677e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Delete:Attachment","description":"Разрешить удалять прикрепленные файлы"}}
+1.7518854596051629e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854596291368e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Change:Priority","description":"Разрешить изменять приоритет заявки"}}
+1.7518854698885314e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751885469905027e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"View:Users:All","description":"Просматривать всех пользователей системы"}}
+1.7518854776785202e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854776989968e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Update:User:Profile","description":"Разрешить пользователю редактировать свой собственный профиль"}}
+1.7518854845842392e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518854846021197e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Update:User:All","description":"Разрешить редактировать профиль любого пользователя"}}
+1.7518854918098948e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751885491815202e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Update:User:Password","description":"Разрешить менять пароль любому пользователю"}}
+1.751885501327617e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518855013325946e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Update:User:Role","description":"Разрешить изменять роль пользователя"}}
+1.7518855096520467e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.75188550965931e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Update:User:Department","description":"Разрешить 'переводить' пользователя в другой департамент"}}
+1.751885516058516e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518855160633044e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Block:User","description":"Разрешить блокировать и разблокировать пользователя"}}
+1.7518855238311095e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518855238420882e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"View:Dashboard","description":"Доступ к главной информационной панели (дашборду)"}}
+1.7518855299838345e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518855299909163e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Generate:Report:Performance","description":"Генерировать отчеты по производительности исполнителей"}}
+1.7518855372000957e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518855372206485e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Generate:Report:SLA","description":"Генерировать отчеты по соблюдению SLA"}}
+1.7518855458986332e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518855459176607e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Generate:Report:ByDepartment","description":"Генерировать отчеты в разрезе департаментов"}}
+1.7518855554486215e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751885555468884e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Export:Data","description":"Разрешить экспорт данных в Excel/CSV"}}
+1.7518855583651476e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518855583866851e+09	error	services/permission.go:36	Ощибка при создание: 	{"error": "ERROR: duplicate key value violates unique constraint \"permissions_name_key\" (SQLSTATE 23505)"}
+request-system/internal/services.(*PermissionService).CreatePermission
+	C:/projects/go/src/myApps/request-system/internal/services/permission.go:36
+request-system/internal/controllers.(*PermissionController).CreatePermission
+	C:/projects/go/src/myApps/request-system/internal/controllers/permission.go:89
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.75188555839124e+09	error	controllers/permission.go:91	Ощибка при создание: 	{"error": "ERROR: duplicate key value violates unique constraint \"permissions_name_key\" (SQLSTATE 23505)"}
+request-system/internal/controllers.(*PermissionController).CreatePermission
+	C:/projects/go/src/myApps/request-system/internal/controllers/permission.go:91
+request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
+	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
+github.com/labstack/echo/v4.(*Echo).add.func1
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
+github.com/labstack/echo/v4.(*Echo).ServeHTTP
+	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
+net/http.serverHandler.ServeHTTP
+	C:/Program Files/Go/src/net/http/server.go:3301
+net/http.(*conn).serve
+	C:/Program Files/Go/src/net/http/server.go:2102
+1.7518855711249025e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751885571131444e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"View:AuditLog","description":"Просмотр журнала аудита"}}
+1.7518855788325465e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751885578838229e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Manage:System:Settings","description":"Доступ к настройкам системы"}}
+1.7518855861782837e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518855861843224e+09	info	services/permission.go:39	Успешно создан	{"payload:": {"name":"Manage:Notifications","description":"Управление шаблонами уведомлений"}}
+1.7518855903440278e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518855917633522e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518861100979092e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518862386281672e+09	warn	middleware/auth.go:33	AuthMiddleware: Пустой заголовок Authorization
+1.7518862519749377e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751886393247151e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518864034922092e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518864132565808e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518864227945242e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518864313352349e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518864410419464e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518864494789796e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518864577034614e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751886472723724e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518864782484827e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518866640691538e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518866932999666e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518867066040723e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751886729802615e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518899836032798e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.7518899836040277e+09	info	app/main.go:83	main: JWTService успешно создан
+1.751889983604613e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.751889983605163e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518899836163642e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.7518900043697698e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7518900139287183e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.75189003225193e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751890039278674e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518901185865266e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518901200378282e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518901211730669e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518901228012428e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751890123883507e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518903353826494e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.7518903353826494e+09	info	app/main.go:83	main: JWTService успешно создан
+1.751890335383255e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.7518903353838298e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.751890335394551e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.7518903488504856e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518904203447552e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.7518904203453126e+09	info	app/main.go:83	main: JWTService успешно создан
+1.7518904203453126e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.7518904203458424e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518904203595583e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.7518904334148612e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518904386783178e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751890439946902e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751895060087855e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.7518950600935063e+09	info	app/main.go:83	main: JWTService успешно создан
+1.751895060094162e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.751895060095833e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518950601252463e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.7518952102067826e+09	warn	middleware/auth.go:49	AuthMiddleware: Ошибка валидации токена	{"error": "code: 401, message: Срок действия токена истёк"}
+1.7518952181928663e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.751895227832767e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751895269614212e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518956336954818e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.751895633696605e+09	info	app/main.go:83	main: JWTService успешно создан
+1.751895633696605e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.7518956336983235e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.7518956337187965e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.7518956486289582e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7518956671712742e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751944542467367e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.7519445424694743e+09	info	app/main.go:83	main: JWTService успешно создан
+1.7519445424702828e+09	info	routes/routes.go:14	INIT_ROUTER: Начало создания маршрутов
+1.7519445424709005e+09	info	routes/routes.go:39	INIT_ROUTER: Создание маршрутов завершено
+1.75194454247907e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.7519445626328228e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.751944578329358e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519445865214345e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751944599592892e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.75194920015191e+09	info	app/main.go:72	main: Успешное подключение к Redis
+1.7519492001661162e+09	info	app/main.go:83	main: JWTService успешно создан
+1.7519492001661162e+09	info	routes/routes.go:14	InitRouter: Начало создания маршрутов
+1.7519492001672404e+09	info	routes/routes.go:41	INIT_ROUTER: Создание маршрутов завершено
+1.751949200190441e+09	info	app/main.go:100	🚀 Сервер запущен на :8080
+1.7519492106898053e+09	warn	middleware/auth.go:49	AuthMiddleware: Ошибка валидации токена	{"error": "code: 401, message: Срок действия токена истёк"}
+1.7519492149460733e+09	warn	middleware/auth.go:49	AuthMiddleware: Ошибка валидации токена	{"error": "code: 401, message: Срок действия токена истёк"}
+1.7519492232189326e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7519492289663715e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519492337731135e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751949233811084e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
 request-system/internal/services.(*OrderService).GetOrders
 	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
 request-system/internal/controllers.(*OrderController).GetOrders
@@ -130,7 +473,7 @@ net/http.serverHandler.ServeHTTP
 	C:/Program Files/Go/src/net/http/server.go:3301
 net/http.(*conn).serve
 	C:/Program Files/Go/src/net/http/server.go:2102
-1.7518065474562201e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
+1.751949233811588e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка сканирования заявки в списке: can't scan into dest[3] (col: otdel_id): cannot scan NULL into *int"}
 request-system/internal/controllers.(*OrderController).GetOrders
 	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
 request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
@@ -143,62 +486,61 @@ net/http.serverHandler.ServeHTTP
 	C:/Program Files/Go/src/net/http/server.go:3301
 net/http.(*conn).serve
 	C:/Program Files/Go/src/net/http/server.go:2102
-1.7518066532466378e+09	info	app/main.go:71	main: Успешное подключение к Redis
-1.7518066532466378e+09	info	app/main.go:82	main: JWTService успешно создан
-1.751806653247228e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.751806653248843e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
-1.751806653248843e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
-1.751806664007378e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
-1.751806664011875e+09	error	services/order.go:39	ошибка при получении списка заявок в сервисе	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
-request-system/internal/services.(*OrderService).GetOrders
-	C:/projects/go/src/myApps/request-system/internal/services/order.go:39
-request-system/internal/controllers.(*OrderController).GetOrders
-	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:34
-request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
-	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
-github.com/labstack/echo/v4.(*Echo).add.func1
-	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
-github.com/labstack/echo/v4.(*Echo).ServeHTTP
-	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
-net/http.serverHandler.ServeHTTP
-	C:/Program Files/Go/src/net/http/server.go:3301
-net/http.(*conn).serve
-	C:/Program Files/Go/src/net/http/server.go:2102
-1.751806664012383e+09	error	controllers/order.go:36	ошибка при получении списка заявок	{"error": "ошибка получения списка заявок: ERROR: relation \"priorities\" does not exist (SQLSTATE 42P01)"}
-request-system/internal/controllers.(*OrderController).GetOrders
-	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:36
-request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
-	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
-github.com/labstack/echo/v4.(*Echo).add.func1
-	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
-github.com/labstack/echo/v4.(*Echo).ServeHTTP
-	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
-net/http.serverHandler.ServeHTTP
-	C:/Program Files/Go/src/net/http/server.go:3301
-net/http.(*conn).serve
-	C:/Program Files/Go/src/net/http/server.go:2102
-1.751806774950765e+09	info	app/main.go:71	main: Успешное подключение к Redis
-1.751806774950765e+09	info	app/main.go:82	main: JWTService успешно создан
-1.751806774950765e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.7518067749527705e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
-1.7518067749527705e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
-1.7518067833257e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
-1.7518068008135643e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
-1.7518068008146229e+09	error	controllers/order.go:66	Ошибка валидации данных заявки	{"error": "Key: 'CreateOrderDTO.OtdelID' Error:Field validation for 'OtdelID' failed on the 'required' tag\nKey: 'CreateOrderDTO.ProretyID' Error:Field validation for 'ProretyID' failed on the 'required' tag\nKey: 'CreateOrderDTO.StatusID' Error:Field validation for 'StatusID' failed on the 'required' tag\nKey: 'CreateOrderDTO.BranchID' Error:Field validation for 'BranchID' failed on the 'required' tag\nKey: 'CreateOrderDTO.OfficeID' Error:Field validation for 'OfficeID' failed on the 'required' tag\nKey: 'CreateOrderDTO.EquipmentID' Error:Field validation for 'EquipmentID' failed on the 'required' tag\nKey: 'CreateOrderDTO.ExecutorID' Error:Field validation for 'ExecutorID' failed on the 'required' tag\nKey: 'CreateOrderDTO.Duration' Error:Field validation for 'Duration' failed on the 'required' tag"}
-request-system/internal/controllers.(*OrderController).CreateOrder
-	C:/projects/go/src/myApps/request-system/internal/controllers/order.go:66
-request-system/pkg/middleware.(*AuthMiddleware).Auth-fm.(*AuthMiddleware).Auth.func1
-	C:/projects/go/src/myApps/request-system/pkg/middleware/auth.go:67
-github.com/labstack/echo/v4.(*Echo).add.func1
-	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:581
-github.com/labstack/echo/v4.(*Echo).ServeHTTP
-	C:/projects/go/bin/pkg/mod/github.com/labstack/echo/v4@v4.13.3/echo.go:668
-net/http.serverHandler.ServeHTTP
-	C:/Program Files/Go/src/net/http/server.go:3301
-net/http.(*conn).serve
-	C:/Program Files/Go/src/net/http/server.go:2102
-1.751807502551032e+09	info	app/main.go:71	main: Успешное подключение к Redis
-1.7518075025522459e+09	info	app/main.go:82	main: JWTService успешно создан
-1.7518075025528743e+09	info	routes/routes.go:13	INIT_ROUTER: Начало создания маршрутов	{"jwtServiceNotNil": true}
-1.751807502558254e+09	info	routes/routes.go:38	INIT_ROUTER: Создание маршрутов завершено
-1.7518075025588522e+09	info	app/main.go:88	🚀 Сервер запущен на :8080
+1.751949783535571e+09	info	app/main.go:66	main: Успешное подключение к Redis
+1.7519497835363793e+09	info	app/main.go:76	main: JWTService успешно создан
+1.7519497835368876e+09	info	routes/routes.go:14	InitRouter: Начало создания маршрутов
+1.7519497835368876e+09	info	routes/routes.go:41	INIT_ROUTER: Создание маршрутов завершено
+1.7519497835557075e+09	info	app/main.go:86	🚀 Сервер запущен на :8080
+1.7519498179765117e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7519498925863957e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519499085002582e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519499326805866e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519499407978477e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519499420606103e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519499464780552e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751950056911285e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519500588577557e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519503451029248e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519504099642763e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519504151174603e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519506344917357e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519506397524526e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519506617194827e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519507848051534e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519507936740563e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519507968191955e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519508212406952e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519508534113252e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519569423993607e+09	info	app/main.go:66	main: Успешное подключение к Redis
+1.751956942400457e+09	info	app/main.go:76	main: JWTService успешно создан
+1.7519569424010303e+09	info	routes/routes.go:14	InitRouter: Начало создания маршрутов
+1.7519569424021828e+09	info	routes/routes.go:41	INIT_ROUTER: Создание маршрутов завершено
+1.7519569424143002e+09	info	app/main.go:86	🚀 Сервер запущен на :8080
+1.7519569622661645e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7519569781455424e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519569922689862e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519570091436248e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751957041228674e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519570429797893e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519570626493778e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519571154924974e+09	info	app/main.go:66	main: Успешное подключение к Redis
+1.7519571154929218e+09	info	app/main.go:76	main: JWTService успешно создан
+1.7519571154934363e+09	info	routes/routes.go:14	InitRouter: Начало создания маршрутов
+1.7519571154934363e+09	info	routes/routes.go:41	INIT_ROUTER: Создание маршрутов завершено
+1.751957115499213e+09	info	app/main.go:86	🚀 Сервер запущен на :8080
+1.751957124835493e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751957137205178e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519573665694275e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751957370623125e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519573913667471e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519574196128442e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.751964352825224e+09	info	app/main.go:66	main: Успешное подключение к Redis
+1.7519643528256037e+09	info	app/main.go:76	main: JWTService успешно создан
+1.751964352826109e+09	info	routes/routes.go:14	InitRouter: Начало создания маршрутов
+1.7519643528266644e+09	info	routes/routes.go:41	INIT_ROUTER: Создание маршрутов завершено
+1.7519643528397667e+09	info	app/main.go:86	🚀 Сервер запущен на :8080
+1.7519643689980252e+09	info	controllers/auth.go:202	Токены успешно сгенерированы	{"userID": 62}
+1.7519643734252875e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519643834467812e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519643924544005e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}
+1.7519644051123743e+09	info	middleware/auth.go:64	AuthMiddleware: Пользователь успешно аутентифицирован	{"userID": 62}

@@ -38,7 +38,7 @@ type OrderDTO struct {
 	Prorety      ShortProretyDTO `json:"prorety"`
 	Status       ShortStatusDTO  `json:"status"`
 	Creator      ShortUserDTO    `json:"creator"`
-	Executor     *ShortUserDTO   `json:"executor,omitempty"`
+	Executor    *ShortUserDTO   `json:"executor,omitempty"`
 	BranchID     int             `json:"branch_id"`
 	OfficeID     int             `json:"office_id"`
 	EquipmentID  int             `json:"equipment_id"`

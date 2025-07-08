@@ -12,10 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	OTDEL_TABLE  = "otdels"
-	OTDEL_FIELDS = "id, name, status_id, departments_id, created_at, updated_at"
-)
+const otdelTable = "otdels"
+const otdelTableFields = "id, name, status_id, departments_id, created_at, updated_at"
 
 type OtdelRepositoryInterface interface {
 	GetOtdels(ctx context.Context, limit uint64, offset uint64) ([]dto.OtdelDTO, error)
@@ -41,7 +39,7 @@ func (r *OtdelRepository) GetOtdels(ctx context.Context, limit uint64, offset ui
 		SELECT
 			%s
 		FROM %s r
-		`, OTDEL_FIELDS, OTDEL_TABLE)
+		`, otdelTableFields, otdelTable)
 
 	rows, err := r.storage.Query(ctx, query)
 	if err != nil {
@@ -91,7 +89,7 @@ func (r *OtdelRepository) FindOtdel(ctx context.Context, id uint64) (*dto.OtdelD
 			%s
 		FROM %s r
 		WHERE r.id = $1
-	`, OTDEL_FIELDS, OTDEL_TABLE)
+	`, otdelTableFields, otdelTable)
 
 	var otdel dto.OtdelDTO
 	var createdAt time.Time
@@ -126,7 +124,7 @@ func (r *OtdelRepository) CreateOtdel(ctx context.Context, dto dto.CreateOtdelDT
 	query := fmt.Sprintf(`
         INSERT INTO %s (name, status_id, departments_id)
         VALUES ($1, $2, $3)
-    `, OTDEL_TABLE)
+    `, otdelTable)
 
 	_, err := r.storage.Exec(ctx, query,
 		dto.Name,
@@ -145,7 +143,7 @@ func (r *OtdelRepository) UpdateOtdel(ctx context.Context, id uint64, dto dto.Up
         UPDATE %s
         SET name = $1, status_id = $2, departments_id = $3, updated_at = CURRENT_TIMESTAMP
         WHERE id = $4
-    `, OTDEL_TABLE)
+    `, otdelTable)
 
 	result, err := r.storage.Exec(ctx, query,
 		dto.Name,
@@ -166,7 +164,7 @@ func (r *OtdelRepository) UpdateOtdel(ctx context.Context, id uint64, dto dto.Up
 }
 
 func (r *OtdelRepository) DeleteOtdel(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", OTDEL_TABLE)
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", otdelTable)
 
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {
@@ -179,4 +177,3 @@ func (r *OtdelRepository) DeleteOtdel(ctx context.Context, id uint64) error {
 
 	return nil
 }
-

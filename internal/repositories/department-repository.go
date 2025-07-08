@@ -11,10 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	DEPARTMENT_TABLE  = "departments"
-	DEPARTMENT_FIELDS = "id, name, status_id, created_at, updated_at"
-)
+const departmentTable = "departments"
+const departmentFields = "id, name, status_id, created_at, updated_at"
 
 type DepartmentRepositoryInterface interface {
 	GetDepartments(ctx context.Context, limit uint64, offset uint64) ([]dto.DepartmentDTO, error)
@@ -24,7 +22,7 @@ type DepartmentRepositoryInterface interface {
 	DeleteDepartment(ctx context.Context, id uint64) error
 }
 
-type DepartmentRepository struct{
+type DepartmentRepository struct {
 	storage *pgxpool.Pool
 }
 
@@ -40,7 +38,7 @@ func (r *DepartmentRepository) GetDepartments(ctx context.Context, limit uint64,
 		SELECT
 			%s
 		FROM %s r
-		`, DEPARTMENT_FIELDS, DEPARTMENT_TABLE)
+		`, departmentFields, departmentTable)
 
 	rows, err := r.storage.Query(ctx, query)
 	if err != nil {
@@ -69,16 +67,15 @@ func (r *DepartmentRepository) GetDepartments(ctx context.Context, limit uint64,
 		}
 
 		createdAtLocal := createdAt.Local()
-        updatedAtLocal := updatedAt.Local()
+		updatedAtLocal := updatedAt.Local()
 
 		department.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
 		department.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
 
-
 		departments = append(departments, department)
 	}
 
-	if err:= rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return departments, nil
@@ -90,7 +87,7 @@ func (r *DepartmentRepository) FindDepartment(ctx context.Context, id uint64) (*
 			%s
 		FROM %s r
 		WHERE r.id = $1
-	`, DEPARTMENT_FIELDS, DEPARTMENT_TABLE)
+	`, departmentFields, departmentTable)
 
 	var department dto.DepartmentDTO
 	var createdAt time.Time
@@ -111,18 +108,17 @@ func (r *DepartmentRepository) FindDepartment(ctx context.Context, id uint64) (*
 		return nil, err
 	}
 
-		createdAtLocal := createdAt.Local()
-        updatedAtLocal := updatedAt.Local()
+	createdAtLocal := createdAt.Local()
+	updatedAtLocal := updatedAt.Local()
 
-		department.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
-		department.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
-
+	department.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
+	department.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
 
 	return &department, nil
 }
 
 func (r *DepartmentRepository) CreateDepartment(ctx context.Context, dto dto.CreateDepartmentDTO) error {
-	query := fmt.Sprintf("INSERT INTO %s (name, status_id) VALUES($1, $2)", DEPARTMENT_TABLE)
+	query := fmt.Sprintf("INSERT INTO %s (name, status_id) VALUES($1, $2)", departmentTable)
 
 	_, err := r.storage.Exec(ctx, query,
 		dto.Name,
@@ -136,7 +132,7 @@ func (r *DepartmentRepository) CreateDepartment(ctx context.Context, dto dto.Cre
 }
 
 func (r *DepartmentRepository) UpdateDepartment(ctx context.Context, id uint64, dto dto.UpdateDepartmentDTO) error {
-	query := fmt.Sprintf("UPDATE %s SET name = $1, status_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3", DEPARTMENT_TABLE)
+	query := fmt.Sprintf("UPDATE %s SET name = $1, status_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3", departmentTable)
 
 	result, err := r.storage.Exec(ctx, query,
 		dto.Name,
@@ -156,7 +152,7 @@ func (r *DepartmentRepository) UpdateDepartment(ctx context.Context, id uint64, 
 }
 
 func (r *DepartmentRepository) DeleteDepartment(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", DEPARTMENT_TABLE)
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", departmentTable)
 
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {

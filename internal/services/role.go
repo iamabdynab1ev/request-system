@@ -9,7 +9,7 @@ import (
 )
 
 type RoleServiceInterface interface {
-	GetRoles(ctx context.Context, limit uint64, offset uint64) ([]dto.RoleDTO, uint64, error)
+	GetRoles(ctx context.Context, limit, offset uint64) (*dto.PaginatedResponse[dto.RoleDTO], error)
 	FindRole(ctx context.Context, id uint64) (*dto.RoleDTO, error)
 	CreateRole(ctx context.Context, dto dto.CreateRoleDTO) (*dto.RoleDTO, error)
 	UpdateRole(ctx context.Context, id uint64, dto dto.UpdateRoleDTO) (*dto.RoleDTO, error)
@@ -28,15 +28,33 @@ func NewRoleService(repo repositories.RoleRepositoryInterface, logger *zap.Logge
 	}
 }
 
-func (s *RoleService) GetRoles(ctx context.Context, limit uint64, offset uint64) ([]dto.RoleDTO, uint64, error) {
+func (s *RoleService) GetRoles(ctx context.Context, limit uint64, offset uint64) (*dto.PaginatedResponse[dto.RoleDTO], error) {
 	roles, total, err := s.repo.GetRoles(ctx, limit, offset)
 	if err != nil {
 		s.logger.Error("ошибка при получении списка ролей в сервисе", zap.Error(err))
-		return nil, 0, err
+		return nil, err
 	}
-	return roles, total, nil
-}
 
+	if roles == nil {
+		roles = []dto.RoleDTO{}
+	}
+
+	var currentPage uint64 = 1
+	if limit > 0 {
+		currentPage = (offset / limit) + 1
+	}
+
+	response := &dto.PaginatedResponse[dto.RoleDTO]{
+		List: roles,
+		Pagination: dto.PaginationObject{
+			TotalCount: total,
+			Page:       currentPage,
+			Limit:      limit,
+		},
+	}
+
+	return response, nil
+}
 func (s *RoleService) FindRole(ctx context.Context, id uint64) (*dto.RoleDTO, error) {
 	return s.repo.FindRoleByID(ctx, id)
 }

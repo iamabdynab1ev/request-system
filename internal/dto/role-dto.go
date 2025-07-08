@@ -18,7 +18,7 @@ type RoleDTO struct {
 	ID          int             `json:"id"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	StatusID    int             `json:"status_id"` 
+	StatusID    int             `json:"status_id"`
 	Permissions []PermissionDTO `json:"permissions"`
 	CreatedAt   string          `json:"created_at"`
 	UpdatedAt   string          `json:"updated_at"`
