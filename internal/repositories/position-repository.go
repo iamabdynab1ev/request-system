@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"request-system/internal/dto"
-	"request-system/pkg/utils"
+	apperrors "request-system/pkg/errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -68,7 +68,7 @@ func (r *PositionRepository) FindPosition(ctx context.Context, id uint64) (*dto.
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, utils.ErrorNotFound
+			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (r *PositionRepository) UpdatePosition(ctx context.Context, id uint64, dto 
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 
 	return nil
@@ -130,7 +130,7 @@ func (r *PositionRepository) DeletePosition(ctx context.Context, id uint64) erro
 	}
 
 	if result.RowsAffected() == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 
 	return nil

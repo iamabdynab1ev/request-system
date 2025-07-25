@@ -43,7 +43,7 @@ func userEntityToDTO(entity *entities.User, status *dto.ShortStatusDTO) *dto.Use
 
 	dto := &dto.UserDTO{
 		ID:          entity.ID,
-		Fio:         entity.FIO,
+		Fio:         entity.Fio,
 		Email:       entity.Email,
 		Position:    entity.Position,
 		PhoneNumber: entity.PhoneNumber,
@@ -112,7 +112,7 @@ func (service *UserService) CreateUser(ctx context.Context, payload dto.CreateUs
 	}
 
 	userEntity := &entities.User{
-		FIO:          payload.Fio,
+		Fio:          payload.Fio,
 		Email:        payload.Email,
 		PhoneNumber:  payload.PhoneNumber,
 		Password:     hashedPassword,
@@ -150,7 +150,7 @@ func (service *UserService) UpdateUser(ctx context.Context, payload dto.UpdateUs
 	}
 
 	if payload.Fio != "" {
-		existingUser.FIO = payload.Fio
+		existingUser.Fio = payload.Fio
 	}
 	if payload.Email != "" {
 		existingUser.Email = payload.Email

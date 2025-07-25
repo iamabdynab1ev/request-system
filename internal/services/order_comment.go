@@ -1,5 +1,5 @@
 package services
-
+/*
 import (
 	"context"
 	"request-system/internal/dto"
@@ -78,3 +78,4 @@ func (s *OrderCommentService) DeleteOrderComment(ctx context.Context, id uint64)
 	}
 	return nil
 }
+*/

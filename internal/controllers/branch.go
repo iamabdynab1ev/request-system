@@ -1,4 +1,3 @@
-// Package controllers содержит HTTP контроллеры для обработки запросов API.
 package controllers
 
 import (
@@ -31,9 +30,11 @@ func NewBranchController(
 func (c *BranchController) GetBranches(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
-	limit, offset, _ := utils.ParsePaginationParams(ctx.QueryParams())
-	// Используем ваши изначальные параметры без пагинации
-	res, err := c.branchService.GetBranches(reqCtx, limit, offset)
+	
+	filter := utils.ParseFilterFromQuery(ctx.QueryParams())
+
+	branches, total, err := c.branchService.GetBranches(reqCtx, uint64(filter.Limit), uint64(filter.Offset))
+
 	if err != nil {
 		c.logger.Error("Ошибка при получении списка филиалов", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
@@ -41,13 +42,12 @@ func (c *BranchController) GetBranches(ctx echo.Context) error {
 
 	return utils.SuccessResponse(
 		ctx,
-		res,
+		branches,
 		"Список филиалов успешно получен",
 		http.StatusOK,
+		total, // передаём общее количество
 	)
-
 }
-
 func (c *BranchController) FindBranch(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 

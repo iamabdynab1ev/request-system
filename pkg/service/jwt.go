@@ -6,19 +6,20 @@ import (
 	"time"
 
 	jwt "github.com/golang-jwt/jwt/v5"
-	"github.com/labstack/gommon/log"
+	"go.uber.org/zap"
 )
 
 type JwtCustomClaim struct {
-	UserID         int `json:"userId"`
+	UserID         uint64 `json:"userID"`
+	
 	IsRefreshToken bool
 	jwt.RegisteredClaims
 }
 
 type JWTService interface {
-	GenerateTokens(userId int) (string, string, error)
+	GenerateTokens(userID uint64) (string, string, error)
 	ValidateToken(tokenString string) (*JwtCustomClaim, error)
-	ValidateRefreshToken(tokenString string) (int, error)
+	ValidateRefreshToken(tokenString string) (uint64, error)
 	GetAccessTokenTTL() time.Duration
 	GetRefreshTokenTTL() time.Duration
 }
@@ -27,25 +28,25 @@ type jwtService struct {
 	SecretKey       string
 	AccessTokenExp  time.Duration
 	RefreshTokenExp time.Duration
+	logger          *zap.Logger
 }
 
-func NewJWTService(secretKey string, accessTokenExp, refreshTokenExp time.Duration) JWTService {
+func NewJWTService(secretKey string, accessTokenExp, refreshTokenExp time.Duration, logger *zap.Logger) JWTService {
 	return &jwtService{
 		SecretKey:       secretKey,
 		AccessTokenExp:  accessTokenExp,
 		RefreshTokenExp: refreshTokenExp,
+		logger:          logger,
 	}
 }
 
-func (service *jwtService) GenerateTokens(userId int) (string, string, error) {
-
-	accessTokenExp := time.Now().UTC().Add(service.AccessTokenExp)
-	refreshTokenExp := time.Now().UTC().Add(service.RefreshTokenExp)
-
+func (s *jwtService) GenerateTokens(userID uint64) (string, string, error) {
+	accessTokenExp := time.Now().UTC().Add(s.AccessTokenExp)
+	refreshTokenExp := time.Now().UTC().Add(s.RefreshTokenExp)
 	issuedAt := time.Now().UTC()
 
 	accessTokenClaims := &JwtCustomClaim{
-		UserID:         userId,
+		UserID:         userID,
 		IsRefreshToken: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(accessTokenExp),
@@ -54,7 +55,7 @@ func (service *jwtService) GenerateTokens(userId int) (string, string, error) {
 	}
 
 	refreshTokenClaims := &JwtCustomClaim{
-		UserID:         userId,
+		UserID:         userID,
 		IsRefreshToken: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(refreshTokenExp),
@@ -63,13 +64,13 @@ func (service *jwtService) GenerateTokens(userId int) (string, string, error) {
 	}
 
 	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS512, accessTokenClaims)
-	accessTokenString, err := accessToken.SignedString([]byte(service.SecretKey))
+	accessTokenString, err := accessToken.SignedString([]byte(s.SecretKey))
 	if err != nil {
 		return "", "", err
 	}
 
 	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS512, refreshTokenClaims)
-	refreshTokenString, err := refreshToken.SignedString([]byte(service.SecretKey))
+	refreshTokenString, err := refreshToken.SignedString([]byte(s.SecretKey))
 	if err != nil {
 		return "", "", err
 	}
@@ -77,49 +78,50 @@ func (service *jwtService) GenerateTokens(userId int) (string, string, error) {
 	return accessTokenString, refreshTokenString, nil
 }
 
-// ИЗМЕНЕНО: Упрощаем валидацию и доверяем библиотеке
-func (service *jwtService) ValidateToken(tokenString string) (*JwtCustomClaim, error) {
+// ValidateToken валидирует токен и возвращает claims.
+func (s *jwtService) ValidateToken(tokenString string) (*JwtCustomClaim, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &JwtCustomClaim{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			// Используем вашу ошибку
 			return nil, apperrors.ErrInvalidSigningMethod
 		}
-		return []byte(service.SecretKey), nil
+		return []byte(s.SecretKey), nil
 	})
 
-	// Библиотека jwt/v5 сама возвращает ошибку, если токен просрочен.
-	// Нам нужно ее просто перехватить.
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
-			log.Warn("Проверка токена: срок действия истек")
+			s.logger.Warn("Проверка токена: срок действия истек")
 			return nil, apperrors.ErrTokenExpired
 		}
-		log.Errorf("Ошибка парсинга токена: %v", err)
-		// Используем общую ошибку для всех остальных проблем
+		s.logger.Error("Ошибка парсинга токена", zap.Error(err))
 		return nil, apperrors.ErrInvalidToken
 	}
 
-	// Если ошибок нет, проверяем, что claims удалось извлечь и токен валиден
 	if claims, ok := token.Claims.(*JwtCustomClaim); ok && token.Valid {
-		log.Debugf("Успешно извлечены claims: %+v", claims)
+		if claims.UserID <= 0 {
+			s.logger.Warn("Недопустимый UserID в токене")
+			return nil, apperrors.ErrInvalidToken
+		}
+		s.logger.Debug("Успешно извлечены claims", zap.Any("claims", claims))
 		return claims, nil
 	}
 
-	log.Warn("Токен невалиден по неизвестной причине")
+	s.logger.Warn("Токен невалиден по неизвестной причине")
 	return nil, apperrors.ErrInvalidToken
 }
-func (s *jwtService) ValidateRefreshToken(tokenString string) (int, error) {
+
+// ValidateRefreshToken валидирует refresh токен и возвращает userID.
+func (s *jwtService) ValidateRefreshToken(tokenString string) (uint64, error) {
 	claims, err := s.ValidateToken(tokenString)
 	if err != nil {
 		return 0, err
 	}
 	if !claims.IsRefreshToken {
-		log.Warnf("Попытка использовать access токен для обновления (userID: %d)", claims.UserID)
+		s.logger.Warn("Попытка использовать access токен для обновления", zap.Uint64("userID", claims.UserID))
 		return 0, apperrors.ErrInvalidToken
 	}
-
 	return claims.UserID, nil
 }
+
 func (s *jwtService) GetAccessTokenTTL() time.Duration {
 	return s.AccessTokenExp
 }

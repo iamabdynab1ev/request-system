@@ -7,6 +7,7 @@ import (
 
 	"request-system/internal/dto"
 	"request-system/internal/services"
+	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 
 	"github.com/labstack/echo/v4"
@@ -40,7 +41,7 @@ func (c *UserController) GetUsers(ctx echo.Context) error {
 			limit = parsedLimit
 		} else {
 			c.logger.Error("Ошибка парсинга limit", zap.Error(err))
-			return utils.ErrorResponse(ctx, fmt.Errorf("invalid limit parameter: %w", utils.ErrorBadRequest))
+			return utils.ErrorResponse(ctx, fmt.Errorf("invalid limit parameter: %w", apperrors.ErrBadRequest))
 		}
 	}
 
@@ -52,7 +53,7 @@ func (c *UserController) GetUsers(ctx echo.Context) error {
 			offset = parsedOffset
 		} else {
 			c.logger.Error("Ошибка парсинга offset", zap.Error(err))
-			return utils.ErrorResponse(ctx, fmt.Errorf("invalid offset parameter: %w", utils.ErrorBadRequest))
+			return utils.ErrorResponse(ctx, fmt.Errorf("invalid offset parameter: %w", apperrors.ErrBadRequest))
 		}
 	}
 
@@ -71,7 +72,7 @@ func (c *UserController) FindUser(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID пользователя из URL", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid user ID format: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("invalid user ID format: %w", apperrors.ErrBadRequest))
 	}
 
 	res, err := c.userService.FindUser(reqCtx, id)
@@ -89,12 +90,12 @@ func (c *UserController) CreateUser(ctx echo.Context) error {
 	var dto dto.CreateUserDTO
 	if err := ctx.Bind(&dto); err != nil {
 		c.logger.Error("Ошибка при связывании запроса для создания пользователя", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", apperrors.ErrBadRequest))
 	}
 
 	if err := ctx.Validate(&dto); err != nil {
 		c.logger.Error("Ошибка при валидации данных для создания пользователя", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("validation failed: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("validation failed: %w", apperrors.ErrBadRequest))
 	}
 
 	res, err := c.userService.CreateUser(reqCtx, dto)
@@ -112,21 +113,21 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 	idFromURL, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID пользователя из URL для обновления", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid user ID format in URL: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("invalid user ID format in URL: %w", apperrors.ErrBadRequest))
 	}
 
 	var dto dto.UpdateUserDTO
-	if err := ctx.Bind(&dto); err != nil {
+	if err = ctx.Bind(&dto); err != nil {
 		c.logger.Error("Ошибка при связывании запроса для обновления пользователя", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", apperrors.ErrBadRequest))
 	}
 
-	if err := ctx.Validate(&dto); err != nil {
+	if err = ctx.Validate(&dto); err != nil {
 		c.logger.Error("Ошибка при валидации данных для обновления пользователя", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("validation failed: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("validation failed: %w", apperrors.ErrBadRequest))
 	}
 
-	dto.ID = int(idFromURL)
+	dto.ID = uint64(idFromURL)
 
 	res, err := c.userService.UpdateUser(reqCtx, dto)
 	if err != nil {
@@ -143,7 +144,7 @@ func (c *UserController) DeleteUser(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID пользователя из URL для удаления", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid user ID format: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("invalid user ID format: %w", apperrors.ErrBadRequest))
 	}
 
 	err = c.userService.DeleteUser(reqCtx, id)

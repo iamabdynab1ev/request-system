@@ -25,8 +25,9 @@ func NewRoleController(roleService services.RoleServiceInterface, logger *zap.Lo
 
 func (c *RoleController) GetRoles(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-	limit, offset, _ := utils.ParsePaginationParams(ctx.QueryParams())
-	paginatedResponse, err := c.roleService.GetRoles(reqCtx, limit, offset)
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
+
+	paginatedResponse, err := c.roleService.GetRoles(reqCtx, uint64(filter.Limit), uint64(filter.Offset))
 	if err != nil {
 		c.logger.Error("ошибка в контроллере при получении списка ролей", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
@@ -39,6 +40,7 @@ func (c *RoleController) GetRoles(ctx echo.Context) error {
 		http.StatusOK,
 	)
 }
+
 func (c *RoleController) FindRole(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {

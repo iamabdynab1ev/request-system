@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"regexp"
@@ -34,7 +33,10 @@ func isTajikPhoneNumber(fl validator.FieldLevel) bool {
 	re := regexp.MustCompile(`^\+992\d{9}$`)
 	return re.MatchString(fl.Field().String())
 }
-
+func isDurationValid(fl validator.FieldLevel) bool {
+	re := regexp.MustCompile(`^\d+h(\d+m)?$`)
+	return re.MatchString(fl.Field().String())
+}
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Warning: .env file not found or could not be loaded.")
@@ -44,6 +46,7 @@ func main() {
 
 	v := validator.New()
 	v.RegisterValidation("e164_TJ", isTajikPhoneNumber)
+	v.RegisterValidation("duration_format", isDurationValid)
 	e.Validator = &CustomValidator{validator: v}
 
 	logger := applogger.NewLogger()
@@ -70,18 +73,15 @@ func main() {
 		logger.Warn("main: JWT_SECRET_KEY не найден в .env. Используется небезопасный запасной ключ.")
 		jwtSecretKey = "your_default_super_secret_key_for_testing"
 	}
+	if os.Getenv("ENV") == "production" && jwtSecretKey == "your_default_super_secret_key_for_testing" {
+		logger.Fatal("В продакшене необходимо задать безопасный JWT_SECRET_KEY")
+	}
 	accessTokenTTL := time.Hour * 1
 	refreshTokenTTL := time.Hour * 24 * 7
-	jwtSvc := service.NewJWTService(jwtSecretKey, accessTokenTTL, refreshTokenTTL)
+	jwtSvc := service.NewJWTService(jwtSecretKey, accessTokenTTL, refreshTokenTTL, logger)
 	logger.Info("main: JWTService успешно создан")
 
 	routes.InitRouter(e, dbConn, redisClient, jwtSvc, logger)
-
-	fmt.Println("\n\n==================== Зарегистрированные маршруты ====================")
-	for _, r := range e.Routes() {
-		fmt.Printf("МЕТОД: %-7s | ПУТЬ: %-50s | ОБРАБОТЧИК: %s\n", r.Method, r.Path, r.Name)
-	}
-	fmt.Print("===================================================================\n\n")
 
 	logger.Info("🚀 Сервер запущен на :8080")
 	if err := e.Start(":8080"); err != nil {

@@ -1,5 +1,5 @@
 package services
-
+/*
 import (
 	"context"
 	"request-system/internal/dto"
@@ -70,3 +70,4 @@ func (s *OrderDelegationService) DeleteOrderDelegation(ctx context.Context, id u
 	s.logger.Info("Делегирование успешно удалено", zap.Uint64("id", id))
 	return nil
 }
+*/

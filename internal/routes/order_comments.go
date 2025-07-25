@@ -1,5 +1,5 @@
 package routes
-
+/*
 import (
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
@@ -22,3 +22,4 @@ func runOrderCommentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, jwtSvc
 	secureGroup.PUT("/order-comment/:id", ctrl.UpdateOrderComment)
 	secureGroup.DELETE("/order-comment/:id", ctrl.DeleteOrderComment)
 }
+*/

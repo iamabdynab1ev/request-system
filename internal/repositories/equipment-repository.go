@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"request-system/internal/dto"
-	"request-system/pkg/utils"
+	apperrors "request-system/pkg/errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -117,7 +117,7 @@ func (r *EquipmentRepository) FindEquipment(ctx context.Context, id uint64) (*dt
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, utils.ErrorNotFound
+			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func (r *EquipmentRepository) UpdateEquipment(ctx context.Context, id uint64, dt
 	}
 
 	if result.RowsAffected() == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 	return nil
 }
@@ -193,7 +193,7 @@ func (r *EquipmentRepository) DeleteEquipment(ctx context.Context, id uint64) er
 	}
 
 	if result.RowsAffected() == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 
 	return nil

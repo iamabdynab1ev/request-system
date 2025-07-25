@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"request-system/internal/dto"
-	"request-system/pkg/utils"
+	apperrors "request-system/pkg/errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,7 +17,7 @@ const statusTableForBranchFinalRepo = "statuses"
 const statusFieldsShortForBranchFinalRepo = "s.id, s.name"
 
 type BranchRepositoryInterface interface {
-	GetBranches(ctx context.Context, limit uint64, offset uint64) (interface{}, error)
+	GetBranches(ctx context.Context, limit uint64, offset uint64) ([]dto.BranchDTO, uint64, error)
 	FindBranch(ctx context.Context, id uint64) (*dto.BranchDTO, error)
 	CreateBranch(ctx context.Context, dto dto.CreateBranchDTO) (uint64, error)
 	UpdateBranch(ctx context.Context, id uint64, dto dto.UpdateBranchDTO) error
@@ -34,18 +34,42 @@ func NewBranchRepository(storage *pgxpool.Pool) BranchRepositoryInterface {
 	}
 }
 
-func (r *BranchRepository) GetBranches(ctx context.Context, limit uint64, offset uint64) (interface{}, error) {
+func (r *BranchRepository) GetBranches(ctx context.Context, limit, offset uint64) ([]dto.BranchDTO, uint64, error) {
 
-	data, _, err := FetchDataAndCount(ctx, r.storage, Params{
-		Table:   "branches",
-		Columns: "branches.*, status.id AS status_id, status.name AS status_name",
-		Relations: []Join{
-			{Table: "statuses", Alias: "status", OnLeft: "branches.status_id", OnRight: "status.id", JoinType: "LEFT"}},
-		WithPg: true,
-		Limit:  limit,
-		Offset: offset,
-	})
-	return data, err
+	var total uint64
+	err := r.storage.QueryRow(ctx, `SELECT COUNT(*) FROM branches`).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count branches: %w", err)
+	}
+
+	rows, err := r.storage.Query(ctx, `
+        SELECT b.id, b.name, b.address, s.id AS status_id, s.name AS status_name
+        FROM branches b
+        LEFT JOIN statuses s ON s.id = b.status_id
+        ORDER BY b.id DESC
+        LIMIT $1 OFFSET $2
+    `, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get branches: %w", err)
+	}
+	defer rows.Close()
+
+	var branches []dto.BranchDTO
+	for rows.Next() {
+		var branch dto.BranchDTO
+		if err := rows.Scan(
+			&branch.ID,
+			&branch.Name,
+			&branch.Address,
+			&branch.Status.ID,
+			&branch.Status.Name,
+		); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan branch: %w", err)
+		}
+		branches = append(branches, branch)
+	}
+
+	return branches, total, nil
 }
 
 func (r *BranchRepository) FindBranch(ctx context.Context, id uint64) (*dto.BranchDTO, error) {
@@ -82,7 +106,7 @@ func (r *BranchRepository) FindBranch(ctx context.Context, id uint64) (*dto.Bran
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, utils.ErrorNotFound
+			return nil, apperrors.ErrNotFound
 		}
 		return nil, fmt.Errorf("ошибка поиска ветки по идентификатору %d: %w", id, err)
 	}
@@ -153,7 +177,7 @@ func (r *BranchRepository) UpdateBranch(ctx context.Context, id uint64, dto dto.
 	}
 
 	if result.RowsAffected() == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 	return nil
 }
@@ -164,7 +188,7 @@ func (r *BranchRepository) DeleteBranch(ctx context.Context, id uint64) error {
 		return fmt.Errorf("error deleting branch by id %d: %w", id, err)
 	}
 	if result.RowsAffected() == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 	return nil
 }

@@ -28,7 +28,6 @@ func NewPermissionService(permissionRepository repositories.PermissionRepository
 		logger:               logger,
 	}
 }
-
 func (s *PermissionService) GetPermissions(ctx context.Context, limit uint64, offset uint64) (*dto.PaginatedResponse[dto.PermissionDTO], error) {
 	permissions, total, err := s.permissionRepository.GetPermissions(ctx, limit, offset)
 	if err != nil {
@@ -52,7 +51,16 @@ func (s *PermissionService) GetPermissions(ctx context.Context, limit uint64, of
 	}
 	return response, nil
 }
+
 func (s *PermissionService) FindPermissionByID(ctx context.Context, id uint64) (*dto.PermissionDTO, error) {
+
+	permission, err := s.permissionRepository.FindPermissionByID(ctx, id)
+	if err != nil {
+		s.logger.Error("Ошибка при поиске привилегии", zap.Error(err), zap.Uint64("permID", id))
+		return nil, fmt.Errorf("ошибка поиска привилегии: %w", err)
+	}
+	s.logger.Info("Привилегия успешно найдена", zap.Any("permission", permission))
+	return permission, nil
 	return s.permissionRepository.FindPermissionByID(ctx, id)
 }
 

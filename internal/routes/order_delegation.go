@@ -1,5 +1,5 @@
 package routes
-
+/*
 import (
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
@@ -21,3 +21,4 @@ func RunOrderDelegrationRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, jw
 	secureGroup.POST("/order-delegation", ctrl.CreateOrderDelegation)
 	secureGroup.DELETE("/order-delegation/:id", ctrl.DeleteOrderDelegation)
 }
+*/

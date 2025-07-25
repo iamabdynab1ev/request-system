@@ -1,11 +1,35 @@
-FROM golang:latest
+# Dockerfile
 
+# --- СТАДИЯ СБОРКИ ---
+# Используем образ Go версии 1.24 для компиляции
+FROM golang:1.24-alpine as builder
+
+# Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
+# Копируем файлы go.mod и go.sum для кэшируемой загрузки зависимостей
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Копируем остальной исходный код
 COPY . .
 
-RUN go install github.com/pressly/goose/v3/cmd/goose@latest
+# Собираем (компилируем) наше приложение
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o server ./app/main.go
 
-ENV PATH="$PATH:/go/bin" 
 
-CMD ["goose", "-dir", "database/migrations", "postgres", "postgres://postgres:postgres@postgresql:5432/request-system?sslmode=disable", "up"]
+# --- СТАДИЯ ЗАПУСКА ---
+# Используем минимальный базовый образ
+FROM alpine:latest
+
+# Устанавливаем рабочую директорию
+WORKDIR /app
+
+# Копируем ТОЛЬКО скомпилированный бинарный файл из стадии сборки
+COPY --from=builder /app/server .
+
+# Сообщаем Docker, что контейнер будет слушать порт 8080
+EXPOSE 8080
+
+# Команда для запуска нашего сервера при старте контейнера
+CMD ["./server"]

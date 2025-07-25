@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"request-system/internal/dto"
-	"request-system/pkg/utils"
+	"request-system/internal/entities"
+	apperrors "request-system/pkg/errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,7 +13,7 @@ import (
 )
 
 const statusTable = "statuses"
-const statusFields = "id, icon, name, type, created_at"
+const statusFields = "id, icon_small, icon_big, name, type, code , created_at"
 
 type StatusRepositoryInterface interface {
 	GetStatuses(ctx context.Context, limit uint64, offset uint64) ([]dto.StatusDTO, error)
@@ -20,6 +21,7 @@ type StatusRepositoryInterface interface {
 	CreateStatus(ctx context.Context, dto dto.CreateStatusDTO) error
 	UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO) error
 	DeleteStatus(ctx context.Context, id uint64) error
+	FindByCode(ctx context.Context, code string) (*entities.Status, error)
 }
 
 type StatusRepository struct {
@@ -48,7 +50,7 @@ func (r *StatusRepository) GetStatuses(ctx context.Context, limit uint64, offset
 		var status dto.StatusDTO
 		var createdAt time.Time
 
-		err := rows.Scan(&status.ID, &status.Icon, &status.Name, &status.Type, &createdAt)
+		err := rows.Scan(&status.ID, &status.IconSmall, &status.IconBig, &status.Name, &status.Type, &status.Code, &createdAt)
 
 		if err != nil {
 			return nil, err
@@ -75,12 +77,12 @@ func (r *StatusRepository) FindStatus(ctx context.Context, id uint64) (*dto.Stat
 	var createdAt time.Time
 
 	err := r.storage.QueryRow(ctx, query, id).Scan(
-		&status.ID, &status.Icon, &status.Name, &status.Type, &createdAt,
+		&status.ID, &status.IconSmall, &status.IconBig, &status.Name, &status.Type, &status.Code, &createdAt,
 	)
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, utils.ErrorNotFound
+			return nil, apperrors.ErrNotFound
 		}
 
 		return nil, err
@@ -94,9 +96,9 @@ func (r *StatusRepository) FindStatus(ctx context.Context, id uint64) (*dto.Stat
 }
 
 func (r *StatusRepository) CreateStatus(ctx context.Context, payload dto.CreateStatusDTO) error {
-	query := fmt.Sprintf("INSERT INTO %s (icon, name, type) VALUES($1, $2, $3)", statusTable)
+	query := fmt.Sprintf("INSERT INTO %s (icon_small, icon_big,  name, type, code) VALUES($1, $2, $3, $4, $5)", statusTable)
 
-	_, err := r.storage.Exec(ctx, query, payload.Icon, payload.Name, payload.Type)
+	_, err := r.storage.Exec(ctx, query, payload.IconSmall, payload.IconBig, payload.Name, payload.Type, payload.Code)
 	if err != nil {
 		return err
 	}
@@ -105,15 +107,15 @@ func (r *StatusRepository) CreateStatus(ctx context.Context, payload dto.CreateS
 }
 
 func (r *StatusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO) error {
-	query := fmt.Sprintf("UPDATE %s SET icon = $1, name = $2, type = $3 WHERE id = $4", statusTable)
+	query := fmt.Sprintf("UPDATE %s SET icon_small = $1, icon_big = $2, name = $3, type = $4, code = $5 WHERE id = $6", statusTable)
 
-	result, err := r.storage.Exec(ctx, query, dto.Icon, dto.Name, dto.Type, id)
+	result, err := r.storage.Exec(ctx, query, dto.IconSmall, dto.IconBig, dto.Name, dto.Type, dto.Code, id)
 	if err != nil {
 		return err
 	}
 
 	if result.RowsAffected() == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 
 	return nil
@@ -128,8 +130,20 @@ func (r *StatusRepository) DeleteStatus(ctx context.Context, id uint64) error {
 	}
 
 	if result.RowsAffected() == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 
 	return nil
+}
+func (r *StatusRepository) FindByCode(ctx context.Context, code string) (*entities.Status, error) {
+	query := `SELECT id, code, name FROM statuses WHERE code = $1 LIMIT 1`
+	var status entities.Status
+	err := r.storage.QueryRow(ctx, query, code).Scan(&status.ID, &status.Code, &status.Name)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	return &status, nil
 }

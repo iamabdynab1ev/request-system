@@ -51,9 +51,9 @@ type AuthResponseDTO struct {
 }
 
 type UserPublicDTO struct {
-	ID     int    `json:"id"`
+	ID     uint64 `json:"id"`
 	Email  string `json:"email"`
 	Phone  string `json:"phone,omitempty"`
-	Fio    string `json:"fio"`
-	RoleID int    `json:"role_id"`
+	FIO    string `json:"fio"`
+	RoleID uint64 `json:"role_id"`	
 }

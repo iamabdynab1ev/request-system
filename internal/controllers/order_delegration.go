@@ -1,10 +1,11 @@
 package controllers
-
+/*
 import (
 	"fmt"
 	"net/http"
 	"request-system/internal/dto"
 	"request-system/internal/services"
+	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 	"strconv"
 
@@ -30,9 +31,10 @@ func NewOrderDelegationController(
 func (c *OrderDelegationController) GetOrderDelegations(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
-	limit, offset, _ := utils.ParsePaginationParams(ctx.QueryParams())
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 
-	res, total, err := c.orderDelegationService.GetOrderDelegations(reqCtx, limit, offset)
+	res, total, err := c.orderDelegationService.GetOrderDelegations(reqCtx, uint64(filter.Limit), uint64(filter.Offset))
+
 	if err != nil {
 		c.logger.Error("ошибка при получении списка делегирований", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
@@ -63,7 +65,7 @@ func (c *OrderDelegationController) CreateOrderDelegation(ctx echo.Context) erro
 	reqCtx := ctx.Request().Context()
 	var dto dto.CreateOrderDelegationDTO
 	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, fmt.Errorf("ошибка данных в запросе: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("ошибка данных в запросе: %w", apperrors.ErrBadRequest))
 	}
 
 	if err := ctx.Validate(&dto); err != nil {
@@ -95,3 +97,4 @@ func (c *OrderDelegationController) DeleteOrderDelegation(ctx echo.Context) erro
 
 	return utils.SuccessResponse(ctx, struct{}{}, "Делегирование успешно удалено", http.StatusOK)
 }
+*/

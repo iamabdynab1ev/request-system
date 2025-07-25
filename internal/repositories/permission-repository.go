@@ -1,4 +1,3 @@
-
 // Package repositories предоставляет доступ к базе данных и содержит репозитории для работы с сущностью Permission.
 // В этом пакете реализованы CRUD-операции, пагинация, поиск по ID и безопасное удаление с использованием транзакций.
 package repositories
@@ -75,7 +74,7 @@ func (r *PermissionRepository) GetPermissions(ctx context.Context, limit uint64,
 }
 
 func (r *PermissionRepository) FindPermissionByID(ctx context.Context, id uint64) (*dto.PermissionDTO, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s WHERE id = $1`, PermissionFields, PermissionTable)
+	query := fmt.Sprintf(`SELECT %s FROM %s u WHERE u.id = $1`, PermissionFields, PermissionTable)
 
 	var permission dto.PermissionDTO
 	var createdAt, updatedAt time.Time
@@ -86,6 +85,7 @@ func (r *PermissionRepository) FindPermissionByID(ctx context.Context, id uint64
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
+		
 	}
 
 	permission.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
@@ -133,6 +133,7 @@ func (r *PermissionRepository) DeletePermission(ctx context.Context, id uint64) 
 		return fmt.Errorf("не удалось начать транзакцию: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
 	_, err = tx.Exec(ctx, "DELETE FROM role_permissions WHERE permission_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("ошибка удаления связанных записей из role_permissions: %w", err)

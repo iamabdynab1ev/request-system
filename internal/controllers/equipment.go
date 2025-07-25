@@ -28,24 +28,17 @@ func NewEquipmentController(
 }
 
 func (c *EquipmentController) GetEquipments(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
+	reqCtx := utils.Ctx(ctx, 5) 
 
-	limit, offset, _ := utils.ParsePaginationParams(ctx.QueryParams())
-	res, total, err := c.equipmentService.GetEquipments(reqCtx, limit, offset)
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
+
+	res, total, err := c.equipmentService.GetEquipments(reqCtx, uint64(filter.Limit), uint64(filter.Offset))
+
 	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
+		return utils.ErrorResponse(ctx, err)
 	}
 
-	return utils.SuccessResponse(
-		ctx,
-		res,
-		"Successfully",
-		http.StatusOK,
-		total,
-	)
+	return utils.SuccessResponse(ctx, res, "Комментарии успешно получены", http.StatusOK, total)
 }
 
 func (c *EquipmentController) FindEquipment(ctx echo.Context) error {
@@ -73,9 +66,7 @@ func (c *EquipmentController) FindEquipment(ctx echo.Context) error {
 }
 
 func (c *EquipmentController) CreateEquipment(ctx echo.Context) error {
-	reqCtx, CancelFunc := utils.ContextWithTimeout(ctx, 5)
-
-	defer CancelFunc()
+	reqCtx := utils.Ctx(ctx, 5)
 
 	var dto dto.CreateEquipmentDTO
 	if err := ctx.Bind(&dto); err != nil {

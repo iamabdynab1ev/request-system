@@ -2,12 +2,16 @@ package entities
 
 import "request-system/pkg/types"
 
-
 type Status struct {
-	ID        int        `json:"id"`
-	Icon      string     `json:"icon"`
-	Name      string     `json:"name"`
-	Type      int        `json:"type"`
+	ID        int    `json:"id"`
+	IconSmall *string `json:"icon_small"`
+	Name      string `json:"name"`
+	Type      int    `json:"type"`
+	Code      *string `json:"code"`
+	IconBig   *string `json:"icon_big"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	DeletedAt string `json:"deleted_at"`
 
 	types.BaseEntity
 }

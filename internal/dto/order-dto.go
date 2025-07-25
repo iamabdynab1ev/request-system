@@ -1,53 +1,47 @@
 package dto
 
 type CreateOrderDTO struct {
-	Name         string `json:"name" validate:"required"`
-	DepartmentID int    `json:"department_id" validate:"required"`
-	OtdelID      int    `json:"otdel_id" validate:"required"`
-	ProretyID    int    `json:"prorety_id" validate:"required"`
-	StatusID     int    `json:"status_id" validate:"required"`
-	BranchID     int    `json:"branch_id" validate:"required"`
-	OfficeID     int    `json:"office_id" validate:"required"`
-	EquipmentID  int    `json:"equipment_id" validate:"required"`
-	ExecutorID   int    `json:"executor_id" validate:"required"`
-	Duration     string `json:"duration" validate:"required"`
-	Address      string `json:"address" validate:"required"`
-	Massage      string `json:"message" validate:"required"`
+	Name         string  `json:"name" validate:"required,min=5,max=255"`
+	Address      string  `json:"address" validate:"required,min=5"`
+	DepartmentID uint64  `json:"department_id" validate:"required,gt=0"`
+	OtdelID      *uint64 `json:"otdel_id,omitempty"`
+	BranchID     *uint64 `json:"branch_id,omitempty"`
+	OfficeID     *uint64 `json:"office_id,omitempty"`
+	EquipmentID  *uint64 `json:"equipment_id,omitempty"`
+	Comment      *string `json:"comment,omitempty" validate:"omitempty,min=3"`
 }
 
+type OrderResponseDTO struct {
+	ID           uint64                  `json:"id"`
+	Name         string                  `json:"name"`
+	Address      string                  `json:"address"`
+	Creator      interface{}             `json:"creator"`
+	Executor     interface{}             `json:"executor"`
+	DepartmentID uint64                  `json:"department_id"`
+	StatusID     uint64                  `json:"status_id"`
+	PriorityID   uint64                  `json:"priority_id"`
+	Attachments  []AttachmentResponseDTO `json:"attachments"`
+	Comment      *string                 `json:"comment,omitempty"`
+	CreatedAt    string                  `json:"created_at"`
+	UpdatedAt    string                  `json:"updated_at"`
+}
+type DelegateOrderDTO struct {
+	ExecutorID   *uint64 `json:"executor_id" validate:"required,gt=0"`
+	StatusID     *uint64 `json:"status_id" validate:"required,gt=0"`
+	PriorityID   *uint64 `json:"priority_id" validate:"required,gt=0"`
+	Duration     *string `json:"duration,omitempty" validate:"omitempty,duration_format" `
+	Comment      *string `json:"comment" validate:"required,min=3"`
+	Name         *string `json:"name,omitempty" validate:"omitempty,min=5,max=255"`
+	Address      *string `json:"address,omitempty" validate:"omitempty,min=5"`
+	DepartmentID *uint64 `json:"department_id,omitempty" validate:"omitempty,gt=0"`
+	OtdelID      *uint64 `json:"otdsel_id,omitempty"`
+	BranchID     *uint64 `json:"branch_id,omitempty"`
+	OfficeID     *uint64 `json:"office_id,omitempty"`
+	EquipmentID  *uint64 `json:"equipment_id,omitempty"`
+
+	HasFile bool `json:"has_file,omitempty"`
+}
 type UpdateOrderDTO struct {
-	ID           int    `json:"id" validate:"required"`
-	Name         string `json:"name" validate:"omitempty"`
-	DepartmentID int    `json:"department_id" validate:"omitempty"`
-	OtdelID      int    `json:"otdel_id" validate:"omitempty"`
-	ProretyID    int    `json:"prorety_id" validate:"omitempty"`
-	StatusID     int    `json:"status_id" validate:"omitempty"`
-	BranchID     int    `json:"branch_id" validate:"omitempty"`
-	OfficeID     int    `json:"office_id" validate:"omitempty"`
-	EquipmentID  int    `json:"equipment_id" validate:"omitempty"`
-	ExecutorID   int    `json:"executor_id" validate:"omitempty"`
-	Duration     string `json:"duration" validate:"omitempty"`
-	Address      string `json:"address" validate:"omitempty"`
-}
-
-type OrderDTO struct {
-	ID           int             `json:"id"`
-	Name         string          `json:"name"`
-	DepartmentID int             `json:"department_id"`
-	OtdelID      int             `json:"otdel_id"`
-	Prorety      ShortProretyDTO `json:"prorety"`
-	Status       ShortStatusDTO  `json:"status"`
-	Creator      ShortUserDTO    `json:"creator"`
-	Executor    *ShortUserDTO   `json:"executor,omitempty"`
-	BranchID     int             `json:"branch_id"`
-	OfficeID     int             `json:"office_id"`
-	EquipmentID  int             `json:"equipment_id"`
-	Duration     string          `json:"duration"`
-	Address      string          `json:"address"`
-	CreatedAt    string          `json:"created_at"`
-}
-
-type ShortOrderDTO struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 }

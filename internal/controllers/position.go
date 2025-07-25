@@ -30,19 +30,21 @@ func NewPositionController(
 func (c *PositionController) GetPositions(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
-	limit, offset, _ := utils.ParsePaginationParams(ctx.QueryParams())
-	res, total, err := c.positionService.GetPositions(reqCtx, limit, offset)
+	// Используем универсальный парсер фильтров
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
+
+	// Получаем позиции с пагинацией
+	res, total, err := c.positionService.GetPositions(reqCtx, uint64(filter.Limit), uint64(filter.Offset))
 	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
+		c.logger.Error("Ошибка при получении списка должностей", zap.Error(err))
+		return utils.ErrorResponse(ctx, err)
 	}
 
+	// Возвращаем с учётом total
 	return utils.SuccessResponse(
 		ctx,
 		res,
-		"Successfully",
+		"Список должностей успешно получен",
 		http.StatusOK,
 		total,
 	)
@@ -73,9 +75,7 @@ func (c *PositionController) FindPosition(ctx echo.Context) error {
 }
 
 func (c *PositionController) CreatePosition(ctx echo.Context) error {
-	reqCtx, CancelFunc := utils.ContextWithTimeout(ctx, 5)
-
-	defer CancelFunc()
+	reqCtx := utils.Ctx(ctx, 5)
 
 	var dto dto.CreatePositionDTO
 	if err := ctx.Bind(&dto); err != nil {

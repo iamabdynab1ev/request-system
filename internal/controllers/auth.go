@@ -1,4 +1,4 @@
-package controllers 
+package controllers
 
 import (
 	"bytes"
@@ -138,7 +138,7 @@ func (c *AuthController) CheckRecoveryOptions(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, options, "", http.StatusOK)
 }
 
-// Метод для Шага 2: Отправка инструкций
+
 func (c *AuthController) SendRecoveryInstructions(ctx echo.Context) error {
 	var payload dto.ForgotPasswordSendDTO
 	if err := ctx.Bind(&payload); err != nil {
@@ -196,16 +196,16 @@ func (c *AuthController) ResetPasswordWithPhone(ctx echo.Context) error {
 func (c *AuthController) generateTokensAndRespond(ctx echo.Context, user *entities.User) error {
 	accessToken, refreshToken, err := c.jwtService.GenerateTokens(user.ID)
 	if err != nil {
-		c.logger.Error("Не удалось сгенерировать токены", zap.Error(err), zap.Int("userID", user.ID))
+		c.logger.Error("Не удалось сгенерировать токены", zap.Error(err), zap.Uint64("userID", user.ID))
 		return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
 	}
-	c.logger.Info("Токены успешно сгенерированы", zap.Int("userID", user.ID))
+	c.logger.Info("Токены успешно сгенерированы", zap.Uint64("userID", user.ID))
 
 	userDto := dto.UserPublicDTO{
 		ID:     user.ID,
 		Email:  user.Email,
 		Phone:  user.PhoneNumber,
-		Fio:    user.FIO,
+		FIO:    user.Fio,
 		RoleID: user.RoleID,
 	}
 

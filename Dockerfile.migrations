@@ -1,0 +1,18 @@
+# Dockerfile.migrations
+
+FROM golang:latest
+WORKDIR /app
+
+COPY . .
+
+# Устанавливаем goose
+RUN go install github.com/pressly/goose/v3/cmd/goose@latest
+
+# Копируем наш новый скрипт внутрь контейнера
+COPY entrypoint.sh /app/entrypoint.sh
+
+# Даем скрипту права на выполнение
+RUN chmod +x /app/entrypoint.sh
+
+# Запускаем наш скрипт!
+CMD ["/app/entrypoint.sh"]

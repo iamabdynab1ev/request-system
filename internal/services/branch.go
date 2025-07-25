@@ -25,13 +25,14 @@ func NewBranchService(
 	}
 }
 
-func (s *BranchService) GetBranches(ctx context.Context, limit uint64, offset uint64) (interface{}, error) {
-	res	, err := s.branchRepository.GetBranches(ctx, limit, offset)
+func (s *BranchService) GetBranches(ctx context.Context, limit, offset uint64) (interface{}, uint64, error) {
+
+	branches, total, err := s.branchRepository.GetBranches(ctx, limit, offset)
 	if err != nil {
-		s.logger.Error("ошибка при получении списка филиалов", zap.Error(err))
-		return nil, fmt.Errorf("failed to get branches: %w", err)
+		return nil, 0, fmt.Errorf("failed to get branches: %w", err)
 	}
-	return res, nil
+
+	return branches, total, nil
 }
 
 func (s *BranchService) FindBranch(ctx context.Context, id uint64) (*dto.BranchDTO, error) {

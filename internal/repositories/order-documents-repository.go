@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"request-system/internal/dto"
-	"request-system/pkg/utils"
+	apperrors "request-system/pkg/errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -105,7 +105,7 @@ func (r *OrderDocumentRepository) FindOrderDocument(ctx context.Context, id uint
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, utils.ErrorNotFound
+			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
@@ -158,7 +158,7 @@ func (r *OrderDocumentRepository) UpdateOrderDocument(ctx context.Context, id ui
 	}
 
 	if result.RowsAffected() == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 	return nil
 }
@@ -172,7 +172,7 @@ func (r *OrderDocumentRepository) DeleteOrderDocument(ctx context.Context, id ui
 	}
 
 	if result.RowsAffected() == 0 {
-		return utils.ErrorNotFound
+		return apperrors.ErrNotFound
 	}
 
 	return nil

@@ -1,13 +1,15 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
-	"fmt"
 
 	"request-system/internal/dto"
 	"request-system/internal/services"
+	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
+
 	"go.uber.org/zap"
 
 	"github.com/labstack/echo/v4"
@@ -15,16 +17,16 @@ import (
 
 type RolePermissionController struct {
 	rpService *services.RolePermissionService
-	logger *zap.Logger
+	logger    *zap.Logger
 }
 
 func NewRolePermissionController(
-		rpService *services.RolePermissionService,
-		logger *zap.Logger,
+	rpService *services.RolePermissionService,
+	logger *zap.Logger,
 ) *RolePermissionController {
 	return &RolePermissionController{
 		rpService: rpService,
-		logger : logger,
+		logger:    logger,
 	}
 }
 
@@ -52,7 +54,7 @@ func (c *RolePermissionController) FindRolePermission(ctx echo.Context) error {
 
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid role_permission ID format: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("invalid role_permission ID format: %w", apperrors.ErrBadRequest))
 	}
 
 	res, err := c.rpService.FindRolePermission(reqCtx, id)
@@ -76,8 +78,8 @@ func (c *RolePermissionController) CreateRolePermission(ctx echo.Context) error 
 
 	var dto dto.CreateRolePermissionDTO
 	if err := ctx.Bind(&dto); err != nil {
-		c.logger.Error("неверный запрос", zap.Error(err))	
-		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", utils.ErrorBadRequest))
+		c.logger.Error("неверный запрос", zap.Error(err))
+		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", apperrors.ErrBadRequest))
 	}
 
 	if err := ctx.Validate(&dto); err != nil {
@@ -107,12 +109,12 @@ func (c *RolePermissionController) UpdateRolePermission(ctx echo.Context) error 
 
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid role_permission ID format in URL: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("invalid role_permission ID format in URL: %w", apperrors.ErrBadRequest))
 	}
 
 	var dto dto.UpdateRolePermissionDTO
 	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", apperrors.ErrBadRequest))
 	}
 
 	if err := ctx.Validate(&dto); err != nil {
@@ -135,13 +137,12 @@ func (c *RolePermissionController) UpdateRolePermission(ctx echo.Context) error 
 	)
 }
 
-
 func (c *RolePermissionController) DeleteRolePermission(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid role_permission ID format: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("invalid role_permission ID format: %w", apperrors.ErrBadRequest))
 	}
 
 	err = c.rpService.DeleteRolePermission(reqCtx, id)

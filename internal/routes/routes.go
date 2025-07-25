@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"request-system/pkg/filestorage"
 	"request-system/pkg/middleware"
 	"request-system/pkg/service"
 
@@ -18,6 +19,10 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	runAuthRouter(api, dbConn, redisClient, jwtSvc, logger)
 	runStatusRouter(api, dbConn, logger)
 	authMW := middleware.NewAuthMiddleware(jwtSvc, logger)
+	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
+	if err != nil {
+		logger.Fatal("не удалось создать файловое хранилище", zap.Error(err))
+	}
 	protectedGroup := api.Group("", authMW.Auth)
 
 	RunProretyRouter(protectedGroup, dbConn, logger)
@@ -31,12 +36,16 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	runEquipmentRouter(protectedGroup, dbConn, logger)
 	runUserRouter(protectedGroup, dbConn, logger)
 	RunProretyRouter(protectedGroup, dbConn, logger)
-	RunOrderDelegrationRouter(protectedGroup, dbConn, jwtSvc, logger)
-	runOrderCommentRouter(protectedGroup, dbConn, jwtSvc, logger)
+	//RunOrderDelegrationRouter(protectedGroup, dbConn, jwtSvc, logger)
+	//runOrderCommentRouter(protectedGroup, dbConn, jwtSvc, logger)
 	RunOrderDocumentRouter(protectedGroup, dbConn, logger)
 	runPositionRouter(protectedGroup, dbConn, logger)
 
-	runOrderRouter(protectedGroup, dbConn, jwtSvc, logger)
+	runOrderRouter(protectedGroup, dbConn, logger)
+	runOrderHistoryRouter(protectedGroup, dbConn, logger)
+	runOrderHistoryRouter(protectedGroup, dbConn, logger)
+
+	runAttachmentRouter(protectedGroup, dbConn, fileStorage, logger)
 
 	logger.Info("INIT_ROUTER: Создание маршрутов завершено")
 }

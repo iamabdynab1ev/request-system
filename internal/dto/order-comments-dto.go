@@ -1,5 +1,5 @@
 package dto
-
+/*
 type CreateOrderCommentDTO struct {
 	Message  string `json:"message" validate:"required"`
 	StatusID int    `json:"status_id" validate:"required"`
@@ -31,4 +31,4 @@ type ShortOrderCommentDTO struct {
 	ID      int    `json:"id"`
 	Message string `json:"message"`
 	OrderID int    `json:"order_id"`
-}
+}*/

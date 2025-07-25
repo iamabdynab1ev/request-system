@@ -7,6 +7,7 @@ import (
 
 	"request-system/internal/dto"
 	"request-system/internal/services"
+	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 
 	"github.com/labstack/echo/v4"
@@ -54,7 +55,7 @@ func (c *OrderDocumentController) FindOrderDocument(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID документа заказа из URL", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid order document ID format: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("invalid order document ID format: %w", apperrors.ErrBadRequest))
 	}
 
 	res, err := c.orderDocumentService.FindOrderDocument(reqCtx, id)
@@ -80,12 +81,12 @@ func (c *OrderDocumentController) CreateOrderDocument(ctx echo.Context) error {
 	var dto dto.CreateOrderDocumentDTO
 	if err := ctx.Bind(&dto); err != nil {
 		c.logger.Error("Ошибка при связывании запроса для создания документа заказа", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", apperrors.ErrBadRequest))
 	}
 
 	if err := ctx.Validate(&dto); err != nil {
 		c.logger.Error("Ошибка при валидации данных для создания документа заказа", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("validation failed: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("validation failed: %w", apperrors.ErrBadRequest))
 	}
 
 	res, err := c.orderDocumentService.CreateOrderDocument(reqCtx, dto)
@@ -111,18 +112,18 @@ func (c *OrderDocumentController) UpdateOrderDocument(ctx echo.Context) error {
 	idFromURL, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID документа заказа из URL для обновления", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid order document ID format in URL: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("invalid order document ID format in URL: %w", apperrors.ErrBadRequest))
 	}
 
 	var dto dto.UpdateOrderDocumentDTO
 	if err := ctx.Bind(&dto); err != nil {
 		c.logger.Error("Ошибка при связывании запроса для обновления документа заказа", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", apperrors.ErrBadRequest))
 	}
 
 	if err := ctx.Validate(&dto); err != nil {
 		c.logger.Error("Ошибка при валидации данных для обновления документа заказа", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("validation failed: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("validation failed: %w", apperrors.ErrBadRequest))
 	}
 
 	dto.ID = int(idFromURL)
@@ -150,7 +151,7 @@ func (c *OrderDocumentController) DeleteOrderDocument(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID документа заказа из URL для удаления", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid order document ID format: %w", utils.ErrorBadRequest))
+		return utils.ErrorResponse(ctx, fmt.Errorf("invalid order document ID format: %w", apperrors.ErrBadRequest))
 	}
 
 	err = c.orderDocumentService.DeleteOrderDocument(reqCtx, id)

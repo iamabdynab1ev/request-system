@@ -16,7 +16,6 @@ type UpdateOrderDocumentDTO struct {
 
 	OrderID int `json:"order_id" validate:"omitempty"`
 }
-
 type OrderDocumentDTO struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
