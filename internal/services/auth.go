@@ -18,12 +18,12 @@ import (
 )
 
 const (
-	maxLoginAttempts      = 100
-	lockoutDuration       = 100 * time.Minute
-	verificationCodeTTL   = 100 * time.Minute
-	resetPasswordTokenTTL = 100 * time.Minute
-	resetCodeAttemptsTTL  = 100 * time.Minute
-	maxResetCodeAttempts  = 100
+	maxLoginAttempts      = 5
+	lockoutDuration       = 5 * time.Minute
+	verificationCodeTTL   = 5 * time.Minute
+	resetPasswordTokenTTL = 5 * time.Minute
+	resetCodeAttemptsTTL  = 5 * time.Minute
+	maxResetCodeAttempts  = 5
 )
 
 type AuthServiceInterface interface {
@@ -130,7 +130,10 @@ func (s *AuthService) LoginWithCode(ctx context.Context, payload dto.VerifyCodeD
 	}
 
 	s.resetLoginAttempts(ctx, user.ID)
-	s.cacheRepo.Del(ctx, cacheKey)
+	if err := s.cacheRepo.Del(ctx, cacheKey); err != nil {
+		s.logger.Error("Ошибка удаления кода верификации из кеша", zap.Error(err))
+		return nil, apperrors.ErrInternalServer
+	}
 
 	return user, nil
 }
@@ -155,19 +158,28 @@ func (s *AuthService) checkLockout(ctx context.Context, userID uint64) error {
 
 func (s *AuthService) handleFailedLoginAttempt(ctx context.Context, userID uint64) {
 	attemptsKey := fmt.Sprintf("login_attempts:%d", userID)
-	attempts, _ := s.cacheRepo.Incr(ctx, attemptsKey)
+	attempts, err := s.cacheRepo.Incr(ctx, attemptsKey)
+	if err != nil {
+		s.logger.Error("Ошибка увеличения счетчика попыток входа", zap.Error(err))
+	}
 
 	if attempts >= maxLoginAttempts {
 		lockoutKey := fmt.Sprintf("lockout:%d", userID)
-		s.cacheRepo.Set(ctx, lockoutKey, "locked", lockoutDuration)
-		s.cacheRepo.Del(ctx, attemptsKey)
+		if err := s.cacheRepo.Set(ctx, lockoutKey, "locked", lockoutDuration); err != nil {
+			s.logger.Error("Ошибка установки блокировки в кеш", zap.Error(err))
+		}
+		if err := s.cacheRepo.Del(ctx, attemptsKey); err != nil {
+			s.logger.Error("Ошибка удаления счетчика попыток из кеша", zap.Error(err))
+		}
 	}
 }
 
 func (s *AuthService) resetLoginAttempts(ctx context.Context, userID uint64) {
 	attemptsKey := fmt.Sprintf("login_attempts:%d", userID)
 	lockoutKey := fmt.Sprintf("lockout:%d", userID)
-	s.cacheRepo.Del(ctx, attemptsKey, lockoutKey)
+	if err := s.cacheRepo.Del(ctx, attemptsKey, lockoutKey); err != nil {
+		s.logger.Error("Ошибка удаления ключей попыток и блокировки из кеша", zap.Error(err))
+	}
 }
 func (s *AuthService) CheckRecoveryOptions(ctx context.Context, payload dto.ForgotPasswordInitDTO) (*dto.ForgotPasswordOptionsDTO, error) {
 	logger := s.logger.With(zap.String("email", payload.Email))
@@ -241,7 +253,7 @@ func (s *AuthService) ResetPasswordWithPhone(ctx context.Context, payload dto.Re
 		return apperrors.ErrInvalidCredentials
 	}
 
-	if err := s.checkResetCodeAttempts(ctx, user.ID); err != nil {
+	if err = s.checkResetCodeAttempts(ctx, user.ID); err != nil {
 		return err
 	}
 
@@ -253,11 +265,13 @@ func (s *AuthService) ResetPasswordWithPhone(ctx context.Context, payload dto.Re
 		return apperrors.ErrInvalidVerificationCode
 	}
 
-	s.cacheRepo.Del(ctx, cacheKey)
+	if err := s.cacheRepo.Del(ctx, cacheKey); err != nil {
+		logger.Error("Ошибка удаления кода сброса из кеша", zap.Error(err))
+		return apperrors.ErrInternalServer
+	}
 
 	return s.updateUserPassword(ctx, logger, user.ID, payload.NewPassword)
 }
-
 func (s *AuthService) sendEmailRecovery(ctx context.Context, user *entities.User) error {
 	resetToken := uuid.New().String()
 	cacheKey := fmt.Sprintf("reset_token:%s", resetToken)
@@ -318,8 +332,12 @@ func (s *AuthService) checkResetCodeAttempts(ctx context.Context, userID uint64)
 
 func (s *AuthService) handleFailedResetCodeAttempt(ctx context.Context, userID uint64) {
 	attemptsKey := fmt.Sprintf("reset_attempts:%d", userID)
-	// Увеличиваем счетчик и устанавливаем ему время жизни.
-	// Если счетчика не было, он создастся со значением 1.
-	s.cacheRepo.Incr(ctx, attemptsKey)
-	s.cacheRepo.Expire(ctx, attemptsKey, resetCodeAttemptsTTL)
+	if _, err := s.cacheRepo.Incr(ctx, attemptsKey); err != nil {
+		s.logger.Error("Ошибка увеличения счетчика попыток сброса", zap.Error(err))
+	}
+	if ok, err := s.cacheRepo.Expire(ctx, attemptsKey, resetCodeAttemptsTTL); err != nil {
+		s.logger.Error("Ошибка установки времени жизни счетчика попыток", zap.Error(err))
+	} else if !ok {
+		s.logger.Warn("Ключ не найден при установке времени жизни", zap.String("key", attemptsKey))
+	}
 }

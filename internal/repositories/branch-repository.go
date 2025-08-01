@@ -11,7 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const branchTableForJoinFinal = "branches"
+const branchTable = "branches"
+
 const branchFieldsForJoinFinal = "branches.id, branches.name, branches.short_name, branches.address, branches.phone_number, branches.email, branches.email_index, branches.open_date, branches.created_at, branches.updated_at"
 const statusTableForBranchFinalRepo = "statuses"
 const statusFieldsShortForBranchFinalRepo = "s.id, s.name"
@@ -42,8 +43,11 @@ func (r *BranchRepository) GetBranches(ctx context.Context, limit, offset uint64
 		return nil, 0, fmt.Errorf("failed to count branches: %w", err)
 	}
 
+	// ШАГ 1: Обновляем SQL-запрос, добавляя все недостающие поля
 	rows, err := r.storage.Query(ctx, `
-        SELECT b.id, b.name, b.address, s.id AS status_id, s.name AS status_name
+        SELECT 
+            b.id, b.name, b.short_name, b.address, b.phone_number, b.email, b.email_index, b.open_date, b.created_at, b.updated_at,
+            s.id AS status_id, s.name AS status_name
         FROM branches b
         LEFT JOIN statuses s ON s.id = b.status_id
         ORDER BY b.id DESC
@@ -57,39 +61,61 @@ func (r *BranchRepository) GetBranches(ctx context.Context, limit, offset uint64
 	var branches []dto.BranchDTO
 	for rows.Next() {
 		var branch dto.BranchDTO
+		// Так как поля с датой могут быть NULL, считываем их в указатели
+		var openDate, createdAt, updatedAt *time.Time
+
+		// ШАГ 2: Обновляем rows.Scan(), чтобы считать все новые поля в правильном порядке
 		if err := rows.Scan(
 			&branch.ID,
 			&branch.Name,
+			&branch.ShortName,
 			&branch.Address,
+			&branch.PhoneNumber,
+			&branch.Email,
+			&branch.EmailIndex,
+			&openDate,
+			&createdAt,
+			&updatedAt,
 			&branch.Status.ID,
 			&branch.Status.Name,
 		); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan branch: %w", err)
 		}
+
+		if createdAt != nil {
+			branch.CreatedAt = createdAt.Format("2006-01-02 15:04:05")
+		}
+		if openDate != nil {
+			branch.OpenDate = openDate.Format("2006-01-02 15:04:05")
+		}
+		if updatedAt != nil {
+			branch.UpdatedAt = updatedAt.Format("2006-01-02 15:04:05")
+		}
+
 		branches = append(branches, branch)
 	}
 
 	return branches, total, nil
 }
-
 func (r *BranchRepository) FindBranch(ctx context.Context, id uint64) (*dto.BranchDTO, error) {
 	query := fmt.Sprintf(`
-		SELECT
-			%s,
-			%s
-		FROM %s branches
-		LEFT JOIN %s s ON branches.status_id = s.id
-		WHERE branches.id = $1
-	`,
-		orderDocumentFieldsRepo,
+        SELECT
+            %s,
+            %s
+        FROM %s b
+        LEFT JOIN %s s ON b.status_id = s.id
+        WHERE b.id = $1
+    `,
 		branchFieldsForJoinFinal,
-		statusTableForBranchFinalRepo,
 		statusFieldsShortForBranchFinalRepo,
+		branchTable,
+		statusTableForBranchFinalRepo,
 	)
+
 	var branch dto.BranchDTO
 	var status dto.ShortStatusDTO
-	var createdAt, openDate *time.Time
-	var updateAt *time.Time
+	var createdAt, openDate, updatedAt *time.Time
+
 	err := r.storage.QueryRow(ctx, query, id).Scan(
 		&branch.ID,
 		&branch.Name,
@@ -100,7 +126,7 @@ func (r *BranchRepository) FindBranch(ctx context.Context, id uint64) (*dto.Bran
 		&branch.EmailIndex,
 		&openDate,
 		&createdAt,
-		&updateAt,
+		&updatedAt,
 		&status.ID,
 		&status.Name,
 	)
@@ -110,14 +136,21 @@ func (r *BranchRepository) FindBranch(ctx context.Context, id uint64) (*dto.Bran
 		}
 		return nil, fmt.Errorf("ошибка поиска ветки по идентификатору %d: %w", id, err)
 	}
-	branch.CreatedAt = createdAt.Format("2006-01-02 15:04:05")
-	branch.OpenDate = openDate.Format("2006-01-02 15:04:05")
-	if updateAt != nil {
-		branch.UpdatedAt = updateAt.Format("2006-01-02 15:04:05")
+
+	if createdAt != nil {
+		branch.CreatedAt = createdAt.Format("2006-01-02 15:04:05")
 	}
+	if openDate != nil {
+		branch.OpenDate = openDate.Format("2006-01-02 15:04:05")
+	}
+	if updatedAt != nil {
+		branch.UpdatedAt = updatedAt.Format("2006-01-02 15:04:05")
+	}
+
 	branch.Status = status
 	return &branch, nil
 }
+
 func (r *BranchRepository) CreateBranch(ctx context.Context, dto dto.CreateBranchDTO) (uint64, error) {
 	query := fmt.Sprintf(`
 		INSERT INTO %s (name, short_name, address, phone_number, email, email_index, open_date, status_id) 
@@ -159,7 +192,7 @@ func (r *BranchRepository) UpdateBranch(ctx context.Context, id uint64, dto dto.
 		SET name = $1, short_name = $2, address = $3, phone_number = $4, email = $5, email_index = $6, open_date = $7, status_id = $8
 		WHERE id = $9
 		`,
-		statusTableForBranchFinalRepo)
+		branchTable)
 
 	result, err := r.storage.Exec(ctx, query,
 		dto.Name,

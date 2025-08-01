@@ -138,7 +138,6 @@ func (c *AuthController) CheckRecoveryOptions(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, options, "", http.StatusOK)
 }
 
-
 func (c *AuthController) SendRecoveryInstructions(ctx echo.Context) error {
 	var payload dto.ForgotPasswordSendDTO
 	if err := ctx.Bind(&payload); err != nil {
@@ -194,12 +193,16 @@ func (c *AuthController) ResetPasswordWithPhone(ctx echo.Context) error {
 }
 
 func (c *AuthController) generateTokensAndRespond(ctx echo.Context, user *entities.User) error {
-	accessToken, refreshToken, err := c.jwtService.GenerateTokens(user.ID)
+	accessToken, refreshToken, err := c.jwtService.GenerateTokens(user.ID, user.RoleID)
 	if err != nil {
 		c.logger.Error("Не удалось сгенерировать токены", zap.Error(err), zap.Uint64("userID", user.ID))
 		return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
 	}
 	c.logger.Info("Токены успешно сгенерированы", zap.Uint64("userID", user.ID))
+	// !!! ДОБАВИТЬ ЭТОТ ЛОГ ДЛЯ ДИАГНОСТИКИ !!!
+	c.logger.Debug("Сгенерированный Access Token", zap.String("token", accessToken))
+	c.logger.Debug("Сгенерированный Refresh Token", zap.String("token", refreshToken))
+	// !!! КОНЕЦ ДОБАВЛЕНИЯ !!!
 
 	userDto := dto.UserPublicDTO{
 		ID:     user.ID,

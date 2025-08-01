@@ -19,20 +19,18 @@ type UpdateStatusDTO struct {
 }
 
 type StatusDTO struct {
-	ID        int     `json:"id"`
-	IconSmall *string `json:"icon_small"`
-	IconBig   *string `json:"icon_big"`
+	ID        uint64  `json:"id"`
+	IconSmall string  `json:"icon_small,omitempty"`
+	IconBig   string  `json:"icon_big,omitempty"`
 	Name      string  `json:"name"`
 	Type      int     `json:"type"`
-	Code      *string `json:"code"`
-
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-	DeletedAt string `json:"deleted_at"`
+	Code      string  `json:"code"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at,omitempty"`
+	DeletedAt *string `json:"deleted_at,omitempty"`
 }
 
 type ShortStatusDTO struct {
-	ID   int    `json:"id"`
+	ID   uint64 `json:"id"`
 	Name string `json:"name"`
-	Code string `json:"code"`
 }

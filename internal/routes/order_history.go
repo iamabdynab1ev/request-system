@@ -16,5 +16,5 @@ func runOrderHistoryRouter(group *echo.Group, dbConn *pgxpool.Pool, logger *zap.
 	service := services.NewOrderHistoryService(repo, logger)
 	controller := controllers.NewOrderHistoryController(service, logger)
 
-	group.GET("/orders/:orderID/history", controller.GetHistoryForOrder)
+	group.GET("/order/:orderID/history", controller.GetHistoryForOrder)
 }

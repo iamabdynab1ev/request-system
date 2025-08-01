@@ -15,7 +15,7 @@ func RunProretyRouter(e *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) {
 	priorityService := services.NewPriorityService(priorityRepository, logger)
 	priorityCtrl := controllers.NewPriorityController(priorityService, logger)
 
-	e.GET("/priorities", priorityCtrl.GetPriorities)
+	e.GET("/priority", priorityCtrl.GetPriorities)
 	e.GET("/priority/:id", priorityCtrl.FindPriority)
 	e.POST("/priority", priorityCtrl.CreatePriority)
 	e.PUT("/priority/:id", priorityCtrl.UpdatePriority)

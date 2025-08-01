@@ -15,8 +15,8 @@ type OrderResponseDTO struct {
 	ID           uint64                  `json:"id"`
 	Name         string                  `json:"name"`
 	Address      string                  `json:"address"`
-	Creator      interface{}             `json:"creator"`
-	Executor     interface{}             `json:"executor"`
+	Creator      ShortUserDTO            `json:"creator"`
+	Executor     ShortUserDTO            `json:"executor"`
 	DepartmentID uint64                  `json:"department_id"`
 	StatusID     uint64                  `json:"status_id"`
 	PriorityID   uint64                  `json:"priority_id"`
@@ -25,16 +25,17 @@ type OrderResponseDTO struct {
 	CreatedAt    string                  `json:"created_at"`
 	UpdatedAt    string                  `json:"updated_at"`
 }
+
 type DelegateOrderDTO struct {
 	ExecutorID   *uint64 `json:"executor_id" validate:"required,gt=0"`
 	StatusID     *uint64 `json:"status_id" validate:"required,gt=0"`
 	PriorityID   *uint64 `json:"priority_id" validate:"required,gt=0"`
-	Duration     *string `json:"duration,omitempty" validate:"omitempty,duration_format" `
+	Duration     *string `json:"duration,omitempty" validate:"omitempty,duration_format"`
 	Comment      *string `json:"comment" validate:"required,min=3"`
 	Name         *string `json:"name,omitempty" validate:"omitempty,min=5,max=255"`
 	Address      *string `json:"address,omitempty" validate:"omitempty,min=5"`
 	DepartmentID *uint64 `json:"department_id,omitempty" validate:"omitempty,gt=0"`
-	OtdelID      *uint64 `json:"otdsel_id,omitempty"`
+	OtdelID      *uint64 `json:"otdel_id,omitempty"`
 	BranchID     *uint64 `json:"branch_id,omitempty"`
 	OfficeID     *uint64 `json:"office_id,omitempty"`
 	EquipmentID  *uint64 `json:"equipment_id,omitempty"`
@@ -42,6 +43,15 @@ type DelegateOrderDTO struct {
 	HasFile bool `json:"has_file,omitempty"`
 }
 type UpdateOrderDTO struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	Name         *string `json:"name,omitempty" validate:"omitempty,min=5,max=255"`
+	Address      *string `json:"address,omitempty" validate:"omitempty,min=5"`
+	DepartmentID *uint64 `json:"department_id,omitempty" validate:"omitempty,gt=0"`
+	OtdelID      *uint64 `json:"otdel_id,omitempty"`
+	BranchID     *uint64 `json:"branch_id,omitempty"`
+	OfficeID     *uint64 `json:"office_id,omitempty"`
+	EquipmentID  *uint64 `json:"equipment_id,omitempty"`
+	StatusID     *uint64 `json:"status_id,omitempty" validate:"omitempty,gt=0"`
+	PriorityID   *uint64 `json:"priority_id,omitempty" validate:"omitempty,gt=0"`
+	Comment      *string `json:"comment,omitempty" validate:"omitempty,min=3"`
+	Duration     *string `json:"duration,omitempty" validate:"omitempty,duration_format"`
 }

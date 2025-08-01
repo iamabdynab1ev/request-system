@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// OrderHistoryItem - DTO для передачи обогащенных данных из репозитория в сервис.
+
 type OrderHistoryItem struct {
 	entities.OrderHistory
 	ActorFio      sql.NullString `db:"actor_fio"`
@@ -39,9 +39,9 @@ func (r *OrderHistoryRepository) CreateInTx(ctx context.Context, tx pgx.Tx, hist
 	return err
 }
 
-// ФИНАЛЬНЫЙ ИСПРАВЛЕННЫЙ МЕТОД
+
 func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint64) ([]OrderHistoryItem, error) {
-	// ИСПРАВЛЕННЫЙ SQL-ЗАПРОС
+	
 	query := `
 		SELECT 
 			h.id, h.order_id, h.user_id, h.event_type, h.old_value, h.new_value, h.comment, h.created_at,
@@ -62,7 +62,7 @@ func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint
 		WHERE h.order_id = $1
 		ORDER BY h.created_at ASC, h.id ASC
 	`
-	// КОНЕЦ ИСПРАВЛЕННОГО ЗАПРОСА
+	
 
 	rows, err := r.storage.Query(ctx, query, orderID)
 	if err != nil {

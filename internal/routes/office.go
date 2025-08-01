@@ -15,7 +15,7 @@ func runOfficeRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.
 	officeService := services.NewOfficeService(officeRepository, logger)
 	officeCtrl := controllers.NewOfficeController(officeService, logger)
 
-	secureGroup.GET("/offices", officeCtrl.GetOffices)
+	secureGroup.GET("/office", officeCtrl.GetOffices)
 	secureGroup.GET("/office/:id", officeCtrl.FindOffice)
 	secureGroup.POST("/office", officeCtrl.CreateOffice)
 	secureGroup.PUT("/office/:id", officeCtrl.UpdateOffice)

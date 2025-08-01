@@ -8,7 +8,7 @@ type CreateBranchDTO struct {
 	Email       string `json:"email" validate:"required,email"`
 	EmailIndex  string `json:"email_index" validate:"omitempty"`
 	OpenDate    string `json:"open_date" validate:"required"`
-	StatusID    int    `json:"status_id" validate:"required"`
+	StatusID    uint64 `json:"status_id" validate:"required"`
 }
 
 type UpdateBranchDTO struct {
@@ -19,7 +19,7 @@ type UpdateBranchDTO struct {
 	Email       string `json:"email" validate:"omitempty,email"`
 	EmailIndex  string `json:"email_index" validate:"omitempty"`
 	OpenDate    string `json:"open_date" validate:"omitempty"`
-	StatusID    int    `json:"status_id" validate:"omitempty"`
+	StatusID    uint64 `json:"status_id" validate:"omitempty"`
 }
 
 type BranchDTO struct {

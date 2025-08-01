@@ -35,7 +35,8 @@ type UserDTO struct {
 	Email       string         `json:"email"`
 	Position    string         `json:"position"`
 	PhoneNumber string         `json:"phone_number"`
-	Role        uint64         `json:"role"`
+	RoleID      uint64         `json:"role_id"`
+	RoleName    string         `json:"role_name"`
 	Branch      uint64         `json:"branch"`
 	Department  uint64         `json:"department"`
 	Office      *uint64        `json:"office"`

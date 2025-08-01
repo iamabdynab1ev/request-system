@@ -8,14 +8,20 @@ import (
 	"request-system/internal/routes"
 	"request-system/pkg/database/postgresql"
 	applogger "request-system/pkg/logger"
+
 	"request-system/pkg/service"
+	"strings"
 	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/go-redis/redis/v8"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"go.uber.org/zap"
+
+	"request-system/internal/repositories"
+	"request-system/internal/services"
 )
 
 type CustomValidator struct {
@@ -33,23 +39,44 @@ func isTajikPhoneNumber(fl validator.FieldLevel) bool {
 	re := regexp.MustCompile(`^\+992\d{9}$`)
 	return re.MatchString(fl.Field().String())
 }
+
 func isDurationValid(fl validator.FieldLevel) bool {
-	re := regexp.MustCompile(`^\d+h(\d+m)?$`)
-	return re.MatchString(fl.Field().String())
+	re := regexp.MustCompile(`^(\d+h)?(\d+m)?$`)
+	s := fl.Field().String()
+	return re.MatchString(s) && (strings.Contains(s, "h") || strings.Contains(s, "m"))
 }
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Warning: .env file not found or could not be loaded.")
 	}
 
 	e := echo.New()
-
-	v := validator.New()
-	v.RegisterValidation("e164_TJ", isTajikPhoneNumber)
-	v.RegisterValidation("duration_format", isDurationValid)
-	e.Validator = &CustomValidator{validator: v}
-
 	logger := applogger.NewLogger()
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{
+			"http://localhost:5173",
+			"https://bedd20e58acf.ngrok-free.app",
+		},
+		AllowMethods: []string{
+			echo.GET, echo.POST, echo.PUT, echo.DELETE, echo.OPTIONS,
+		},
+		AllowHeaders: []string{
+			echo.HeaderOrigin,
+			echo.HeaderContentType,
+			echo.HeaderAuthorization,
+			"ngrok-skip-browser-warning",
+		},
+		AllowCredentials: true,
+	}))
+	v := validator.New()
+	if err := v.RegisterValidation("e164_TJ", isTajikPhoneNumber); err != nil {
+		logger.Fatal("Ошибка регистрации валидации e164_TJ", zap.Error(err))
+	}
+	if err := v.RegisterValidation("duration_format", isDurationValid); err != nil {
+		logger.Fatal("Ошибка регистрации валидации duration_format", zap.Error(err))
+	}
+	e.Validator = &CustomValidator{validator: v}
 
 	dbConn := postgresql.ConnectDB()
 	defer dbConn.Close()
@@ -76,13 +103,21 @@ func main() {
 	if os.Getenv("ENV") == "production" && jwtSecretKey == "your_default_super_secret_key_for_testing" {
 		logger.Fatal("В продакшене необходимо задать безопасный JWT_SECRET_KEY")
 	}
-	accessTokenTTL := time.Hour * 1
+
+	accessTokenTTL := time.Hour * 24
 	refreshTokenTTL := time.Hour * 24 * 7
 	jwtSvc := service.NewJWTService(jwtSecretKey, accessTokenTTL, refreshTokenTTL, logger)
 	logger.Info("main: JWTService успешно создан")
 
-	routes.InitRouter(e, dbConn, redisClient, jwtSvc, logger)
+	permissionRepo := repositories.NewPermissionRepository(dbConn, logger)
 
+	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
+
+	rolePermissionsCacheTTL := time.Minute * 10
+	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, logger, rolePermissionsCacheTTL)
+	logger.Info("main: AuthPermissionService успешно создан")
+
+	routes.InitRouter(e, dbConn, redisClient, jwtSvc, logger, authPermissionService)
 	logger.Info("🚀 Сервер запущен на :8080")
 	if err := e.Start(":8080"); err != nil {
 		logger.Fatal("Ошибка запуска сервера", zap.Error(err))

@@ -15,9 +15,9 @@ func runEquipmentTypeRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logge
 	equipmentTypeService := services.NewEquipmentTypeService(equipmentTypeRepository, logger)
 	equipmentTypeCtrl := controllers.NewEquipmentTypeController(equipmentTypeService, logger)
 
-	secureGroup.GET("/equipment-types", equipmentTypeCtrl.GetEquipmentTypes)
-	secureGroup.GET("/equipment-type/:id", equipmentTypeCtrl.FindEquipmentType)
-	secureGroup.POST("/equipment-type", equipmentTypeCtrl.CreateEquipmentType)
-	secureGroup.PUT("/equipment-type/:id", equipmentTypeCtrl.UpdateEquipmentType)
-	secureGroup.DELETE("/equipment-type/:id", equipmentTypeCtrl.DeleteEquipmentType)
+	secureGroup.GET("/equipment_type", equipmentTypeCtrl.GetEquipmentTypes)
+	secureGroup.GET("/equipment_type/:id", equipmentTypeCtrl.FindEquipmentType)
+	secureGroup.POST("/equipment_type", equipmentTypeCtrl.CreateEquipmentType)
+	secureGroup.PUT("/equipment_type/:id", equipmentTypeCtrl.UpdateEquipmentType)
+	secureGroup.DELETE("/equipment_type/:id", equipmentTypeCtrl.DeleteEquipmentType)
 }

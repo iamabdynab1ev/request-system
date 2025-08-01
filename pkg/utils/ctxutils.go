@@ -13,3 +13,11 @@ func GetUserIDFromCtx(ctx context.Context) (uint64, error) {
 	}
 	return userID, nil
 }
+
+func GetUserRoleIDFromCtx(ctx context.Context) (uint64, error) {
+	roleID, ok := ctx.Value(contextkeys.RoleIDKey).(uint64)
+	if !ok {
+		return 0, apperrors.ErrUserNotFound
+	}
+	return roleID, nil
+}

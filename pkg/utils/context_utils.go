@@ -1,5 +1,3 @@
-// Файл: pkg/utils/context_utils.go
-
 package utils
 
 import (
@@ -28,34 +26,40 @@ func HasPermission(claims *dto.UserClaims, requiredPermission string) bool {
 		userPerms[p] = true
 	}
 
-	if userPerms["Manage:All"] {
+	if userPerms["superuser"] {
 		return true
 	}
 
+	
+	if userPerms["orders:manage:all"] && strings.HasPrefix(requiredPermission, "orders:view:") {
+		return true
+	}
+
+	
 	if userPerms[requiredPermission] {
 		return true
 	}
 
+	
+	if userPerms["Manage:All"] {
+		return true
+	}
 	parts := strings.SplitN(requiredPermission, ":", 2)
 	if len(parts) == 2 {
 		entityName := parts[1]
-
 		if subParts := strings.Split(entityName, ":"); len(subParts) > 1 {
 			entityName = subParts[0]
 		}
-
 		managePermission := "Manage:" + entityName
 		if userPerms[managePermission] {
 			return true
 		}
-
 		if userPerms["Manage:System"] {
 			if entityName == "Roles" || entityName == "Permissions" || entityName == "Catalogs" {
 				return true
 			}
 		}
 	}
-
 	if userPerms["View:Orders:All"] && strings.HasPrefix(requiredPermission, "View:Orders:") {
 		return true
 	}

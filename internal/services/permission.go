@@ -38,7 +38,7 @@ func (s *PermissionService) GetPermissions(ctx context.Context, limit uint64, of
 		permissions = []dto.PermissionDTO{}
 	}
 	var currentPage uint64 = 1
-	if limit > 0 {
+	if limit > 0 { // Проверка, чтобы избежать деления на ноль
 		currentPage = (offset / limit) + 1
 	}
 	response := &dto.PaginatedResponse[dto.PermissionDTO]{
@@ -61,7 +61,7 @@ func (s *PermissionService) FindPermissionByID(ctx context.Context, id uint64) (
 	}
 	s.logger.Info("Привилегия успешно найдена", zap.Any("permission", permission))
 	return permission, nil
-	return s.permissionRepository.FindPermissionByID(ctx, id)
+	// <-- УДАЛЕНО: лишняя строка "return s.permissionRepository.FindPermissionByID(ctx, id)"
 }
 
 func (s *PermissionService) CreatePermission(ctx context.Context, dto dto.CreatePermissionDTO) (*dto.PermissionDTO, error) {

@@ -73,13 +73,10 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 				if eventDTO.Icon == "" {
 					eventDTO.Icon = "status_change"
 				}
-				// ИСПРАВЛЕНО: Используем поле NewStatusName, которое содержит название статуса, а не его ID.
-				// Добавлена проверка, что название статуса было успешно получено из БД.
 				if event.NewStatusName.Valid {
 					line = fmt.Sprintf("Изменен статус заявки на «%s»", event.NewStatusName.String)
 				} else if event.NewValue != nil {
-					// Запасной вариант, если название статуса по какой-то причине не нашлось
-					line = fmt.Sprintf("Изменен статус заявки на ID: %s", *event.NewValue)
+					line = fmt.Sprintf("Изменен статус заявки на: %s", *event.NewValue)
 				}
 			case "DELEGATION":
 				if eventDTO.Icon == "" {

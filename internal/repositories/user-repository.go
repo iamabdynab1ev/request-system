@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
+	"request-system/pkg/types"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -15,10 +15,27 @@ import (
 )
 
 const userTableRepo = "users"
-const userSelectFieldsForEntityRepo = "u.id, u.fio, u.email, u.phone_number, u.password, u.position, u.status_id, u.role_id, u.branch_id, u.department_id, u.office_id, u.otdel_id, u.created_at, u.updated_at, u.deleted_at"
+
+const userSelectFieldsForEntityRepo = "u.id, u.fio, u.email, u.phone_number, u.password, u.position, u.status_id, u.role_id, u.branch_id, u.department_id, u.office_id, u.otdel_id, r.name as role_name, u.created_at, u.updated_at, u.deleted_at"
+const userJoinClauseRepo = "users u JOIN roles r ON u.role_id = r.id"
+
+var userAllowedFilterFields = map[string]bool{
+	"status_id":     true,
+	"branch_id":     true,
+	"department_id": true,
+	"role_id":       true,
+	"position":      true,
+}
+
+var userAllowedSortFields = map[string]bool{
+	"id":         true,
+	"fio":        true,
+	"created_at": true,
+	"updated_at": true,
+}
 
 type UserRepositoryInterface interface {
-	GetUsers(ctx context.Context, limit uint64, offset uint64) ([]entities.User, error)
+	GetUsers(ctx context.Context, filter types.Filter) ([]entities.User, uint64, error)
 	FindUser(ctx context.Context, id uint64) (*entities.User, error)
 	CreateUser(ctx context.Context, entity *entities.User) (*entities.User, error)
 	UpdateUser(ctx context.Context, entity *entities.User) (*entities.User, error)
@@ -42,37 +59,108 @@ func NewUserRepository(storage *pgxpool.Pool) UserRepositoryInterface {
 }
 
 func (r *UserRepository) scanUser(row pgx.Row, user *entities.User) error {
-	var createdAt, updatedAt time.Time
-	err := row.Scan(
+	return row.Scan(
 		&user.ID, &user.Fio, &user.Email, &user.PhoneNumber, &user.Password,
 		&user.Position, &user.StatusID, &user.RoleID, &user.BranchID,
-		&user.DepartmentID, &user.OfficeID, &user.OtdelID,
-		&createdAt, &updatedAt, &user.DeletedAt,
+		&user.DepartmentID, &user.OfficeID, &user.OtdelID, &user.RoleName,
+		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
-	if err != nil {
-		return err
-	}
-	user.CreatedAt = &createdAt
-	user.UpdatedAt = &updatedAt
-	return nil
 }
 
-// FindHeadByDepartment выполняет поиск пользователя вне транзакции.
+func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter) ([]entities.User, uint64, error) {
+	var args []interface{}
+	conditions := []string{"u.deleted_at IS NULL"}
+	placeholderID := 1
+
+	if filter.Search != "" {
+		conditions = append(conditions, fmt.Sprintf("(u.fio ILIKE $%d OR u.email ILIKE $%d OR u.phone_number ILIKE $%d)", placeholderID, placeholderID, placeholderID))
+		args = append(args, "%"+filter.Search+"%")
+		placeholderID++
+	}
+
+	for key, value := range filter.Filter {
+		if userAllowedFilterFields[key] {
+			conditions = append(conditions, fmt.Sprintf("u.%s = $%d", key, placeholderID))
+			args = append(args, value)
+			placeholderID++
+		}
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	countQuery := fmt.Sprintf("SELECT COUNT(u.id) FROM %s %s", userJoinClauseRepo, whereClause)
+
+	var totalCount uint64
+	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&totalCount); err != nil {
+		return nil, 0, fmt.Errorf("ошибка подсчета пользователей: %w", err)
+	}
+
+	if totalCount == 0 {
+		return []entities.User{}, 0, nil
+	}
+
+	orderByClause := "ORDER BY u.id DESC"
+	if len(filter.Sort) > 0 {
+		var sortParts []string
+		for field, direction := range filter.Sort {
+			if userAllowedSortFields[field] {
+				sortParts = append(sortParts, fmt.Sprintf("u.%s %s", field, direction))
+			}
+		}
+		if len(sortParts) > 0 {
+			orderByClause = "ORDER BY " + strings.Join(sortParts, ", ")
+		}
+	}
+
+	limitClause := ""
+	if filter.WithPagination {
+		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", placeholderID, placeholderID+1)
+		args = append(args, filter.Limit, filter.Offset)
+	}
+
+	mainQuery := fmt.Sprintf("SELECT %s FROM %s %s %s %s",
+		userSelectFieldsForEntityRepo,
+		userJoinClauseRepo,
+		whereClause,
+		orderByClause,
+		limitClause,
+	)
+
+	rows, err := r.storage.Query(ctx, mainQuery, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка получения пользователей: %w", err)
+	}
+	defer rows.Close()
+
+	users := make([]entities.User, 0, filter.Limit)
+	for rows.Next() {
+		var user entities.User
+		if err := r.scanUser(rows, &user); err != nil {
+			return nil, 0, err
+		}
+		users = append(users, user)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	return users, totalCount, nil
+}
+
 func (r *UserRepository) FindHeadByDepartment(ctx context.Context, departmentID uint64) (*entities.User, error) {
 	query := fmt.Sprintf(`
-		SELECT %s
-		FROM %s u
-		JOIN roles r ON u.role_id = r.id
-		WHERE u.department_id = $1
-		  AND LOWER(TRIM(r.name)) = LOWER('User') 
-		  AND u.deleted_at IS NULL
+		SELECT %s FROM %s
+		WHERE u.department_id = $1 AND LOWER(TRIM(r.name)) = LOWER('User') AND u.deleted_at IS NULL
 		LIMIT 1
-	`, userSelectFieldsForEntityRepo, userTableRepo)
+	`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 
 	var user entities.User
 	row := r.storage.QueryRow(ctx, query, departmentID)
 	err := r.scanUser(row, &user)
-
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrUserNotFound
@@ -84,13 +172,10 @@ func (r *UserRepository) FindHeadByDepartment(ctx context.Context, departmentID 
 
 func (r *UserRepository) FindHeadByDepartmentInTx(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.User, error) {
 	query := fmt.Sprintf(`
-		SELECT %s FROM %s u
-		JOIN roles r ON u.role_id = r.id
-		WHERE u.department_id = $1 AND u.status_id = 1
-		  AND LOWER(TRIM(r.name)) = LOWER('User')
-		  AND u.deleted_at IS NULL
+		SELECT %s FROM %s
+		WHERE u.department_id = $1 AND LOWER(TRIM(r.name)) = LOWER('User') AND u.deleted_at IS NULL
 		LIMIT 1
-	`, userSelectFieldsForEntityRepo, userTableRepo)
+	`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	var user entities.User
 	row := tx.QueryRow(ctx, query, departmentID)
 	err := r.scanUser(row, &user)
@@ -104,7 +189,7 @@ func (r *UserRepository) FindHeadByDepartmentInTx(ctx context.Context, tx pgx.Tx
 }
 
 func (r *UserRepository) FindUserByID(ctx context.Context, id uint64) (*entities.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s u WHERE u.id = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userTableRepo)
+	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.id = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	var user entities.User
 	row := r.storage.QueryRow(ctx, query, id)
 	if err := r.scanUser(row, &user); err != nil {
@@ -117,7 +202,7 @@ func (r *UserRepository) FindUserByID(ctx context.Context, id uint64) (*entities
 }
 
 func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s u WHERE u.email = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userTableRepo)
+	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.email = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	var user entities.User
 	row := r.storage.QueryRow(ctx, query, login)
 	if err := r.scanUser(row, &user); err != nil {
@@ -129,37 +214,9 @@ func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login strin
 	return &user, nil
 }
 
-// ...
-
-func (r *UserRepository) GetUsers(ctx context.Context, limit uint64, offset uint64) ([]entities.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s u WHERE u.deleted_at IS NULL ORDER BY u.id LIMIT $1 OFFSET $2`, userSelectFieldsForEntityRepo, userTableRepo)
-
-	rows, err := r.storage.Query(ctx, query, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	users := make([]entities.User, 0)
-	for rows.Next() {
-		var user entities.User
-		if err := r.scanUser(rows, &user); err != nil {
-			return nil, err
-		}
-
-		users = append(users, user)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return users, nil
-}
 func (r *UserRepository) FindUser(ctx context.Context, id uint64) (*entities.User, error) {
 	query := fmt.Sprintf(`
-		SELECT %s FROM %s
-		WHERE id = $1 AND deleted_at IS NULL`, userSelectFieldsForEntityRepo, userTableRepo)
-
+		SELECT %s FROM %s WHERE u.id = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	var user entities.User
 	row := r.storage.QueryRow(ctx, query, id)
 	if err := r.scanUser(row, &user); err != nil {
@@ -173,8 +230,7 @@ func (r *UserRepository) FindUser(ctx context.Context, id uint64) (*entities.Use
 
 func (r *UserRepository) FindUserByPhone(ctx context.Context, phone string) (*entities.User, error) {
 	query := fmt.Sprintf(`
-		SELECT %s FROM %s
-		WHERE phone_number = $1 AND deleted_at IS NULL`, userSelectFieldsForEntityRepo, userTableRepo)
+		SELECT %s FROM %s WHERE phone_number = $1 AND deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 
 	var user entities.User
 	row := r.storage.QueryRow(ctx, query, phone)
@@ -200,12 +256,14 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID uint64, newP
 }
 
 func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) (*entities.User, error) {
-
 	query := fmt.Sprintf(`
-		INSERT INTO %s (fio, email, phone_number, password, position, status_id, role_id, branch_id, department_id, office_id, otdel_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		RETURNING %s
-	`, userTableRepo, userSelectFieldsForEntityRepo)
+        WITH ins AS (
+            INSERT INTO %s (fio, email, phone_number, password, position, status_id, role_id, branch_id, department_id, office_id, otdel_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING id
+        )
+        SELECT %s FROM %s WHERE u.id = (SELECT id FROM ins)
+    `, userTableRepo, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 
 	createdEntity := &entities.User{}
 	row := r.storage.QueryRow(ctx, query,
@@ -238,19 +296,21 @@ func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) 
 		}
 		return nil, err
 	}
-
 	return createdEntity, nil
 }
 
 func (r *UserRepository) UpdateUser(ctx context.Context, entity *entities.User) (*entities.User, error) {
 	query := fmt.Sprintf(`
-		UPDATE %s
-		SET fio = $1, email = $2, phone_number = $3, password = $4, position = $5, 
-			status_id = $6, role_id = $7, branch_id = $8, department_id = $9, 
-			office_id = $10, otdel_id = $11, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $12 AND deleted_at IS NULL
-		RETURNING %s
-	`, userTableRepo, userSelectFieldsForEntityRepo)
+		WITH upd AS (
+			UPDATE %s
+			SET fio = $1, email = $2, phone_number = $3, password = $4, position = $5, 
+				status_id = $6, role_id = $7, branch_id = $8, department_id = $9, 
+				office_id = $10, otdel_id = $11, updated_at = CURRENT_TIMESTAMP
+			WHERE id = $12 AND deleted_at IS NULL
+			RETURNING id
+		)
+		SELECT %s FROM %s WHERE u.id = (SELECT id FROM upd)
+	`, userTableRepo, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 
 	updatedEntity := &entities.User{}
 	row := r.storage.QueryRow(ctx, query,
@@ -305,6 +365,5 @@ func (r *UserRepository) DeleteUser(ctx context.Context, id uint64) error {
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
-
 	return nil
 }

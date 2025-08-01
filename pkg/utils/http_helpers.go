@@ -89,7 +89,6 @@ func SuccessResponse(ctx echo.Context, body interface{}, message string, code in
 		Message: message,
 	}
 
-	// Проверяем, нужна ли пагинация в ответе
 	withPagination, _ := strconv.ParseBool(ctx.QueryParam("withPagination"))
 
 	if withPagination && len(total) > 0 {
@@ -116,19 +115,24 @@ func SuccessResponse(ctx echo.Context, body interface{}, message string, code in
 	return ctx.JSON(code, response)
 }
 
-func ErrorResponse(ctx echo.Context, incomingErr error) error {
-	message := incomingErr.Error()
-	code := http.StatusInternalServerError
+func ErrorResponse(c echo.Context, err error) error {
+	var statusCode int
+	var message string
 
-	if httpErr, ok := incomingErr.(*apperrors.HttpError); ok {
-		code = httpErr.Code
-		message = httpErr.Message
+	switch err {
+	case apperrors.ErrEmptyAuthHeader, apperrors.ErrInvalidAuthHeader, apperrors.ErrInvalidToken, apperrors.ErrTokenExpired, apperrors.ErrTokenIsNotAccess:
+		statusCode = http.StatusUnauthorized
+		message = "Необходима авторизация"
+	case apperrors.ErrForbidden:
+		statusCode = http.StatusForbidden
+		message = "Доступ запрещён"
+	default:
+		statusCode = http.StatusInternalServerError
+		message = "Произошла ошибка: " + err.Error()
 	}
 
-	response := &HTTPResponse{
-		Status:  false,
-		Message: message,
-	}
-
-	return ctx.JSON(code, response)
+	return c.JSON(statusCode, map[string]interface{}{
+		"status":  false,
+		"message": message,
+	})
 }

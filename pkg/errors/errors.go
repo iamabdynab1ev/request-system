@@ -56,6 +56,7 @@ var (
 	ErrNotFound       = NewHttpError(http.StatusNotFound, "Запрашиваемый ресурс не найден", nil)
 	ErrUserNotFound   = NewHttpError(http.StatusNotFound, "Пользователь не найден", nil)
 	ErrStatusNotFound = NewHttpError(http.StatusNotFound, "Статус не найден", nil)
+	ErrStatusInUse    = NewHttpError(http.StatusBadRequest, "Статус не может быть удален, так как он используется", nil)
 
 	// Внутренние ошибки
 	ErrInternalServer          = NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", nil)

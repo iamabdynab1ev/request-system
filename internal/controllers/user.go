@@ -16,13 +16,13 @@ import (
 )
 
 type UserController struct {
-	userService *services.UserService
+	userService services.UserServiceInterface
 	logger      *zap.Logger
 }
 
-func NewUserController(userService *services.UserService, logger *zap.Logger) *UserController {
+func NewUserController(userService services.UserServiceInterface, logger *zap.Logger) *UserController {
 	if logger == nil {
-		logger = zap.New(zapcore.NewNopCore()) // безопасный пустой логгер
+		logger = zap.New(zapcore.NewNopCore())
 	}
 	return &UserController{
 		userService: userService,
@@ -33,37 +33,15 @@ func NewUserController(userService *services.UserService, logger *zap.Logger) *U
 func (c *UserController) GetUsers(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
-	limit := uint64(10)
-	limitStr := ctx.QueryParam("limit")
-	if limitStr != "" {
-		parsedLimit, err := strconv.ParseUint(limitStr, 20, 64)
-		if err == nil && parsedLimit > 0 {
-			limit = parsedLimit
-		} else {
-			c.logger.Error("Ошибка парсинга limit", zap.Error(err))
-			return utils.ErrorResponse(ctx, fmt.Errorf("invalid limit parameter: %w", apperrors.ErrBadRequest))
-		}
-	}
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 
-	offset := uint64(0)
-	offsetStr := ctx.QueryParam("offset")
-	if offsetStr != "" {
-		parsedOffset, err := strconv.ParseUint(offsetStr, 10, 64)
-		if err == nil {
-			offset = parsedOffset
-		} else {
-			c.logger.Error("Ошибка парсинга offset", zap.Error(err))
-			return utils.ErrorResponse(ctx, fmt.Errorf("invalid offset parameter: %w", apperrors.ErrBadRequest))
-		}
-	}
-
-	res, err := c.userService.GetUsers(reqCtx, limit, offset)
+	res, totalCount, err := c.userService.GetUsers(reqCtx, filter)
 	if err != nil {
 		c.logger.Error("Ошибка при получении списка пользователей", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	return utils.SuccessResponse(ctx, res, "Successfully", http.StatusOK)
+	return utils.SuccessResponse(ctx, res, "Пользователи успешно получены", http.StatusOK, totalCount)
 }
 
 func (c *UserController) FindUser(ctx echo.Context) error {

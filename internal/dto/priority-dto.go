@@ -9,7 +9,7 @@ type CreatePriorityDTO struct {
 }
 
 type UpdatePriorityDTO struct {
-	ID        int    `json:"id" validate:"required"`
+	ID        uint64 `json:"id" validate:"required"`
 	IconSmall string `json:"icon_small" validate:"omitempty"`
 	IconBig   string `json:"icon_big" validate:"omitempty"`
 	Code      string `json:"code" validate:"omitempty"`
@@ -18,7 +18,7 @@ type UpdatePriorityDTO struct {
 }
 
 type PriorityDTO struct {
-	ID        int    `json:"id"`
+	ID        uint64 `json:"id"`
 	IconBig   string `json:"icon_big"`
 	IconSmall string `json:"icon_small"`
 	Name      string `json:"name"`
@@ -30,7 +30,6 @@ type PriorityDTO struct {
 }
 
 type ShortPriorityDTO struct {
-	ID   int    `json:"id"`
+	ID   uint64 `json:"id"`
 	Name string `json:"name"`
-	Code string `json:"code"`
 }

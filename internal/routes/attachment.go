@@ -30,6 +30,6 @@ func runAttachmentRouter(
 		logger,
 	)
 
-	group.GET("/attachments", attachmentController.GetAttachmentsByOrder)
-	group.DELETE("/attachments/:id", attachmentController.DeleteAttachment)
+	group.GET("/attachment", attachmentController.GetAttachmentsByOrder)
+	group.DELETE("/attachment/:id", attachmentController.DeleteAttachment)
 }

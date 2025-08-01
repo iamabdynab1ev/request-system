@@ -5,31 +5,28 @@ import (
 	"request-system/internal/repositories"
 	"request-system/internal/services"
 	"request-system/pkg/filestorage"
+	"request-system/pkg/middleware"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
-func runOrderRouter(group *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) /* ...другие зависимости... */ {
+func runOrderRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware, authPermissionService services.AuthPermissionServiceInterface) {
 
-	// Инициализируем ВСЕ нужные репозитории
 	txManager := repositories.NewTxManager(dbConn)
 	orderRepo := repositories.NewOrderRepository(dbConn)
-	userRepo := repositories.NewUserRepository(dbConn)         // <-- предполагаемое имя конструктора
-	statusRepo := repositories.NewStatusRepository(dbConn)     // <-- предполагаемое имя конструктора
-	priorityRepo := repositories.NewPriorityRepository(dbConn) // <-- предполагаемое имя конструктора
+	userRepo := repositories.NewUserRepository(dbConn)
+	statusRepo := repositories.NewStatusRepository(dbConn)
+	priorityRepo := repositories.NewPriorityRepository(dbConn)
 	attachRepo := repositories.NewAttachmentRepository(dbConn)
 	historyRepo := repositories.NewOrderHistoryRepository(dbConn)
 
-	// Создаем файловое хранилище
-	// ВАЖНО: "uploads" - это папка в корне проекта. Создайте ее или укажите другой путь.
 	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
 	if err != nil {
 		logger.Fatal("не удалось создать файловое хранилище", zap.Error(err))
 	}
 
-	// Передаем ВСЕ зависимости в сервис
 	orderService := services.NewOrderService(
 		txManager,
 		orderRepo,
@@ -44,8 +41,11 @@ func runOrderRouter(group *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger)
 
 	orderController := controllers.NewOrderController(orderService, logger)
 
-	group.POST("/orders", orderController.CreateOrder)
-	group.GET("/orders", orderController.GetOrders)
-	group.POST("/orders/:id/delegate", orderController.DelegateOrder)
+	secureGroup.POST("/order", orderController.CreateOrder, authMW.AuthorizeAny("orders:create", "orders:manage:all"))
+	secureGroup.GET("/order", orderController.GetOrders, authMW.AuthorizeAny("orders:view:all", "orders:view:department", "orders:view:own"))
+	secureGroup.POST("/order/:id/delegate", orderController.DelegateOrder, authMW.AuthorizeAny("orders:delegate:department", "orders:manage:all"))
+	secureGroup.GET("/order", orderController.GetOrders, authMW.AuthorizeAny("orders:view:all", "orders:view:department", "orders:view:own"))
 
+	// group.GET("/orders/:id", orderController.FindOrder, authMW.AuthorizeAny("orders:view:all", "orders:view:department", "orders:view:own")) // Просмотр конкретной заявки
+	// group.PUT("/orders/:id", orderController.UpdateOrder, authMW.AuthorizeAny("orders:update:own", "orders:manage:all")) // Обновление своей заявки
 }

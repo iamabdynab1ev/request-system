@@ -17,7 +17,7 @@ func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *
 	departmentService := services.NewDepartmentService(departmentRepository, logger)
 	departmentCtrl := controllers.NewDepartmentController(departmentService, logger)
 
-	secureGroup.GET("/departments", departmentCtrl.GetDepartments)
+	secureGroup.GET("/department", departmentCtrl.GetDepartments)
 	secureGroup.GET("/department/:id", departmentCtrl.FindDepartment)
 	secureGroup.POST("/department", departmentCtrl.CreateDepartment)
 	secureGroup.PUT("/department/:id", departmentCtrl.UpdateDepartment)

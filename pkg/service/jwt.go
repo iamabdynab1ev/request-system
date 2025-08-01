@@ -11,13 +11,13 @@ import (
 
 type JwtCustomClaim struct {
 	UserID         uint64 `json:"userID"`
-	
+	RoleID         uint64 `json:"roleID"`
 	IsRefreshToken bool
 	jwt.RegisteredClaims
 }
 
 type JWTService interface {
-	GenerateTokens(userID uint64) (string, string, error)
+	GenerateTokens(userID uint64, roleID uint64) (string, string, error)
 	ValidateToken(tokenString string) (*JwtCustomClaim, error)
 	ValidateRefreshToken(tokenString string) (uint64, error)
 	GetAccessTokenTTL() time.Duration
@@ -40,13 +40,14 @@ func NewJWTService(secretKey string, accessTokenExp, refreshTokenExp time.Durati
 	}
 }
 
-func (s *jwtService) GenerateTokens(userID uint64) (string, string, error) {
+func (s *jwtService) GenerateTokens(userID uint64, roleID uint64) (string, string, error) {
 	accessTokenExp := time.Now().UTC().Add(s.AccessTokenExp)
 	refreshTokenExp := time.Now().UTC().Add(s.RefreshTokenExp)
 	issuedAt := time.Now().UTC()
 
 	accessTokenClaims := &JwtCustomClaim{
 		UserID:         userID,
+		RoleID:         roleID,
 		IsRefreshToken: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(accessTokenExp),
@@ -56,6 +57,7 @@ func (s *jwtService) GenerateTokens(userID uint64) (string, string, error) {
 
 	refreshTokenClaims := &JwtCustomClaim{
 		UserID:         userID,
+		RoleID:         roleID,
 		IsRefreshToken: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(refreshTokenExp),
@@ -78,9 +80,10 @@ func (s *jwtService) GenerateTokens(userID uint64) (string, string, error) {
 	return accessTokenString, refreshTokenString, nil
 }
 
-// ValidateToken валидирует токен и возвращает claims.
 func (s *jwtService) ValidateToken(tokenString string) (*JwtCustomClaim, error) {
+	s.logger.Debug("ValidateToken: Получена строка токена для валидации", zap.String("receivedToken", tokenString))
 	token, err := jwt.ParseWithClaims(tokenString, &JwtCustomClaim{}, func(token *jwt.Token) (interface{}, error) {
+		s.logger.Debug("ValidateToken: Получена строка токена для валидации", zap.String("receivedToken", tokenString))
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, apperrors.ErrInvalidSigningMethod
 		}
@@ -109,7 +112,6 @@ func (s *jwtService) ValidateToken(tokenString string) (*JwtCustomClaim, error) 
 	return nil, apperrors.ErrInvalidToken
 }
 
-// ValidateRefreshToken валидирует refresh токен и возвращает userID.
 func (s *jwtService) ValidateRefreshToken(tokenString string) (uint64, error) {
 	claims, err := s.ValidateToken(tokenString)
 	if err != nil {

@@ -1,4 +1,3 @@
-
 package routes
 
 import (
@@ -17,7 +16,7 @@ func runOtdelRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.L
 	otdelService := services.NewOtdelService(otdelRepository, logger)
 	otdelCtrl := controllers.NewOtdelController(otdelService, logger)
 
-	secureGroup.GET("/otdels", otdelCtrl.GetOtdels)
+	secureGroup.GET("/otdel", otdelCtrl.GetOtdels)
 	secureGroup.GET("/otdel/:id", otdelCtrl.FindOtdel)
 	secureGroup.POST("/otdel", otdelCtrl.CreateOtdel)
 	secureGroup.PUT("/otdel/:id", otdelCtrl.UpdateOtdel)

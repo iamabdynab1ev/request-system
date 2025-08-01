@@ -1,6 +1,3 @@
-// Файл: internal/services/order_service.go
-// ИСПРАВЛЕНИЕ: Теперь вызывается функция, работающая внутри транзакции
-
 package services
 
 import (
@@ -13,6 +10,7 @@ import (
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/filestorage"
+	"request-system/pkg/types"
 	"request-system/pkg/utils"
 	"time"
 
@@ -21,8 +19,9 @@ import (
 )
 
 type OrderServiceInterface interface {
+	GetOrders(ctx context.Context, filter types.Filter, actorID uint64) ([]dto.OrderResponseDTO, uint64, error)
 	CreateOrder(ctx context.Context, data string, file *multipart.FileHeader) (*dto.OrderResponseDTO, error)
-	DelegateOrder(ctx context.Context, orderID uint64, dto dto.DelegateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error)
+	DelegateOrder(ctx context.Context, orderID uint64, delegatePayload dto.DelegateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error)
 }
 
 type OrderService struct {
@@ -49,10 +48,44 @@ func NewOrderService(
 	logger *zap.Logger,
 ) OrderServiceInterface {
 	return &OrderService{
-		txManager: txManager, orderRepo: orderRepo, userRepo: userRepo,
-		statusRepo: statusRepo, priorityRepo: priorityRepo, attachRepo: attachRepo,
-		historyRepo: historyRepo, fileStorage: fileStorage, logger: logger,
+		txManager:    txManager,
+		orderRepo:    orderRepo,
+		userRepo:     userRepo,
+		statusRepo:   statusRepo,
+		priorityRepo: priorityRepo,
+		attachRepo:   attachRepo,
+		historyRepo:  historyRepo,
+		fileStorage:  fileStorage,
+		logger:       logger,
 	}
+}
+
+func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, actorID uint64) ([]dto.OrderResponseDTO, uint64, error) {
+	
+	actor, err := s.userRepo.FindUserByID(ctx, actorID)
+	if err != nil {
+		s.logger.Error("GetOrders: не удалось найти пользователя по actorID", zap.Uint64("actorID", actorID), zap.Error(err))
+		return nil, 0, apperrors.ErrUserNotFound
+	}
+	orders, totalCount, err := s.orderRepo.GetOrders(ctx, filter, actor)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if len(orders) == 0 {
+		return []dto.OrderResponseDTO{}, totalCount, nil
+	}
+
+	dtos := make([]dto.OrderResponseDTO, 0, len(orders))
+	for _, order := range orders {
+		orderResponse, err := s.buildOrderResponse(ctx, order.ID)
+		if err != nil {
+			return nil, 0, fmt.Errorf("ошибка при построении DTO для заявки %d: %w", order.ID, err)
+		}
+		dtos = append(dtos, *orderResponse)
+	}
+
+	return dtos, totalCount, nil
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multipart.FileHeader) (*dto.OrderResponseDTO, error) {
@@ -67,15 +100,14 @@ func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multi
 	}
 
 	var finalOrderID uint64
-
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		status, err := s.statusRepo.FindByCode(ctx, "OPEN")
 		if err != nil {
-			return fmt.Errorf("не найден статус по умолчанию 'OPEN': %w", err)
+			return fmt.Errorf("не найден статус 'OPEN': %w", err)
 		}
 		priority, err := s.priorityRepo.FindByCode(ctx, "MEDIUM")
 		if err != nil {
-			return fmt.Errorf("не найден приоритет по умолчанию 'MEDIUM': %w", err)
+			return fmt.Errorf("не найден приоритет 'MEDIUM': %w", err)
 		}
 
 		executor, err := s.userRepo.FindHeadByDepartmentInTx(ctx, tx, createDTO.DepartmentID)
@@ -90,28 +122,35 @@ func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multi
 			StatusID:     uint64(status.ID),
 			PriorityID:   uint64(priority.ID),
 			CreatorID:    uint64(creatorID),
-			ExecutorID:   uint64(executor.ID),
+			ExecutorID:   executor.ID,
 		}
 
 		orderID, err := s.orderRepo.Create(ctx, tx, orderEntity)
 		if err != nil {
-			return fmt.Errorf("не удалось создать запись о заявке в БД: %w", err)
+			return fmt.Errorf("не удалось создать заявку: %w", err)
 		}
-
 		finalOrderID = orderID
-		createHistory := &entities.OrderHistory{OrderID: orderID, UserID: uint64(creatorID), EventType: "CREATE", Comment: &orderEntity.Name}
+		createHistory := &entities.OrderHistory{
+			OrderID:   orderID,
+			UserID:    uint64(creatorID),
+			EventType: "CREATE",
+			Comment:   &orderEntity.Name,
+		}
 		if err := s.historyRepo.CreateInTx(ctx, tx, createHistory, nil); err != nil {
-			s.logger.Error("[OrderService] ОШИБКА: Не удалось создать запись в истории (CREATE)")
+			return err
+		}
+		delegationComment := fmt.Sprintf("Назначен ответственный: %s", executor.Fio)
+		delegateHistory := &entities.OrderHistory{
+			OrderID:   orderID,
+			UserID:    uint64(creatorID),
+			EventType: "DELEGATION",
+			NewValue:  &executor.Fio,
+			Comment:   &delegationComment,
+		}
+		if err := s.historyRepo.CreateInTx(ctx, tx, delegateHistory, nil); err != nil {
 			return err
 		}
 
-		delegationComment := fmt.Sprintf("Назначен ответственный: %s", executor.Fio)
-		delegateHistory := &entities.OrderHistory{OrderID: orderID, UserID: uint64(creatorID), EventType: "DELEGATION", NewValue: &executor.Fio, Comment: &delegationComment}
-		if err := s.historyRepo.CreateInTx(ctx, tx, delegateHistory, nil); err != nil {
-			s.logger.Error("[OrderService] ОШИБКА: Не удалось создать запись в истории (DELEGATION)")
-			return err
-		}
-		// --- БЛОК ДЛЯ СОХРАНЕНИЯ КОММЕНТАРИЯ В ИСТОРИИ ---
 		if createDTO.Comment != nil && *createDTO.Comment != "" {
 			commentHistory := &entities.OrderHistory{
 				OrderID:   orderID,
@@ -120,31 +159,26 @@ func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multi
 				Comment:   createDTO.Comment,
 			}
 			if err := s.historyRepo.CreateInTx(ctx, tx, commentHistory, nil); err != nil {
-				s.logger.Error("[OrderService] ОШИБКА: Не удалось создать запись в истории (COMMENT)")
 				return err
 			}
 		}
 		if file != nil {
-			s.logger.Info("[OrderService] УСЛОВИЕ 'if file != nil' ВЫПОЛНИЛОСЬ! Начинаю сохранение файла.")
 			filePath, err := s.fileStorage.Save(file)
 			if err != nil {
-				s.logger.Error("[OrderService] Ошибка при сохранении файла на диск", zap.Error(err))
 				return fmt.Errorf("не удалось сохранить файл: %w", err)
 			}
-			s.logger.Info("[OrderService] Файл успешно сохранен на диск", zap.String("path", filePath))
-
-			attachEntity := &entities.Attachment{
-				OrderID: orderID, UserID: uint64(creatorID), FileName: file.Filename,
-				FilePath: filePath, FileType: file.Header.Get("Content-Type"), FileSize: file.Size,
+			attach := &entities.Attachment{
+				OrderID:  orderID,
+				UserID:   uint64(creatorID),
+				FileName: file.Filename,
+				FilePath: filePath,
+				FileType: file.Header.Get("Content-Type"),
+				FileSize: file.Size,
 			}
-
-			_, err = s.attachRepo.Create(ctx, tx, attachEntity)
+			_, err = s.attachRepo.Create(ctx, tx, attach)
 			if err != nil {
-				s.logger.Error("[OrderService] Ошибка при сохранении информации о файле в БД", zap.Error(err))
-
-				return fmt.Errorf("не удалось создать запись о вложении: %w", err)
+				return fmt.Errorf("не удалось создать вложение: %w", err)
 			}
-			s.logger.Info("[OrderService] Информация о файле успешно сохранена в БД")
 			attachHistory := &entities.OrderHistory{
 				OrderID:   orderID,
 				UserID:    uint64(creatorID),
@@ -152,23 +186,24 @@ func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multi
 				Comment:   &file.Filename,
 			}
 			if err := s.historyRepo.CreateInTx(ctx, tx, attachHistory, nil); err != nil {
-				s.logger.Error("[OrderService] ОШИБКА: Не удалось создать запись в истории (ATTACHMENT_ADDED)")
 				return err
 			}
-
-		} else {
-			s.logger.Warn("[OrderService] УСЛОВИЕ 'if file != nil' НЕ ВЫПОЛНИЛОСЬ! Переменная file оказалась nil.")
 		}
 		return nil
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("ошибка при создании заявки. Исходная проблема: [%v]", err)
+		return nil, fmt.Errorf("ошибка при создании заявки: %w", err)
 	}
-
 	return s.buildOrderResponse(ctx, finalOrderID)
 }
-func (s *OrderService) DelegateOrder(ctx context.Context, orderID uint64, dto dto.DelegateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error) {
+
+func (s *OrderService) DelegateOrder(
+	ctx context.Context,
+	orderID uint64,
+	delegatePayload dto.DelegateOrderDTO,
+	file *multipart.FileHeader,
+) (*dto.OrderResponseDTO, error) {
 	actorID, err := utils.GetUserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -179,45 +214,93 @@ func (s *OrderService) DelegateOrder(ctx context.Context, orderID uint64, dto dt
 		if err != nil {
 			return err
 		}
+		actor, err := s.userRepo.FindUserByID(ctx, actorID)
+		if err != nil {
+			s.logger.Error("Не удалось найти пользователя-актора по ID", zap.Uint64("actorID", actorID), zap.Error(err))
+			return apperrors.ErrUserNotFound
+		}
 
-		// Здесь ваша логика проверки прав доступа, можно будет добавить позже
-		if order.ExecutorID != uint64(actorID) {
-			// TODO: Add role check for Admin
+		const SuperAdminRoleName string = "Super Admin"
+		const AdminRoleName string = "Admin"
+		const UserRoleName string = "User"
+
+		isCurrentExecutor := (order.ExecutorID == actor.ID)
+		isSuperAdmin := (actor.RoleName == SuperAdminRoleName)
+		isAdmin := (actor.RoleName == AdminRoleName)
+		isUserInSameDepartment := (actor.RoleName == UserRoleName && actor.DepartmentID == order.DepartmentID)
+
+		canDelegate := isCurrentExecutor || isSuperAdmin || isAdmin || isUserInSameDepartment
+
+		if !canDelegate {
+			s.logger.Warn("Отказано в доступе на делегирование заказа. Пользователь не удовлетворяет ни одному из правил.",
+				zap.Uint64("orderID", order.ID),
+				zap.Uint64("actorID", actor.ID),
+				zap.String("actorRoleName", actor.RoleName),
+				zap.Uint64("orderDepartmentID", order.DepartmentID),
+				zap.Uint64("actorDepartmentID", actor.DepartmentID),
+				zap.Bool("isCurrentExecutor", isCurrentExecutor),
+				zap.Bool("isSuperAdmin", isSuperAdmin),
+				zap.Bool("isAdmin", isAdmin),
+				zap.Bool("isUserInSameDepartment", isUserInSameDepartment),
+			)
+			return apperrors.ErrForbidden
 		}
 
 		hasChanges := false
 
-		// ... (все if'ы для Name, Address, и т.д. остаются без изменений)
-		
-		if dto.ExecutorID != nil && order.ExecutorID != uint64(*dto.ExecutorID) {
-			newExecutor, err := s.userRepo.FindUserByID(ctx, uint64(*dto.ExecutorID))
-			if err != nil {
-				s.logger.Warn("delegateOrder: attempt to assign non-existent executor", zap.Error(err), zap.Uint64p("executorID", dto.ExecutorID))
-				return apperrors.ErrUserNotFound
+		if delegatePayload.ExecutorID != nil {
+			newID := *delegatePayload.ExecutorID
+			if order.ExecutorID != newID {
+				newExec, err := s.userRepo.FindUserByID(ctx, newID)
+				if err != nil {
+					return apperrors.ErrUserNotFound
+				}
+				if newExec.DepartmentID != order.DepartmentID && !isSuperAdmin && !isAdmin {
+					return apperrors.ErrForbidden
+				}
+				delegationHistory := &entities.OrderHistory{
+					OrderID:   orderID,
+					UserID:    actorID,
+					EventType: "DELEGATION",
+					NewValue:  &newExec.Fio,
+				}
+				if err := s.historyRepo.CreateInTx(ctx, tx, delegationHistory, nil); err != nil {
+					return err
+				}
+				order.ExecutorID = newID
+				hasChanges = true
 			}
+		}
 
-            // ---------- НАША НОВАЯ ПРОВЕРКА! ----------
-            // Убеждаемся, что новый исполнитель работает в том же департаменте, что и заявка
-            if newExecutor.DepartmentID != order.DepartmentID {
-                s.logger.Warn("delegateOrder: Попытка назначить исполнителя из другого департамента",
-                    zap.Uint64("orderID", orderID),
-                    zap.Uint64("orderDepartmentID", order.DepartmentID),
-                    zap.Uint64("executorDepartmentID", newExecutor.DepartmentID),
-                )
-                return apperrors.NewHttpError(400, "Нельзя назначить исполнителя из другого департамента.", nil)
-            }
-            // ---------------------------------------------
-
-			history := &entities.OrderHistory{OrderID: orderID, UserID: uint64(actorID), EventType: "DELEGATION", NewValue: &newExecutor.Fio}
-			if err := s.historyRepo.CreateInTx(ctx, tx, history, nil); err != nil {
+		if delegatePayload.StatusID != nil && *delegatePayload.StatusID != order.StatusID {
+			newStatus, err := s.statusRepo.FindStatus(ctx, *delegatePayload.StatusID)
+			if err != nil {
 				return err
 			}
-
-			order.ExecutorID = uint64(*dto.ExecutorID)
+			statusHistory := &entities.OrderHistory{
+				OrderID:   orderID,
+				UserID:    actorID,
+				EventType: "STATUS_CHANGE",
+				NewValue:  &newStatus.Name,
+			}
+			if err := s.historyRepo.CreateInTx(ctx, tx, statusHistory, nil); err != nil {
+				return err
+			}
+			order.StatusID = *delegatePayload.StatusID
 			hasChanges = true
 		}
 
-		// ... (все остальные if'ы для StatusID, PriorityID, Comment, File и т.д. остаются без изменений)
+		if delegatePayload.Comment != nil && *delegatePayload.Comment != "" {
+			commentHistory := &entities.OrderHistory{
+				OrderID:   orderID,
+				UserID:    actorID,
+				EventType: "COMMENT",
+				Comment:   delegatePayload.Comment,
+			}
+			if err := s.historyRepo.CreateInTx(ctx, tx, commentHistory, nil); err != nil {
+				return err
+			}
+		}
 
 		if hasChanges {
 			if err := s.orderRepo.Update(ctx, tx, order); err != nil {
@@ -225,44 +308,75 @@ func (s *OrderService) DelegateOrder(ctx context.Context, orderID uint64, dto dt
 			}
 		}
 
+		if file != nil {
+			filePath, err := s.fileStorage.Save(file)
+			if err != nil {
+				return err
+			}
+			attach := &entities.Attachment{
+				OrderID:  orderID,
+				UserID:   actorID,
+				FileName: file.Filename,
+				FilePath: filePath,
+				FileType: file.Header.Get("Content-Type"),
+				FileSize: file.Size,
+			}
+			attachmentID, err := s.attachRepo.Create(ctx, tx, attach)
+			if err != nil {
+				return err
+			}
+			attachHistory := &entities.OrderHistory{
+				OrderID:   orderID,
+				UserID:    actorID,
+				EventType: "ATTACHMENT_ADDED",
+				Comment:   &file.Filename,
+			}
+			if err := s.historyRepo.CreateInTx(ctx, tx, attachHistory, &attachmentID); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 
 	if err != nil {
-		s.logger.Error("ошибка при выполнении транзакции делегирования", zap.Error(err), zap.Uint64("orderID", orderID))
 		return nil, err
 	}
 	return s.buildOrderResponse(ctx, orderID)
 }
 
-func (s *OrderService) buildOrderResponse(ctx context.Context, orderID uint64) (*dto.OrderResponseDTO, error) {
+func (s *OrderService) buildOrderResponse(
+	ctx context.Context,
+	orderID uint64,
+) (*dto.OrderResponseDTO, error) {
 	order, err := s.orderRepo.FindByID(ctx, orderID)
 	if err != nil {
 		return nil, err
 	}
-
 	creator, _ := s.userRepo.FindUserByID(ctx, uint64(order.CreatorID))
-	executor, _ := s.userRepo.FindUserByID(ctx, order.ExecutorID)
+	var executor *entities.User
+	if order.ExecutorID != 0 {
+		executor, _ = s.userRepo.FindUserByID(ctx, order.ExecutorID)
+	}
 	attachments, _ := s.attachRepo.FindAllByOrderID(ctx, orderID, 5, 0)
-
 	creatorDTO := dto.ShortUserDTO{ID: order.CreatorID}
 	if creator != nil {
 		creatorDTO.Fio = creator.Fio
 	}
-
-	executorDTO := dto.ShortUserDTO{ID: uint64(order.ExecutorID)}
+	executorDTO := dto.ShortUserDTO{}
 	if executor != nil {
+		executorDTO.ID = executor.ID
 		executorDTO.Fio = executor.Fio
 	}
-
 	var attachmentsDTO []dto.AttachmentResponseDTO
 	for _, att := range attachments {
 		attachmentsDTO = append(attachmentsDTO, dto.AttachmentResponseDTO{
-			ID: att.ID, FileName: att.FileName, FileSize: att.FileSize,
-			FileType: att.FileType, URL: "/static/" + att.FilePath,
+			ID:       att.ID,
+			FileName: att.FileName,
+			FileSize: att.FileSize,
+			FileType: att.FileType,
+			URL:      "/static/" + att.FilePath,
 		})
 	}
-
 	return &dto.OrderResponseDTO{
 		ID:           order.ID,
 		Name:         order.Name,

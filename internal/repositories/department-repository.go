@@ -20,6 +20,7 @@ type DepartmentRepositoryInterface interface {
 	CreateDepartment(ctx context.Context, dto dto.CreateDepartmentDTO) error
 	UpdateDepartment(ctx context.Context, id uint64, dto dto.UpdateDepartmentDTO) error
 	DeleteDepartment(ctx context.Context, id uint64) error
+	IsManager(ctx context.Context, id uint64) (bool, error)
 }
 
 type DepartmentRepository struct {
@@ -31,6 +32,10 @@ func NewDepartmentRepository(storage *pgxpool.Pool) DepartmentRepositoryInterfac
 	return &DepartmentRepository{
 		storage: storage,
 	}
+}
+
+func (r *DepartmentRepository) IsManager(ctx context.Context, id uint64) (bool, error) {
+	return false, nil
 }
 
 func (r *DepartmentRepository) GetDepartments(ctx context.Context, limit uint64, offset uint64) ([]dto.DepartmentDTO, error) {

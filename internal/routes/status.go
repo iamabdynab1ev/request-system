@@ -15,7 +15,7 @@ func runStatusRouter(api *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) 
 	statusService := services.NewStatusService(statusRepository, logger)
 	statusCtrl := controllers.NewStatusController(statusService, logger)
 
-	api.GET("/statuses", statusCtrl.GetStatuses)
+	api.GET("/status", statusCtrl.GetStatuses)
 	api.GET("/status/:id", statusCtrl.FindStatus)
 	api.POST("/status", statusCtrl.CreateStatus)
 	api.PUT("/status/:id", statusCtrl.UpdateStatus)

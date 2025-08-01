@@ -15,7 +15,7 @@ func runPositionRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *za
 	positionService := services.NewPositionService(positionRepository, logger)
 	positionCtrl := controllers.NewPositionController(positionService, logger)
 
-	secureGroup.GET("/positions", positionCtrl.GetPositions)
+	secureGroup.GET("/position", positionCtrl.GetPositions)
 	secureGroup.GET("/position/:id", positionCtrl.FindPosition)
 	secureGroup.POST("/position", positionCtrl.CreatePosition)
 	secureGroup.PUT("/position/:id", positionCtrl.UpdatePosition)

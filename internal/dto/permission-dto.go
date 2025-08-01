@@ -1,12 +1,14 @@
 // Package dto содержит структуры передачи данных.
 package dto
 
+import "time"
+
 type PermissionDTO struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID          uint64    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type CreatePermissionDTO struct {
@@ -20,6 +22,6 @@ type UpdatePermissionDTO struct {
 }
 
 type ShortPermissionDTO struct {
-	ID   int    `json:"id"`
+	ID   uint64 `json:"id"`
 	Name string `json:"name"`
 }
