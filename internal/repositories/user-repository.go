@@ -15,8 +15,7 @@ import (
 )
 
 const userTableRepo = "users"
-
-const userSelectFieldsForEntityRepo = "u.id, u.fio, u.email, u.phone_number, u.password, u.position, u.status_id, u.role_id, u.branch_id, u.department_id, u.office_id, u.otdel_id, r.name as role_name, u.created_at, u.updated_at, u.deleted_at"
+const userSelectFieldsForEntityRepo = "u.id, u.fio, u.email, u.phone_number, u.password, u.position, u.status_id, u.photo_url, u.role_id, u.branch_id, u.department_id, u.office_id, u.otdel_id, r.name as role_name, u.created_at, u.updated_at, u.deleted_at"
 const userJoinClauseRepo = "users u JOIN roles r ON u.role_id = r.id"
 
 var userAllowedFilterFields = map[string]bool{
@@ -61,7 +60,8 @@ func NewUserRepository(storage *pgxpool.Pool) UserRepositoryInterface {
 func (r *UserRepository) scanUser(row pgx.Row, user *entities.User) error {
 	return row.Scan(
 		&user.ID, &user.Fio, &user.Email, &user.PhoneNumber, &user.Password,
-		&user.Position, &user.StatusID, &user.RoleID, &user.BranchID,
+		&user.Position, &user.StatusID, &user.PhotoURL,
+		&user.RoleID, &user.BranchID,
 		&user.DepartmentID, &user.OfficeID, &user.OtdelID, &user.RoleName,
 		&user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 	)
@@ -258,8 +258,8 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID uint64, newP
 func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) (*entities.User, error) {
 	query := fmt.Sprintf(`
         WITH ins AS (
-            INSERT INTO %s (fio, email, phone_number, password, position, status_id, role_id, branch_id, department_id, office_id, otdel_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            INSERT INTO %s (fio, email, phone_number, password, position, status_id, role_id, branch_id, department_id, office_id, otdel_id, photo_url)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING id
         )
         SELECT %s FROM %s WHERE u.id = (SELECT id FROM ins)
@@ -278,6 +278,7 @@ func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) 
 		entity.DepartmentID,
 		entity.OfficeID,
 		entity.OtdelID,
+		entity.PhotoURL,
 	)
 
 	if err := r.scanUser(row, createdEntity); err != nil {
@@ -305,8 +306,10 @@ func (r *UserRepository) UpdateUser(ctx context.Context, entity *entities.User) 
 			UPDATE %s
 			SET fio = $1, email = $2, phone_number = $3, password = $4, position = $5, 
 				status_id = $6, role_id = $7, branch_id = $8, department_id = $9, 
-				office_id = $10, otdel_id = $11, updated_at = CURRENT_TIMESTAMP
-			WHERE id = $12 AND deleted_at IS NULL
+				office_id = $10, otdel_id = $11, 
+                photo_url = $12, -- <-- ДОБАВЛЕНО
+                updated_at = CURRENT_TIMESTAMP
+			WHERE id = $13 AND deleted_at IS NULL -- <-- Увеличиваем счетчик до $13
 			RETURNING id
 		)
 		SELECT %s FROM %s WHERE u.id = (SELECT id FROM upd)
@@ -325,6 +328,7 @@ func (r *UserRepository) UpdateUser(ctx context.Context, entity *entities.User) 
 		entity.DepartmentID,
 		entity.OfficeID,
 		entity.OtdelID,
+		entity.PhotoURL,
 		entity.ID,
 	)
 

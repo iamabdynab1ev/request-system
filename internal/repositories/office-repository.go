@@ -12,7 +12,7 @@ import (
 )
 
 const officeTableForJoinFinal = "offices"
-const officeFieldsForJoinFinal = "o.id, o.name, o.address, o.open_date, o.branches_id, o.status_id, o.created_at, o.updated_at"
+const officeFieldsForJoinFinal = "o.id, o.name, o.address, o.open_date, o.branch_id, o.status_id, o.created_at, o.updated_at"
 
 const branchTableForOfficeJoinFinalRepo = "branches"
 const branchFieldsShortForOfficeJoinFinalRepo = "b.id, b.name, b.short_name"
@@ -45,7 +45,7 @@ func (r *OfficeRepository) GetOffices(ctx context.Context, limit uint64, offset 
 			%s,
             %s
 		FROM %s o
-		LEFT JOIN %s b ON o.branches_id = b.id
+		LEFT JOIN %s b ON o.branch_id = b.id
         LEFT JOIN %s s ON o.status_id = s.id
 		`,
 		officeFieldsForJoinFinal,
@@ -123,7 +123,7 @@ func (r *OfficeRepository) FindOffice(ctx context.Context, id uint64) (*dto.Offi
             %s,
 			%s
 		FROM %s o
-		LEFT JOIN %s b ON o.branches_id = b.id
+		LEFT JOIN %s b ON o.branch_id = b.id
 		LEFT JOIN %s s ON o.status_id = s.id
 		WHERE o.id = $1
 	`,
@@ -181,7 +181,7 @@ func (r *OfficeRepository) FindOffice(ctx context.Context, id uint64) (*dto.Offi
 
 func (r *OfficeRepository) CreateOffice(ctx context.Context, dto dto.CreateOfficeDTO) error {
 	query := fmt.Sprintf(`
-        INSERT INTO %s (name, address, open_date, branches_id, status_id)
+        INSERT INTO %s (name, address, open_date, branch_id, status_id)
         VALUES ($1, $2, $3, $4, $5)
     `, officeTableForJoinFinal)
 
@@ -194,7 +194,7 @@ func (r *OfficeRepository) CreateOffice(ctx context.Context, dto dto.CreateOffic
 		dto.Name,
 		dto.Address,
 		openDate,
-		dto.BranchesID,
+		dto.BranchID,
 		dto.StatusID,
 	)
 
@@ -217,7 +217,7 @@ func (r *OfficeRepository) UpdateOffice(ctx context.Context, id uint64, dto dto.
 
 	query := fmt.Sprintf(`
         UPDATE %s
-        SET name = $1, address = $2, open_date = $3, branches_id = $4, status_id = $5, updated_at = CURRENT_TIMESTAMP
+        SET name = $1, address = $2, open_date = $3, branch_id = $4, status_id = $5, updated_at = CURRENT_TIMESTAMP
         WHERE id = $6
     `, officeTableForJoinFinal)
 
@@ -225,7 +225,7 @@ func (r *OfficeRepository) UpdateOffice(ctx context.Context, id uint64, dto dto.
 		dto.Name,
 		dto.Address,
 		parsedOpenDate,
-		dto.BranchesID,
+		dto.BranchID,
 		dto.StatusID,
 		id,
 	)

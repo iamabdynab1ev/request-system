@@ -7,12 +7,12 @@ type LoginDTO struct {
 
 type SendCodeDTO struct {
 	Email string `json:"email" validate:"omitempty,email"`
-	Phone string `json:"phone" validate:"omitempty,e164_TJ"`
+	Phone string `json:"phone_number" validate:"omitempty,e164_TJ"`
 }
 
 type VerifyCodeDTO struct {
 	Email string `json:"email" validate:"omitempty,email"`
-	Phone string `json:"phone" validate:"omitempty,e164_TJ"`
+	Phone string `json:"phone_number" validate:"omitempty,e164_TJ"`
 	Code  string `json:"code" validate:"required,len=4,numeric"`
 }
 
@@ -26,7 +26,7 @@ type ForgotPasswordOptionsDTO struct {
 
 type ForgotPasswordSendDTO struct {
 	Email  string `json:"email"  validate:"required,email"`
-	Method string `json:"method" validate:"required,oneof=email phone"`
+	Method string `json:"method" validate:"required,oneof=email phone_number"`
 }
 
 type ResetPasswordEmailDTO struct {
@@ -40,20 +40,36 @@ type ResetPasswordPhoneDTO struct {
 	NewPassword string `json:"newPassword"  validate:"required,min=6"`
 }
 
-type RefreshTokenDTO struct {
-	RefreshToken string `json:"refreshToken" validate:"required"`
-}
-
 type AuthResponseDTO struct {
-	AccessToken  string        `json:"accessToken"`
-	RefreshToken string        `json:"refreshToken"`
-	User         UserPublicDTO `json:"user"`
+	AccessToken string        `json:"accessToken"`
+	User        UserPublicDTO `json:"user"`
 }
 
 type UserPublicDTO struct {
-	ID     uint64 `json:"id"`
-	Email  string `json:"email"`
-	Phone  string `json:"phone,omitempty"`
-	FIO    string `json:"fio"`
-	RoleID uint64 `json:"role_id"`	
+	ID           uint64  `json:"id"`
+	Email        string  `json:"email"`
+	Phone        string  `json:"phone_number,omitempty"`
+	FIO          string  `json:"fio"`
+	RoleID       uint64  `json:"role_id"`
+	PhotoURL     *string `json:"photo_url,omitempty"`
+	Position     string  `json:"position"`
+	BranchID     uint64  `json:"branch_id"`
+	DepartmentID uint64  `json:"department_id"`
+	OfficeID     *uint64 `json:"officeId,omitempty"`
+	OtdelID      *uint64 `json:"otdelId,omitempty"`
+}
+
+type UserProfileDTO struct {
+	ID           uint64   `json:"id"`
+	Email        string   `json:"email"`
+	Phone        string   `json:"phone_number,omitempty"`
+	FIO          string   `json:"fio"`
+	RoleID       uint64   `json:"role_id"`
+	Permissions  []string `json:"permissions"`
+	PhotoURL     *string  `json:"photo_url,omitempty"`
+	Position     string   `json:"position"`
+	BranchID     uint64   `json:"branch_id"`
+	DepartmentID uint64   `json:"department_id"`
+	OfficeID     *uint64  `json:"officeId,omitempty"`
+	OtdelID      *uint64  `json:"otdelId,omitempty"`
 }

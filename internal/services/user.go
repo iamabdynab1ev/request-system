@@ -62,6 +62,7 @@ func userEntityToDTO(entity *entities.User, status *dto.ShortStatusDTO) *dto.Use
 		Office:      entity.OfficeID,
 		Otdel:       entity.OtdelID,
 		Status:      *status,
+		PhotoURL:    entity.PhotoURL,
 		CreatedAt:   entity.CreatedAt.Format("2006-01-02, 15:04:05"),
 		UpdatedAt:   entity.UpdatedAt.Format("2006-01-02, 15:04:05"),
 	}
@@ -131,6 +132,7 @@ func (service *UserService) CreateUser(ctx context.Context, payload dto.CreateUs
 		DepartmentID: payload.DepartmentID,
 		OfficeID:     payload.OfficeID,
 		OtdelID:      payload.OtdelID,
+		PhotoURL:     payload.PhotoURL,
 	}
 
 	createdEntity, err := service.userRepository.CreateUser(ctx, userEntity)
@@ -186,6 +188,9 @@ func (service *UserService) UpdateUser(ctx context.Context, payload dto.UpdateUs
 	}
 	if payload.DepartmentID != 0 {
 		existingUser.DepartmentID = payload.DepartmentID
+	}
+	if payload.PhotoURL != nil {
+		existingUser.PhotoURL = payload.PhotoURL
 	}
 
 	existingUser.OfficeID = payload.OfficeID

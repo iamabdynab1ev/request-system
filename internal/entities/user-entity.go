@@ -16,6 +16,7 @@ type User struct {
 	DepartmentID uint64  `json:"department_id"`
 	OfficeID     *uint64 `json:"office_id"`
 	OtdelID      *uint64 `json:"otdel_id"`
+	PhotoURL     *string `json:"photo_url,omitempty"`
 
 	types.BaseEntity
 	types.SoftDelete

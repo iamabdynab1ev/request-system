@@ -18,10 +18,9 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 
 	api := e.Group("/api")
 
-	runAuthRouter(api, dbConn, redisClient, jwtSvc, logger)
-	runStatusRouter(api, dbConn, logger)
-
 	authMW := middleware.NewAuthMiddleware(jwtSvc, authPermissionService, logger)
+	runAuthRouter(api, dbConn, redisClient, jwtSvc, logger, authMW)
+	runStatusRouter(api, dbConn, logger)
 
 	secureGroup := api.Group("", authMW.Auth)
 
@@ -29,7 +28,7 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	if err != nil {
 		logger.Fatal("не удалось создать файловое хранилище", zap.Error(err))
 	}
-
+	runUploadRouter(secureGroup, fileStorage, logger)
 	RunProretyRouter(secureGroup, dbConn, logger)
 	runDepartmentRouter(secureGroup, dbConn, logger)
 	runOtdelRouter(secureGroup, dbConn, logger)
@@ -40,17 +39,13 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	runPermissionRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
 	runRoleRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
 	runRolePermissionRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
-	runUserRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
+	runUserRouter(secureGroup, dbConn, logger, authMW, authPermissionService, fileStorage)
 	runOrderRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
-
 	runEquipmentRouter(secureGroup, dbConn, logger)
-	// RunOrderDelegrationRouter(secureGroup, dbConn, jwtSvc, logger, authMW, authPermissionService)
-	// runOrderCommentRouter(secureGroup, dbConn, jwtSvc, logger)
+
 	RunOrderDocumentRouter(secureGroup, dbConn, logger)
 	runPositionRouter(secureGroup, dbConn, logger)
-
 	runOrderHistoryRouter(secureGroup, dbConn, logger)
-
 	runAttachmentRouter(secureGroup, dbConn, fileStorage, logger)
 
 	logger.Info("INIT_ROUTER: Создание маршрутов завершено")

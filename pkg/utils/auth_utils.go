@@ -1,20 +1,35 @@
 package utils
 
 import (
+	"fmt"
+
+	"github.com/go-playground/validator/v10"
 	"golang.org/x/crypto/bcrypt"
-	"fmt" 
 )
 
-
 func HashPassword(password string) (string, error) {
-    bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-    if err != nil {
-        return "", fmt.Errorf("не удалось хешировать пароль: %w", err)
-    }
-    return string(bytes), nil
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("не удалось хешировать пароль: %w", err)
+	}
+	return string(bytes), nil
 }
 
-
 func ComparePasswords(hashedPassword string, plainPassword string) error {
-    return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(plainPassword))
+	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(plainPassword))
+}
+
+type CustomValidator struct {
+	validator *validator.Validate
+}
+
+func NewValidator() *CustomValidator {
+	return &CustomValidator{validator: validator.New()}
+}
+
+func (cv *CustomValidator) Validate(i interface{}) error {
+	if err := cv.validator.Struct(i); err != nil {
+		return err
+	}
+	return nil
 }

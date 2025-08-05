@@ -13,7 +13,7 @@ import (
 )
 
 const otdelTable = "otdels"
-const otdelTableFields = "id, name, status_id, departments_id, created_at, updated_at"
+const otdelTableFields = "id, name, status_id, department_id, created_at, updated_at"
 
 type OtdelRepositoryInterface interface {
 	GetOtdels(ctx context.Context, limit uint64, offset uint64) ([]dto.OtdelDTO, error)
@@ -122,7 +122,7 @@ func (r *OtdelRepository) FindOtdel(ctx context.Context, id uint64) (*dto.OtdelD
 
 func (r *OtdelRepository) CreateOtdel(ctx context.Context, dto dto.CreateOtdelDTO) error {
 	query := fmt.Sprintf(`
-        INSERT INTO %s (name, status_id, departments_id)
+        INSERT INTO %s (name, status_id, department_id)
         VALUES ($1, $2, $3)
     `, otdelTable)
 
@@ -141,7 +141,7 @@ func (r *OtdelRepository) CreateOtdel(ctx context.Context, dto dto.CreateOtdelDT
 func (r *OtdelRepository) UpdateOtdel(ctx context.Context, id uint64, dto dto.UpdateOtdelDTO) error {
 	query := fmt.Sprintf(`
         UPDATE %s
-        SET name = $1, status_id = $2, departments_id = $3, updated_at = CURRENT_TIMESTAMP
+        SET name = $1, status_id = $2, department_id = $3, updated_at = CURRENT_TIMESTAMP
         WHERE id = $4
     `, otdelTable)
 

@@ -48,7 +48,6 @@ func (s *PriorityService) CreatePriority(ctx context.Context, dto dto.CreatePrio
 	return createdPriority, nil
 }
 
-// Updated to return the updated DTO.
 func (s *PriorityService) UpdatePriority(ctx context.Context, id uint64, dto dto.UpdatePriorityDTO) (*dto.PriorityDTO, error) {
 	updatedPriority, err := s.priorityRepository.UpdatePriority(ctx, id, dto)
 	if err != nil {

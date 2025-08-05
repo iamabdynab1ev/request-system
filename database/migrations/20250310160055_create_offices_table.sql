@@ -6,13 +6,13 @@ CREATE TABLE offices (
     address TEXT NOT NULL,
     open_date DATE NOT NULL,
 
-    branches_id INT NOT NULL,
+    branche_id INT NOT NULL,
     status_id INT NOT NULL,
 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT fk_office_branches_id FOREIGN KEY (branches_id) REFERENCES branches(id),
+    CONSTRAINT fk_office_branches_id FOREIGN KEY (branche_id) REFERENCES branche(id),
     CONSTRAINT fk_office_status_id FOREIGN KEY (status_id) REFERENCES statuses(id)
 );
 -- +goose StatementEnd

@@ -15,9 +15,9 @@ func runBranchRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.
 	branchService := services.NewBranchService(branchRepository, logger)
 	branchCtrl := controllers.NewBranchController(branchService, logger)
 
-	secureGroup.GET("/branche", branchCtrl.GetBranches)
-	secureGroup.GET("/branche/:id", branchCtrl.FindBranch)
-	secureGroup.POST("/branche", branchCtrl.CreateBranch)
-	secureGroup.PUT("/branche/:id", branchCtrl.UpdateBranch)
-	secureGroup.DELETE("/branche/:id", branchCtrl.DeleteBranch)
+	secureGroup.GET("/branch", branchCtrl.GetBranches)
+	secureGroup.GET("/branch/:id", branchCtrl.FindBranch)
+	secureGroup.POST("/branch", branchCtrl.CreateBranch)
+	secureGroup.PUT("/branch/:id", branchCtrl.UpdateBranch)
+	secureGroup.DELETE("/branch/:id", branchCtrl.DeleteBranch)
 }

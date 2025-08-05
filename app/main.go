@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"request-system/internal/routes"
 	"request-system/pkg/database/postgresql"
@@ -53,22 +55,47 @@ func main() {
 
 	e := echo.New()
 	logger := applogger.NewLogger()
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Response().Header().Set("ngrok-skip-browser-warning", "true")
+			return next(c)
+		}
+	})
+
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{
 			"http://localhost:5173",
-			"https://bedd20e58acf.ngrok-free.app",
+			"https://65006e9a1844.ngrok-free.app",
+			"https://bcd71c0378e0.ngrok-free.app",
 		},
 		AllowMethods: []string{
-			echo.GET, echo.POST, echo.PUT, echo.DELETE, echo.OPTIONS,
+			http.MethodGet, http.MethodPost, http.MethodPut,
+			http.MethodDelete, http.MethodOptions,
 		},
 		AllowHeaders: []string{
 			echo.HeaderOrigin,
 			echo.HeaderContentType,
-			echo.HeaderAuthorization,
+			echo.HeaderAccept,
+			echo.HeaderAuthorization, // вот эта строка критична!
 			"ngrok-skip-browser-warning",
 		},
-		AllowCredentials: true,
+		AllowCredentials: true, // тоже критично
+		ExposeHeaders: []string{
+			"Content-Disposition",
+		},
 	}))
+
+	absPath, err := filepath.Abs("./uploads")
+	if err != nil {
+		logger.Fatal("не удалось получить абсолютный путь к uploads", zap.Error(err))
+	}
+	logger.Info("Абсолютный путь к uploads", zap.String("path", absPath))
+
+	e.Static("/uploads", absPath)
+
+	e.GET("/testphoto", func(c echo.Context) error {
+		return c.File("./uploads/2025/08/05/2025-08-05-80286516-eaff-472e-8379-22d3e51bb236.jpg")
+	})
 	v := validator.New()
 	if err := v.RegisterValidation("e164_TJ", isTajikPhoneNumber); err != nil {
 		logger.Fatal("Ошибка регистрации валидации e164_TJ", zap.Error(err))
@@ -76,6 +103,7 @@ func main() {
 	if err := v.RegisterValidation("duration_format", isDurationValid); err != nil {
 		logger.Fatal("Ошибка регистрации валидации duration_format", zap.Error(err))
 	}
+
 	e.Validator = &CustomValidator{validator: v}
 
 	dbConn := postgresql.ConnectDB()

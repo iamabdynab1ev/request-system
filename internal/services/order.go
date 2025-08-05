@@ -61,7 +61,7 @@ func NewOrderService(
 }
 
 func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, actorID uint64) ([]dto.OrderResponseDTO, uint64, error) {
-	
+
 	actor, err := s.userRepo.FindUserByID(ctx, actorID)
 	if err != nil {
 		s.logger.Error("GetOrders: не удалось найти пользователя по actorID", zap.Uint64("actorID", actorID), zap.Error(err))
@@ -163,7 +163,14 @@ func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multi
 			}
 		}
 		if file != nil {
-			filePath, err := s.fileStorage.Save(file)
+			src, err := file.Open()
+			if err != nil {
+				s.logger.Error("Не удалось открыть файл для сохранения в CreateOrder", zap.Error(err))
+				return apperrors.ErrInternalServer
+			}
+			defer src.Close()
+
+			filePath, err := s.fileStorage.Save(src, file.Filename)
 			if err != nil {
 				return fmt.Errorf("не удалось сохранить файл: %w", err)
 			}
@@ -309,9 +316,15 @@ func (s *OrderService) DelegateOrder(
 		}
 
 		if file != nil {
-			filePath, err := s.fileStorage.Save(file)
+			src, err := file.Open()
 			if err != nil {
-				return err
+				s.logger.Error("Не удалось открыть файл для сохранения в CreateOrder", zap.Error(err))
+				return apperrors.ErrInternalServer
+			}
+			defer src.Close()
+			filePath, err := s.fileStorage.Save(src, file.Filename)
+			if err != nil {
+				return fmt.Errorf("не удалось сохранить файл: %w", err)
 			}
 			attach := &entities.Attachment{
 				OrderID:  orderID,

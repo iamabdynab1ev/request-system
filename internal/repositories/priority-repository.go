@@ -16,10 +16,10 @@ import (
 
 const priorityTable = "priorities"
 
-// Убедитесь, что здесь перечислены все поля, которые вы сканируете.
+
 const priorityFields = "id, icon_small, icon_big, name, rate, code, created_at, updated_at"
 
-// dbPriority — это вспомогательная структура для сканирования из базы данных.
+
 type dbPriority struct {
 	ID        uint64
 	IconSmall sql.NullString
@@ -31,7 +31,7 @@ type dbPriority struct {
 	UpdatedAt time.Time
 }
 
-// toDTO преобразует структуру базы данных в объект передачи данных (DTO).
+
 func (db *dbPriority) toDTO() dto.PriorityDTO {
 	return dto.PriorityDTO{
 		ID:        db.ID,
@@ -46,12 +46,12 @@ func (db *dbPriority) toDTO() dto.PriorityDTO {
 }
 
 type PriorityRepositoryInterface interface {
-	// Обновлено для возврата общего количества для пагинации.
+	
 	GetPriorities(ctx context.Context, limit uint64, offset uint64) ([]dto.PriorityDTO, uint64, error)
 	FindPriority(ctx context.Context, id uint64) (*dto.PriorityDTO, error)
-	// Обновлено для возврата созданного DTO.
+
 	CreatePriority(ctx context.Context, dto dto.CreatePriorityDTO) (*dto.PriorityDTO, error)
-	// Обновлено для возврата обновленного DTO.
+	
 	UpdatePriority(ctx context.Context, id uint64, dto dto.UpdatePriorityDTO) (*dto.PriorityDTO, error)
 	DeletePriority(ctx context.Context, id uint64) error
 	FindByCode(ctx context.Context, code string) (*entities.Priority, error)

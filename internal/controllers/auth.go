@@ -1,15 +1,15 @@
 package controllers
 
 import (
-	"bytes"
-	"io"
 	"net/http"
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	"request-system/internal/services"
+	"request-system/pkg/contextkeys"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/service"
 	"request-system/pkg/utils"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
@@ -17,206 +17,232 @@ import (
 
 type AuthController struct {
 	authService services.AuthServiceInterface
-	jwtService  service.JWTService
+	jwtSvc      service.JWTService
 	logger      *zap.Logger
 }
 
-func NewAuthController(
-	authService services.AuthServiceInterface,
-	jwtService service.JWTService,
-	logger *zap.Logger,
-) *AuthController {
+func NewAuthController(authService services.AuthServiceInterface, jwtSvc service.JWTService, logger *zap.Logger) *AuthController {
 	return &AuthController{
 		authService: authService,
-		jwtService:  jwtService,
+		jwtSvc:      jwtSvc,
 		logger:      logger,
 	}
 }
 
-func (c *AuthController) Login(ctx echo.Context) error {
+func (ctrl *AuthController) Login(c echo.Context) error {
 	var payload dto.LoginDTO
-	if err := ctx.Bind(&payload); err != nil {
-		c.logger.Warn("Login: не удалось прочитать тело запроса", zap.Error(err))
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
 	}
-	if err := ctx.Validate(&payload); err != nil {
-		c.logger.Warn("Login: невалидные данные", zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	user, err := c.authService.Login(ctx.Request().Context(), payload)
+	user, err := ctrl.authService.Login(c.Request().Context(), payload)
 	if err != nil {
-		return utils.ErrorResponse(ctx, err)
+		return utils.ErrorResponse(c, err)
 	}
 
-	return c.generateTokensAndRespond(ctx, user)
+	return ctrl.generateTokensAndRespond(c, user, "Авторизация прошла успешно")
 }
 
-func (c *AuthController) SendCode(ctx echo.Context) error {
+func (ctrl *AuthController) SendCode(c echo.Context) error {
 	var payload dto.SendCodeDTO
-	if err := ctx.Bind(&payload); err != nil {
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
 	}
-	if err := ctx.Validate(&payload); err != nil {
-		return utils.ErrorResponse(ctx, err)
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 	if payload.Email == "" && payload.Phone == "" {
-		return utils.ErrorResponse(ctx, apperrors.ErrValidation)
+		return utils.ErrorResponse(c, apperrors.ErrValidation)
 	}
 
-	if err := c.authService.SendVerificationCode(ctx.Request().Context(), payload); err != nil {
-		return utils.ErrorResponse(ctx, err)
+	if err := ctrl.authService.SendVerificationCode(c.Request().Context(), payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	return utils.SuccessResponse(ctx, nil, "Если пользователь с указанными данными существует, код будет отправлен.", http.StatusOK)
+	return utils.SuccessResponse(c, nil, "Если пользователь с указанными данными существует, код будет отправлен.", http.StatusOK)
 }
 
-func (c *AuthController) VerifyCode(ctx echo.Context) error {
+func (ctrl *AuthController) VerifyCode(c echo.Context) error {
 	var payload dto.VerifyCodeDTO
-	if err := ctx.Bind(&payload); err != nil {
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
 	}
-	if err := ctx.Validate(&payload); err != nil {
-		return utils.ErrorResponse(ctx, err)
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	user, err := c.authService.LoginWithCode(ctx.Request().Context(), payload)
+	user, err := ctrl.authService.LoginWithCode(c.Request().Context(), payload)
 	if err != nil {
-		return utils.ErrorResponse(ctx, err)
+		return utils.ErrorResponse(c, err)
 	}
 
-	return c.generateTokensAndRespond(ctx, user)
+	return ctrl.generateTokensAndRespond(c, user, "Авторизация прошла успешно")
 }
 
-func (c *AuthController) RefreshToken(ctx echo.Context) error {
-	var payload dto.RefreshTokenDTO
-
-	bodyBytes, _ := io.ReadAll(ctx.Request().Body)
-	ctx.Request().Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
-	if err := ctx.Bind(&payload); err != nil {
-		c.logger.Error("RefreshToken: не удалось сделать Bind() тела запроса",
-			zap.Error(err),
-			zap.String("raw_body", string(bodyBytes)),
-		)
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
-	}
-
-	if err := ctx.Validate(&payload); err != nil {
-		return utils.ErrorResponse(ctx, err)
-	}
-
-	userID, err := c.jwtService.ValidateRefreshToken(payload.RefreshToken)
+func (ctrl *AuthController) RefreshToken(c echo.Context) error {
+	cookie, err := c.Cookie("refreshToken")
 	if err != nil {
-		return utils.ErrorResponse(ctx, err)
+		ctrl.logger.Warn("Попытка обновления токена без cookie", zap.Error(err))
+		return utils.ErrorResponse(c, apperrors.ErrUnauthorized)
+	}
+	refreshTokenString := cookie.Value
+	if refreshTokenString == "" {
+		return utils.ErrorResponse(c, apperrors.ErrUnauthorized)
 	}
 
-	user, err := c.authService.GetUserByID(ctx.Request().Context(), userID)
+	userID, err := ctrl.jwtSvc.ValidateRefreshToken(refreshTokenString)
 	if err != nil {
-		return utils.ErrorResponse(ctx, err)
+		return utils.ErrorResponse(c, err)
 	}
 
-	return c.generateTokensAndRespond(ctx, user)
+	user, err := ctrl.authService.GetUserByID(c.Request().Context(), userID)
+	if err != nil {
+		return utils.ErrorResponse(c, err)
+	}
+
+	return ctrl.generateTokensAndRespond(c, user, "Токены успешно обновлены")
 }
 
-func (c *AuthController) CheckRecoveryOptions(ctx echo.Context) error {
+func (ctrl *AuthController) CheckRecoveryOptions(c echo.Context) error {
 	var payload dto.ForgotPasswordInitDTO
-	if err := ctx.Bind(&payload); err != nil {
-		c.logger.Warn("CheckRecoveryOptions: не удалось прочитать тело запроса", zap.Error(err))
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
 	}
-	if err := ctx.Validate(&payload); err != nil {
-		c.logger.Warn("CheckRecoveryOptions: невалидные данные", zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	options, err := c.authService.CheckRecoveryOptions(ctx.Request().Context(), payload)
+	options, err := ctrl.authService.CheckRecoveryOptions(c.Request().Context(), payload)
 	if err != nil {
-		return utils.ErrorResponse(ctx, err)
+		return utils.ErrorResponse(c, err)
 	}
 
-	return utils.SuccessResponse(ctx, options, "", http.StatusOK)
+	return utils.SuccessResponse(c, options, "", http.StatusOK)
 }
 
-func (c *AuthController) SendRecoveryInstructions(ctx echo.Context) error {
+func (ctrl *AuthController) SendRecoveryInstructions(c echo.Context) error {
 	var payload dto.ForgotPasswordSendDTO
-	if err := ctx.Bind(&payload); err != nil {
-		c.logger.Warn("SendRecoveryInstructions: не удалось прочитать тело запроса", zap.Error(err))
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
 	}
-	if err := ctx.Validate(&payload); err != nil {
-		c.logger.Warn("SendRecoveryInstructions: невалидные данные", zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	if err := c.authService.SendRecoveryInstructions(ctx.Request().Context(), payload); err != nil {
-		return utils.ErrorResponse(ctx, err)
+	if err := ctrl.authService.SendRecoveryInstructions(c.Request().Context(), payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	return utils.SuccessResponse(ctx, nil, "Если пользователь существует, инструкция будет отправлена выбранным способом.", http.StatusOK)
+	return utils.SuccessResponse(c, nil, "Если пользователь существует, инструкция будет отправлена выбранным способом.", http.StatusOK)
 }
 
-func (c *AuthController) ResetPasswordWithEmail(ctx echo.Context) error {
+func (ctrl *AuthController) ResetPasswordWithEmail(c echo.Context) error {
 	var payload dto.ResetPasswordEmailDTO
-	if err := ctx.Bind(&payload); err != nil {
-		c.logger.Warn("ResetPasswordWithEmail: не удалось прочитать тело запроса", zap.Error(err))
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
 	}
-	if err := ctx.Validate(&payload); err != nil {
-		c.logger.Warn("ResetPasswordWithEmail: невалидные данные", zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	if err := c.authService.ResetPasswordWithEmail(ctx.Request().Context(), payload); err != nil {
-		return utils.ErrorResponse(ctx, err)
+	if err := ctrl.authService.ResetPasswordWithEmail(c.Request().Context(), payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	return utils.SuccessResponse(ctx, nil, "Пароль успешно изменен.", http.StatusOK)
+	return utils.SuccessResponse(c, nil, "Пароль успешно изменен.", http.StatusOK)
 }
 
-func (c *AuthController) ResetPasswordWithPhone(ctx echo.Context) error {
+func (ctrl *AuthController) ResetPasswordWithPhone(c echo.Context) error {
 	var payload dto.ResetPasswordPhoneDTO
-	if err := ctx.Bind(&payload); err != nil {
-		c.logger.Warn("ResetPasswordWithPhone: не удалось прочитать тело запроса", zap.Error(err))
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
 	}
-	if err := ctx.Validate(&payload); err != nil {
-		c.logger.Warn("ResetPasswordWithPhone: невалидные данные", zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	if err := c.authService.ResetPasswordWithPhone(ctx.Request().Context(), payload); err != nil {
-		return utils.ErrorResponse(ctx, err)
+	if err := ctrl.authService.ResetPasswordWithPhone(c.Request().Context(), payload); err != nil {
+		return utils.ErrorResponse(c, err)
 	}
 
-	return utils.SuccessResponse(ctx, nil, "Пароль успешно изменен.", http.StatusOK)
+	return utils.SuccessResponse(c, nil, "Пароль успешно изменен.", http.StatusOK)
 }
 
-func (c *AuthController) generateTokensAndRespond(ctx echo.Context, user *entities.User) error {
-	accessToken, refreshToken, err := c.jwtService.GenerateTokens(user.ID, user.RoleID)
+func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, user *entities.User, message string) error {
+	accessToken, refreshToken, err := ctrl.jwtSvc.GenerateTokens(user.ID, user.RoleID)
 	if err != nil {
-		c.logger.Error("Не удалось сгенерировать токены", zap.Error(err), zap.Uint64("userID", user.ID))
-		return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
-	}
-	c.logger.Info("Токены успешно сгенерированы", zap.Uint64("userID", user.ID))
-	// !!! ДОБАВИТЬ ЭТОТ ЛОГ ДЛЯ ДИАГНОСТИКИ !!!
-	c.logger.Debug("Сгенерированный Access Token", zap.String("token", accessToken))
-	c.logger.Debug("Сгенерированный Refresh Token", zap.String("token", refreshToken))
-	// !!! КОНЕЦ ДОБАВЛЕНИЯ !!!
-
-	userDto := dto.UserPublicDTO{
-		ID:     user.ID,
-		Email:  user.Email,
-		Phone:  user.PhoneNumber,
-		FIO:    user.Fio,
-		RoleID: user.RoleID,
+		ctrl.logger.Error("Не удалось сгенерировать токены", zap.Error(err), zap.Uint64("userID", user.ID))
+		return utils.ErrorResponse(c, apperrors.ErrInternalServer)
 	}
 
-	res := dto.AuthResponseDTO{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		User:         userDto,
+	cookie := new(http.Cookie)
+	cookie.Name = "refreshToken"
+	cookie.Value = refreshToken
+	cookie.Expires = time.Now().Add(ctrl.jwtSvc.GetRefreshTokenTTL())
+	cookie.Path = "/"
+	cookie.HttpOnly = true
+	cookie.Secure = true
+	cookie.SameSite = http.SameSiteNoneMode
+
+	cookie.Partitioned = true
+
+	c.SetCookie(cookie)
+
+	response := dto.AuthResponseDTO{
+		AccessToken: accessToken,
+		User: dto.UserPublicDTO{
+			ID:           user.ID,
+			Email:        user.Email,
+			Phone:        user.PhoneNumber,
+			FIO:          user.Fio,
+			RoleID:       user.RoleID,
+			PhotoURL:     user.PhotoURL,
+			Position:     user.Position,
+			BranchID:     user.BranchID,
+			DepartmentID: user.DepartmentID,
+			OfficeID:     user.OfficeID,
+			OtdelID:      user.OtdelID,
+		},
 	}
 
-	return utils.SuccessResponse(ctx, res, "Авторизация прошла успешно", http.StatusOK)
+	return utils.SuccessResponse(c, response, message, http.StatusOK)
+}
+func (ctrl *AuthController) Me(c echo.Context) error {
+	userID, ok := c.Request().Context().Value(contextkeys.UserIDKey).(uint64)
+	if !ok || userID == 0 {
+		ctrl.logger.Error("Не удалось получить userID из контекста в защищенном маршруте")
+		return utils.ErrorResponse(c, apperrors.ErrUnauthorized)
+	}
+	permissions, ok := c.Request().Context().Value(contextkeys.UserPermissionsKey).([]string)
+	if !ok {
+		ctrl.logger.Error("Привилегии не найдены в контексте для аутентифицированного пользователя", zap.Uint64("userID", userID))
+		return utils.ErrorResponse(c, apperrors.ErrInternalServer)
+	}
+
+	ctrl.logger.Info("Запрос на получение данных и привилегий пользователя", zap.Uint64("userID", userID))
+
+	user, err := ctrl.authService.GetUserByID(c.Request().Context(), userID)
+	if err != nil {
+		return utils.ErrorResponse(c, err)
+	}
+
+	response := dto.UserProfileDTO{
+		ID:           user.ID,
+		Email:        user.Email,
+		Phone:        user.PhoneNumber,
+		FIO:          user.Fio,
+		RoleID:       user.RoleID,
+		Permissions:  permissions,
+		PhotoURL:     user.PhotoURL,
+		Position:     user.Position,
+		BranchID:     user.BranchID,
+		DepartmentID: user.DepartmentID,
+		OfficeID:     user.OfficeID,
+		OtdelID:      user.OtdelID,
+	}
+
+	return utils.SuccessResponse(c, response, "Профиль пользователя успешно получен", http.StatusOK)
 }

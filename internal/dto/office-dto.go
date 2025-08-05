@@ -1,20 +1,20 @@
 package dto
 
 type CreateOfficeDTO struct {
-	Name       string `json:"name" validate:"required"`
-	Address    string `json:"address" validate:"required"`
-	OpenDate   string `json:"open_date" validate:"required"`
-	BranchesID int    `json:"branches_id" validate:"required"`
-	StatusID   int    `json:"status_id" validate:"required"`
+	Name     string `json:"name" validate:"required"`
+	Address  string `json:"address" validate:"required"`
+	OpenDate string `json:"open_date" validate:"required"`
+	BranchID int    `json:"branch_id" validate:"required"`
+	StatusID int    `json:"status_id" validate:"required"`
 }
 
 type UpdateOfficeDTO struct {
-	ID         int    `json:"id" validate:"required"`
-	Name       string `json:"name" validate:"omitempty"`
-	Address    string `json:"address" validate:"omitempty"`
-	OpenDate   string `json:"open_date" validate:"omitempty"`
-	BranchesID int    `json:"branches_id" validate:"omitempty"`
-	StatusID   int    `json:"status_id" validate:"omitempty"`
+	ID       int    `json:"id" validate:"required"`
+	Name     string `json:"name" validate:"omitempty"`
+	Address  string `json:"address" validate:"omitempty"`
+	OpenDate string `json:"open_date" validate:"omitempty"`
+	BranchID int    `json:"branch_id" validate:"omitempty"`
+	StatusID int    `json:"status_id" validate:"omitempty"`
 }
 
 type OfficeDTO struct {

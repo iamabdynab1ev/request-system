@@ -1,5 +1,7 @@
 package dto
 
+import "time"
+
 type CreateRoleDTO struct {
 	Name          string   `json:"name" validate:"required,max=50"`
 	Description   string   `json:"description" validate:"max=255"`
@@ -20,8 +22,8 @@ type RoleDTO struct {
 	Description string          `json:"description"`
 	StatusID    uint64          `json:"status_id"`
 	Permissions []PermissionDTO `json:"permissions"`
-	CreatedAt   string          `json:"created_at"`
-	UpdatedAt   string          `json:"updated_at"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 type ShortRoleDTO struct {
 	ID   uint64 `json:"id"`

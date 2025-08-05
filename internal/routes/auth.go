@@ -4,6 +4,7 @@ import (
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
+	"request-system/pkg/middleware"
 	"request-system/pkg/service"
 
 	"github.com/go-redis/redis/v8"
@@ -12,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func runAuthRouter(api *echo.Group, dbConn *pgxpool.Pool, redisClient *redis.Client, jwtSvc service.JWTService, logger *zap.Logger) {
+func runAuthRouter(api *echo.Group, dbConn *pgxpool.Pool, redisClient *redis.Client, jwtSvc service.JWTService, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
 	userRepository := repositories.NewUserRepository(dbConn)
 	cacheRepository := repositories.NewRedisCacheRepository(redisClient)
 	authService := services.NewAuthService(userRepository, cacheRepository, logger)
@@ -21,12 +22,13 @@ func runAuthRouter(api *echo.Group, dbConn *pgxpool.Pool, redisClient *redis.Cli
 	authGroup := api.Group("/auth")
 	{
 		authGroup.POST("/login", authCtrl.Login)
-		authGroup.POST("/send-code", authCtrl.SendCode)
-		authGroup.POST("/verify-code", authCtrl.VerifyCode)
-		authGroup.POST("/refresh-token", authCtrl.RefreshToken)
-		authGroup.POST("/recovery-options", authCtrl.CheckRecoveryOptions)
-		authGroup.POST("/recovery-send", authCtrl.SendRecoveryInstructions)
-		authGroup.POST("/reset-password/email", authCtrl.ResetPasswordWithEmail)
-		authGroup.POST("/reset-password/phone", authCtrl.ResetPasswordWithPhone)
+		authGroup.POST("/send_code", authCtrl.SendCode)
+		authGroup.POST("/verify_code", authCtrl.VerifyCode)
+		authGroup.POST("/refresh_token", authCtrl.RefreshToken)
+		authGroup.POST("/recovery_options", authCtrl.CheckRecoveryOptions)
+		authGroup.POST("/recovery_send", authCtrl.SendRecoveryInstructions)
+		authGroup.POST("/reset_password/email", authCtrl.ResetPasswordWithEmail)
+		authGroup.POST("/reset_password/phone_number", authCtrl.ResetPasswordWithPhone)
+		authGroup.GET("/me", authCtrl.Me, authMW.Auth)
 	}
 }

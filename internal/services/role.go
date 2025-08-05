@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
@@ -111,7 +113,11 @@ func (s *RoleService) UpdateRole(ctx context.Context, id uint64, dto dto.UpdateR
 		s.logger.Error("UpdateRole: не удалось начать транзакцию для обновления", zap.Error(err))
 		return nil, fmt.Errorf("ошибка обновления роли: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if rErr := tx.Rollback(ctx); rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
+			s.logger.Error("не удалось откатить транзакцию", zap.Error(rErr))
+		}
+	}()
 
 	err = s.repo.UpdateRoleInTx(ctx, tx, id, dto)
 	if err != nil {

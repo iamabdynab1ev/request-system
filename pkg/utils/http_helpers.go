@@ -1,5 +1,3 @@
-// Файл: pkg/utils/http_helpers.go
-
 package utils
 
 import (
@@ -120,7 +118,11 @@ func ErrorResponse(c echo.Context, err error) error {
 	var message string
 
 	switch err {
-	case apperrors.ErrEmptyAuthHeader, apperrors.ErrInvalidAuthHeader, apperrors.ErrInvalidToken, apperrors.ErrTokenExpired, apperrors.ErrTokenIsNotAccess:
+	case apperrors.ErrEmptyAuthHeader,
+		apperrors.ErrInvalidAuthHeader,
+		apperrors.ErrInvalidToken,
+		apperrors.ErrTokenExpired,
+		apperrors.ErrTokenIsNotAccess:
 		statusCode = http.StatusUnauthorized
 		message = "Необходима авторизация"
 	case apperrors.ErrForbidden:
@@ -128,11 +130,36 @@ func ErrorResponse(c echo.Context, err error) error {
 		message = "Доступ запрещён"
 	default:
 		statusCode = http.StatusInternalServerError
-		message = "Произошла ошибка: " + err.Error()
+		message = "Неверный логин или пароль"
 	}
 
 	return c.JSON(statusCode, map[string]interface{}{
 		"status":  false,
 		"message": message,
 	})
+}
+
+type UploadConfig struct {
+	AllowedMimeTypes []string 
+	MaxSizeMB        int64    // Максимальный размер файла в мегабайтах
+}
+
+// UploadContexts - это наша главная карта, "мозг" всей системы.
+// Мы помещаем ее сюда, в пакет utils, чтобы компилятор ее точно нашел.
+var UploadContexts = map[string]UploadConfig{
+	"profile_photo": {
+		AllowedMimeTypes: []string{"image/jpeg", "image/png", "image/gif", "image/webp"},
+		MaxSizeMB:        5, // Максимум 5 МБ для аватарок
+	},
+	"order_document": {
+		AllowedMimeTypes: []string{
+			"image/jpeg", "image/png",
+			"application/pdf",
+			"application/msword", // .doc
+			"application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+			"application/vnd.ms-excel", // .xls
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+		},
+		MaxSizeMB: 20, // Максимум 20 МБ для документов
+	},
 }
