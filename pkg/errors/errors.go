@@ -32,6 +32,7 @@ var (
 	ErrBadRequest               = NewHttpError(http.StatusBadRequest, "Неверный запрос", nil)
 	ErrValidation               = NewHttpError(http.StatusBadRequest, "Ошибка валидации данных", nil)
 	ErrHeadOfDepartmentNotFound = NewHttpError(http.StatusBadRequest, "Руководитель отдела не найден", nil)
+	ErrConflict                 = NewHttpError(http.StatusConflict, "Запрашиваемый ресурс уже существует", nil)
 
 	// Ошибки аутентификации
 	ErrUnauthorized       = NewHttpError(http.StatusUnauthorized, "Необходима авторизация", nil)

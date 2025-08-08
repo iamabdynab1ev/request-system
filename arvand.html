@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Финальный лоадер "Арванд"</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #e9eef2; /* Нейтральный фон */
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ГОТОВЫЙ SVG КОМПОНЕНТ. ВСЕ ИЗМЕНЕНИЯ ВНЕСЕНЫ -->
+    <svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 200 200">
+        <style>
+            .arvand-logo-pulse {
+              animation: arvand-pulse 2.5s ease-in-out infinite;
+              transform-origin: center;
+            }
+            @keyframes arvand-pulse {
+              0%, 100% {
+                transform: scale(1);
+                opacity: 1;
+              }
+              50% {
+                transform: scale(1.25);
+                opacity: 0.6;
+              }
+            }
+            .arvand-logo-text {
+              font-family: 'Times New Roman', serif;
+              letter-spacing: 0.2em;
+              paint-order: stroke; /* Рендерить обводку под заливкой */
+              stroke: #e9eef2;   /* Обводка в цвет фона для четкости */
+              stroke-width: 1.5px;
+              stroke-linecap: butt;
+              stroke-linejoin: miter;
+            }
+        </style>
+
+        <g fill="#009FA3">
+            <!-- 
+            Генерируем сплошной ромб.
+            Центральные ромбы, которые за текстом, пропускаем.
+            Размер и задержка анимации зависят от расстояния до центра.
+            -->
+
+            <!-- Самый дальний уровень (самые большие ромбы) -->
+            <polygon points="100,10 110,20 100,30 90,20" class="arvand-logo-pulse" style="animation-delay: 0.4s" /> <!-- top -->
+            <polygon points="30,80 40,90 30,100 20,90" class="arvand-logo-pulse" style="animation-delay: 0.4s" /> <!-- left -->
+            <polygon points="170,80 180,90 170,100 160,90" class="arvand-logo-pulse" style="animation-delay: 0.4s" /> <!-- right -->
+            <polygon points="100,170 110,180 100,190 90,180" class="arvand-logo-pulse" style="animation-delay: 0.4s" /> <!-- bottom -->
+
+            <!-- Предпоследний уровень -->
+            <polygon points="82,28 92,38 82,48 72,38" class="arvand-logo-pulse" style="animation-delay: 0.3s" />
+            <polygon points="118,28 128,38 118,48 108,38" class="arvand-logo-pulse" style="animation-delay: 0.3s" />
+            <polygon points="48,62 58,72 48,82 38,72" class="arvand-logo-pulse" style="animation-delay: 0.3s" />
+            <polygon points="48,118 58,128 48,138 38,128" class="arvand-logo-pulse" style="animation-delay: 0.3s" />
+            <polygon points="82,152 92,162 82,172 72,162" class="arvand-logo-pulse" style="animation-delay: 0.3s" />
+            <polygon points="118,152 128,162 118,172 108,162" class="arvand-logo-pulse" style="animation-delay: 0.3s" />
+            <polygon points="152,62 162,72 152,82 142,72" class="arvand-logo-pulse" style="animation-delay: 0.3s" />
+            <polygon points="152,118 162,128 152,138 142,128" class="arvand-logo-pulse" style="animation-delay: 0.3s" />
+
+            <!-- Ближний уровень (самые маленькие) -->
+            <polygon points="65,45 74,54 65,63 56,54" class="arvand-logo-pulse" style="animation-delay: 0.2s" />
+            <polygon points="100,45 109,54 100,63 91,54" class="arvand-logo-pulse" style="animation-delay: 0.2s" />
+            <polygon points="135,45 144,54 135,63 126,54" class="arvand-logo-pulse" style="animation-delay: 0.2s" />
+            <polygon points="65,137 74,146 65,155 56,146" class="arvand-logo-pulse" style="animation-delay: 0.2s" />
+            <polygon points="100,137 109,146 100,155 91,146" class="arvand-logo-pulse" style="animation-delay: 0.2s" />
+            <polygon points="135,137 144,146 135,155 126,146" class="arvand-logo-pulse" style="animation-delay: 0.2s" />
+        </g>
+
+        <g fill="#009FA3">
+            <!-- ТЕКСТ И СТАТИЧНЫЕ ДЕКОРАТИВНЫЕ РОМБИКИ В ЦЕНТРЕ -->
+            <text x="100" y="103" text-anchor="middle" font-size="18" class="arvand-logo-text">АРВАНД</text>
+            <polygon points="79,99 81,101 79,103 77,101" />
+            <polygon points="99.5,99 101.5,101 99.5,103 97.5,101" />
+            <polygon points="120,99 122,101 120,103 118,101" />
+            <polygon points="58.5,99 60.5,101 58.5,103 56.5,101" />
+            <polygon points="140.5,99 142.5,101 140.5,103 138.5,101" />
+        </g>
+    </svg>
+</body>
+</html>

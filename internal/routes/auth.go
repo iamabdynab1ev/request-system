@@ -14,7 +14,7 @@ import (
 )
 
 func runAuthRouter(api *echo.Group, dbConn *pgxpool.Pool, redisClient *redis.Client, jwtSvc service.JWTService, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
-	userRepository := repositories.NewUserRepository(dbConn)
+	userRepository := repositories.NewUserRepository(dbConn, logger)
 	cacheRepository := repositories.NewRedisCacheRepository(redisClient)
 	authService := services.NewAuthService(userRepository, cacheRepository, logger)
 	authCtrl := controllers.NewAuthController(authService, jwtSvc, logger)

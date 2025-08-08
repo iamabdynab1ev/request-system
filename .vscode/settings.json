@@ -28,7 +28,9 @@
   "editor.fontFamily": "Fira Code, Consolas, monospace",
   "editor.fontLigatures": true,
   "terminal.integrated.fontFamily": "Consolas, 'Courier New', monospace",
-  "workbench.colorTheme": "Default Dark Modern",
+  "workbench.colorTheme": "Gruvbox Dark Hard",
   "breadcrumbs.enabled": true,
   "explorer.confirmDelete": false
 }
+
+

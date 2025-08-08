@@ -1,4 +1,5 @@
 // internal/routes/order_history.go
+
 package routes
 
 import (
@@ -12,8 +13,13 @@ import (
 )
 
 func runOrderHistoryRouter(group *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) {
+	// Инициализируем все необходимые репозитории
 	repo := repositories.NewOrderHistoryRepository(dbConn)
-	service := services.NewOrderHistoryService(repo, logger)
+	userRepo := repositories.NewUserRepository(dbConn, logger)
+	orderRepo := repositories.NewOrderRepository(dbConn)
+
+	// Передаем все необходимые зависимости в конструктор сервиса
+	service := services.NewOrderHistoryService(repo, userRepo, orderRepo, logger)
 	controller := controllers.NewOrderHistoryController(service, logger)
 
 	group.GET("/order/:orderID/history", controller.GetHistoryForOrder)

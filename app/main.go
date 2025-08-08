@@ -66,7 +66,7 @@ func main() {
 		AllowOrigins: []string{
 			"http://localhost:5173",
 			"https://65006e9a1844.ngrok-free.app",
-			"https://bcd71c0378e0.ngrok-free.app",
+			"https://eec4e17c3a10.ngrok-free.app",
 		},
 		AllowMethods: []string{
 			http.MethodGet, http.MethodPost, http.MethodPut,

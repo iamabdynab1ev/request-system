@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"request-system/config"
 	"request-system/internal/dto"
 	"request-system/internal/services"
 	apperrors "request-system/pkg/errors"
@@ -72,8 +73,6 @@ func (c *UserController) FindUser(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, res, "Successfully", http.StatusOK)
 }
 
-var allowedProfilePhotoMimeTypes = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
-
 func (c *UserController) CreateUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
@@ -115,28 +114,28 @@ func (c *UserController) CreateUser(ctx echo.Context) error {
 	}
 
 	file, err := ctx.FormFile("photoFile")
-	if err == nil {
-		src, _ := file.Open()
-		buffer := make([]byte, 512)
-		if _, err = src.Read(buffer); err != nil {
-			src.Close()
+	if err != nil && err != http.ErrMissingFile {
+		return utils.ErrorResponse(ctx, fmt.Errorf("ошибка при чтении файла: %w", err))
+	}
+
+	if file != nil {
+		src, err := file.Open()
+		if err != nil {
+			c.logger.Error("Не удалось открыть файл фото", zap.Error(err))
 			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
 		}
-		src.Close()
-		fileMimeType := http.DetectContentType(buffer)
+		defer src.Close()
 
-		isAllowed := false
-		for _, t := range allowedProfilePhotoMimeTypes {
-			if t == fileMimeType {
-				isAllowed = true
-				break
-			}
-		}
-		if !isAllowed {
-			return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusUnsupportedMediaType, "Недопустимый тип файла для фото."))
+		const uploadContext = "profile_photo"
+
+		if err := utils.ValidateFile(file, src, uploadContext); err != nil {
+			return utils.ErrorResponse(ctx, fmt.Errorf("файл фото не прошел валидацию: %w", err))
 		}
 
-		savedPath, err := c.fileStorage.Save(src, file.Filename)
+		rules, _ := config.UploadContexts[uploadContext]
+
+		// Сохраняем файл, передавая префикс пути
+		savedPath, err := c.fileStorage.Save(src, file.Filename, rules.PathPrefix)
 		if err != nil {
 			c.logger.Error("Ошибка сохранения фото профиля", zap.Error(err))
 			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
@@ -144,13 +143,6 @@ func (c *UserController) CreateUser(ctx echo.Context) error {
 
 		fileURL := "/uploads/" + savedPath
 		finalDTO.PhotoURL = &fileURL
-	} else if err != http.ErrMissingFile {
-
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
-	}
-
-	if err := ctx.Validate(&finalDTO); err != nil {
-		return utils.ErrorResponse(ctx, err)
 	}
 	res, err := c.userService.CreateUser(reqCtx, finalDTO)
 	if err != nil {
@@ -205,34 +197,27 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 	}
 
 	file, err := ctx.FormFile("photoFile")
-	if err == nil {
+	if err != nil && err != http.ErrMissingFile {
+		return utils.ErrorResponse(ctx, fmt.Errorf("ошибка при чтении файла: %w", err))
+	}
 
+	if file != nil {
 		src, err := file.Open()
 		if err != nil {
+			c.logger.Error("Не удалось открыть файл фото при обновлении", zap.Error(err))
 			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
 		}
 		defer src.Close()
-		buffer := make([]byte, 512)
-		if _, err = src.Read(buffer); err != nil {
-			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
-		}
-		if _, err = src.Seek(0, 0); err != nil {
-			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
+
+		const uploadContext = "profile_photo"
+
+		if err := utils.ValidateFile(file, src, uploadContext); err != nil {
+			return utils.ErrorResponse(ctx, fmt.Errorf("файл фото не прошел валидацию: %w", err))
 		}
 
-		fileMimeType := http.DetectContentType(buffer)
-		isAllowed := false
-		for _, t := range allowedProfilePhotoMimeTypes {
-			if t == fileMimeType {
-				isAllowed = true
-				break
-			}
-		}
-		if !isAllowed {
-			return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusUnsupportedMediaType, "Недопустимый тип файла для фото."))
-		}
+		rules, _ := config.UploadContexts[uploadContext]
 
-		savedPath, err := c.fileStorage.Save(src, file.Filename)
+		savedPath, err := c.fileStorage.Save(src, file.Filename, rules.PathPrefix)
 		if err != nil {
 			c.logger.Error("Ошибка сохранения фото профиля при обновлении", zap.Error(err))
 			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
@@ -240,9 +225,6 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 
 		fileURL := "/uploads/" + savedPath
 		finalDTO.PhotoURL = &fileURL
-
-	} else if err != http.ErrMissingFile {
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
 	}
 
 	if err = ctx.Validate(&finalDTO); err != nil {

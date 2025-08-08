@@ -38,11 +38,13 @@ func NullInt64ToUint64(n sql.NullInt64) uint64 {
 	return uint64(n.Int64)
 }
 
-func NullTimeToString(nt sql.NullTime) string {
+func NullTimeToString(nt sql.NullTime) *string {
 	if !nt.Valid {
-		return ""
+		return nil
 	}
-	return nt.Time.Local().Format("2006-01-02 15:04:05")
+	formatted := nt.Time.Local().Format("2006-01-02 15:04:05")
+
+	return &formatted
 }
 
 func NullStringToString(ns sql.NullString) string {
@@ -50,4 +52,16 @@ func NullStringToString(ns sql.NullString) string {
 		return ""
 	}
 	return ns.String
+}
+func NullTimeToEmptyString(nt sql.NullTime) string {
+	if !nt.Valid {
+		return ""
+	}
+	return nt.Time.Local().Format("2006-01-02 15:04:05")
+}
+func StringPtrToNullString(s *string) sql.NullString {
+	if s == nil {
+		return sql.NullString{Valid: false}
+	}
+	return sql.NullString{String: *s, Valid: true}
 }

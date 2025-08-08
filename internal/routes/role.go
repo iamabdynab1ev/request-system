@@ -11,15 +11,30 @@ import (
 	"go.uber.org/zap"
 )
 
-func runRoleRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware, authPermissionService services.AuthPermissionServiceInterface) { // <-- ИЗМЕНЕНО
+func runRoleRouter(
+	secureGroup *echo.Group,
+	dbConn *pgxpool.Pool,
+	logger *zap.Logger,
+	authMW *middleware.AuthMiddleware,
+	authPermissionService services.AuthPermissionServiceInterface,
+) {
 	roleRepository := repositories.NewRoleRepository(dbConn)
-	roleService := services.NewRoleService(roleRepository, authPermissionService, logger)
+	userRepository := repositories.NewUserRepository(dbConn, logger)
+
+	roleService := services.NewRoleService(
+		roleRepository,
+		userRepository,
+		authPermissionService,
+		logger,
+	)
+
 	roleCtrl := controllers.NewRoleController(roleService, logger)
 
-	// Применяем AuthMiddleware.Authorize к маршрутам
-	secureGroup.GET("/role", roleCtrl.GetRoles, authMW.AuthorizeAny("roles:view:all", "roles:manage"))
-	secureGroup.POST("/role", roleCtrl.CreateRole, authMW.AuthorizeAny("roles:create", "roles:manage"))
-	secureGroup.GET("/role/:id", roleCtrl.FindRole, authMW.AuthorizeAny("roles:view:all", "roles:manage")) // Или "roles:view:own"
-	secureGroup.PUT("/role/:id", roleCtrl.UpdateRole, authMW.AuthorizeAny("roles:update", "roles:manage"))
-	secureGroup.DELETE("/role/:id", roleCtrl.DeleteRole, authMW.AuthorizeAny("roles:delete", "roles:manage"))
+	roles := secureGroup.Group("/role")
+
+	roles.GET("", roleCtrl.GetRoles, authMW.AuthorizeAny("roles:view"))
+	roles.POST("", roleCtrl.CreateRole, authMW.AuthorizeAny("roles:create"))
+	roles.GET("/:id", roleCtrl.FindRole, authMW.AuthorizeAny("roles:view"))
+	roles.PUT("/:id", roleCtrl.UpdateRole, authMW.AuthorizeAny("roles:update"))
+	roles.DELETE("/:id", roleCtrl.DeleteRole, authMW.AuthorizeAny("roles:delete"))
 }

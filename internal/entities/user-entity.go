@@ -3,12 +3,13 @@ package entities
 import "request-system/pkg/types"
 
 type User struct {
-	ID           uint64  `json:"id"`
-	Fio          string  `json:"fio"`
-	Email        string  `json:"email"`
-	PhoneNumber  string  `json:"phone_number"`
-	Password     string  `json:"-"`
-	Position     string  `json:"position"`
+	ID          uint64 `json:"id"`
+	Fio         string `json:"fio"`
+	Email       string `json:"email"`
+	PhoneNumber string `json:"phone_number"`
+	Password    string `json:"-"`
+	Position    string `json:"position"`
+
 	StatusID     uint64  `json:"status_id"`
 	RoleID       uint64  `json:"role_id"`
 	RoleName     string  `json:"role_name"`

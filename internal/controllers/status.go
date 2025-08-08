@@ -1,7 +1,9 @@
 package controllers
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"request-system/internal/dto"
 	"request-system/internal/services"
@@ -34,7 +36,6 @@ func (c *StatusController) GetStatuses(ctx echo.Context) error {
 
 	statuses, total, err := c.statusService.GetStatuses(reqCtx, uint64(filter.Limit), uint64(filter.Offset))
 	if err != nil {
-		c.logger.Error("ошибка при получении статусов", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
 
@@ -74,16 +75,71 @@ func (c *StatusController) FindByCode(ctx echo.Context) error {
 
 func (c *StatusController) CreateStatus(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
+
+	// 1. Получаем текстовые данные. Вариант для работы и с JSON, и с form-data
 	var dto dto.CreateStatusDTO
-	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, err)
+	dataString := ctx.FormValue("data")
+	if dataString != "" {
+		if err := json.Unmarshal([]byte(dataString), &dto); err != nil {
+			return utils.ErrorResponse(ctx, fmt.Errorf("некорректный JSON в 'data': %w", err))
+		}
+	} else {
+		if err := ctx.Bind(&dto); err != nil {
+			return utils.ErrorResponse(ctx, fmt.Errorf("не удалось прочитать данные: %w", err))
+		}
 	}
+
 	if err := ctx.Validate(&dto); err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	createdStatus, err := c.statusService.CreateStatus(reqCtx, dto)
+	// 2. Получаем заголовки файлов. Если их нет - это ошибка.
+	iconSmallHeader, err := ctx.FormFile("icon_small")
 	if err != nil {
+		return utils.ErrorResponse(ctx, fmt.Errorf("файл 'icon_small' обязателен: %w", err))
+	}
+	iconBigHeader, err := ctx.FormFile("icon_big")
+	if err != nil {
+		return utils.ErrorResponse(ctx, fmt.Errorf("файл 'icon_big' обязателен: %w", err))
+	}
+
+	// 3. Открываем файлы. `defer` гарантирует, что они закроются.
+	smallIconFile, err := iconSmallHeader.Open()
+	if err != nil {
+		return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
+	}
+	defer smallIconFile.Close()
+
+	bigIconFile, err := iconBigHeader.Open()
+	if err != nil {
+		return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
+	}
+	defer bigIconFile.Close()
+	createdStatus, err := c.statusService.CreateStatus(
+		reqCtx,
+		dto,
+		iconSmallHeader,
+		iconBigHeader,
+		smallIconFile,
+		bigIconFile,
+	)
+	if err != nil {
+
+		if errors.Is(err, apperrors.ErrConflict) {
+			c.logger.Warn(
+				"Попытка создания статуса с уже существующим кодом",
+				zap.String("code", dto.Code),
+				zap.String("name", dto.Name),
+				zap.Error(err),
+			)
+		} else {
+
+			c.logger.Error(
+				"Не удалось создать статус",
+				zap.Error(err),
+			)
+		}
+
 		return utils.ErrorResponse(ctx, err)
 	}
 
@@ -94,18 +150,33 @@ func (c *StatusController) UpdateStatus(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Invalid ID format", err))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный ID", err))
 	}
 
 	var dto dto.UpdateStatusDTO
-	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, err)
+	dataString := ctx.FormValue("data")
+	if dataString != "" {
+		if err := json.Unmarshal([]byte(dataString), &dto); err != nil {
+			return utils.ErrorResponse(ctx, fmt.Errorf("некорректный JSON в 'data'"))
+		}
 	}
+	dto.ID = id
+
 	if err := ctx.Validate(&dto); err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	updatedStatus, err := c.statusService.UpdateStatus(reqCtx, id, dto)
+	iconSmallHeader, err := ctx.FormFile("icon_small")
+	if err != nil && err != http.ErrMissingFile {
+		return utils.ErrorResponse(ctx, err)
+	}
+	iconBigHeader, err := ctx.FormFile("icon_big")
+	if err != nil && err != http.ErrMissingFile {
+		return utils.ErrorResponse(ctx, err)
+	}
+
+	updatedStatus, err := c.statusService.UpdateStatus(reqCtx, id, dto, iconSmallHeader, iconBigHeader)
+
 	if err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
@@ -117,7 +188,7 @@ func (c *StatusController) DeleteStatus(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Invalid ID format", err))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный ID", err))
 	}
 
 	err = c.statusService.DeleteStatus(reqCtx, id)
@@ -126,7 +197,6 @@ func (c *StatusController) DeleteStatus(ctx echo.Context) error {
 		if errors.As(err, &httpErr) {
 			return utils.ErrorResponse(ctx, httpErr)
 		}
-		c.logger.Error("ошибка при удалении статуса", zap.Error(err), zap.Uint64("id", id))
 		return utils.ErrorResponse(ctx, err)
 	}
 

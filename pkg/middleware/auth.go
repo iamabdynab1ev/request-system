@@ -54,18 +54,21 @@ func (m *AuthMiddleware) Auth(next echo.HandlerFunc) echo.HandlerFunc {
 			m.logger.Error("Не удалось получить имена привилегий для роли пользователя", zap.Uint64("userID", claims.UserID), zap.Uint64("roleID", claims.RoleID), zap.Error(err))
 			return utils.ErrorResponse(c, apperrors.ErrInternalServer)
 		}
-
+		permissionsMap := make(map[string]bool)
+		for _, p := range permissions {
+			permissionsMap[p] = true
+		}
 		ctx := c.Request().Context()
 		newCtx := context.WithValue(ctx, contextkeys.UserIDKey, claims.UserID)
 		newCtx = context.WithValue(newCtx, contextkeys.UserRoleIDKey, claims.RoleID)
 		newCtx = context.WithValue(newCtx, contextkeys.UserPermissionsKey, permissions)
+		newCtx = context.WithValue(newCtx, contextkeys.UserPermissionsMapKey, permissionsMap)
 		c.SetRequest(c.Request().WithContext(newCtx))
 
 		m.logger.Info("Пользователь успешно аутентифицирован и привилегии загружены", zap.Uint64("userID", claims.UserID), zap.Uint64("roleID", claims.RoleID), zap.Strings("permissions", permissions))
 		return next(c)
 	}
 }
-
 
 func (m *AuthMiddleware) handleAuthError(c echo.Context, err error) error {
 	m.logger.Warn("Ошибка аутентификации", zap.Error(err))

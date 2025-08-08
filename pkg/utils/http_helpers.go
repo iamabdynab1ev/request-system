@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -114,52 +115,27 @@ func SuccessResponse(ctx echo.Context, body interface{}, message string, code in
 }
 
 func ErrorResponse(c echo.Context, err error) error {
-	var statusCode int
-	var message string
 
-	switch err {
-	case apperrors.ErrEmptyAuthHeader,
-		apperrors.ErrInvalidAuthHeader,
-		apperrors.ErrInvalidToken,
-		apperrors.ErrTokenExpired,
-		apperrors.ErrTokenIsNotAccess:
-		statusCode = http.StatusUnauthorized
-		message = "Необходима авторизация"
-	case apperrors.ErrForbidden:
-		statusCode = http.StatusForbidden
-		message = "Доступ запрещён"
-	default:
-		statusCode = http.StatusInternalServerError
-		message = "Неверный логин или пароль"
+	var httpErr *apperrors.HttpError
+	if errors.As(err, &httpErr) {
+
+		return c.JSON(httpErr.Code, map[string]interface{}{
+			"status":  false,
+			"message": httpErr.Message,
+		})
 	}
 
-	return c.JSON(statusCode, map[string]interface{}{
+	var echoHttpErr *echo.HTTPError
+	if errors.As(err, &echoHttpErr) {
+
+		return c.JSON(echoHttpErr.Code, map[string]interface{}{
+			"status":  false,
+			"message": echoHttpErr.Message,
+		})
+	}
+
+	return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 		"status":  false,
-		"message": message,
+		"message": "Внутренняя ошибка сервера",
 	})
-}
-
-type UploadConfig struct {
-	AllowedMimeTypes []string 
-	MaxSizeMB        int64    // Максимальный размер файла в мегабайтах
-}
-
-// UploadContexts - это наша главная карта, "мозг" всей системы.
-// Мы помещаем ее сюда, в пакет utils, чтобы компилятор ее точно нашел.
-var UploadContexts = map[string]UploadConfig{
-	"profile_photo": {
-		AllowedMimeTypes: []string{"image/jpeg", "image/png", "image/gif", "image/webp"},
-		MaxSizeMB:        5, // Максимум 5 МБ для аватарок
-	},
-	"order_document": {
-		AllowedMimeTypes: []string{
-			"image/jpeg", "image/png",
-			"application/pdf",
-			"application/msword", // .doc
-			"application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
-			"application/vnd.ms-excel", // .xls
-			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
-		},
-		MaxSizeMB: 20, // Максимум 20 МБ для документов
-	},
 }

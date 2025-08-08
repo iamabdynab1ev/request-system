@@ -36,7 +36,7 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	runBranchRouter(secureGroup, dbConn, logger)
 	runOfficeRouter(secureGroup, dbConn, logger)
 
-	runPermissionRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
+	//runPermissionRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
 	runRoleRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
 	runRolePermissionRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
 	runUserRouter(secureGroup, dbConn, logger, authMW, authPermissionService, fileStorage)

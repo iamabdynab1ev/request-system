@@ -1,3 +1,5 @@
+// pkg/utils/auth_helpers.go
+
 package utils
 
 import (
@@ -20,4 +22,12 @@ func GetUserRoleIDFromCtx(ctx context.Context) (uint64, error) {
 		return 0, apperrors.ErrUserNotFound
 	}
 	return roleID, nil
+}
+
+func GetPermissionsMapFromCtx(ctx context.Context) (map[string]bool, error) {
+	permissions, ok := ctx.Value(contextkeys.UserPermissionsMapKey).(map[string]bool)
+	if !ok || permissions == nil {
+		return nil, apperrors.ErrForbidden
+	}
+	return permissions, nil
 }

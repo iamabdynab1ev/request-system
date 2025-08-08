@@ -1,3 +1,4 @@
+// internal/routes/order_routes.go
 package routes
 
 import (
@@ -16,7 +17,7 @@ func runOrderRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.L
 
 	txManager := repositories.NewTxManager(dbConn)
 	orderRepo := repositories.NewOrderRepository(dbConn)
-	userRepo := repositories.NewUserRepository(dbConn)
+	userRepo := repositories.NewUserRepository(dbConn, logger)
 	statusRepo := repositories.NewStatusRepository(dbConn)
 	priorityRepo := repositories.NewPriorityRepository(dbConn)
 	attachRepo := repositories.NewAttachmentRepository(dbConn)
@@ -24,7 +25,7 @@ func runOrderRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.L
 
 	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
 	if err != nil {
-		logger.Fatal("не удалось создать файловое хранилище", zap.Error(err))
+		logger.Fatal("не удалось создать файловое хранилище для OrderRouter", zap.Error(err))
 	}
 
 	orderService := services.NewOrderService(
@@ -41,11 +42,10 @@ func runOrderRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.L
 
 	orderController := controllers.NewOrderController(orderService, logger)
 
-	secureGroup.POST("/order", orderController.CreateOrder, authMW.AuthorizeAny("orders:create", "orders:manage:all"))
-	secureGroup.GET("/order", orderController.GetOrders, authMW.AuthorizeAny("orders:view:all", "orders:view:department", "orders:view:own"))
-	secureGroup.POST("/order/:id/delegate", orderController.DelegateOrder, authMW.AuthorizeAny("orders:delegate:department", "orders:manage:all"))
-	secureGroup.GET("/order", orderController.GetOrders, authMW.AuthorizeAny("orders:view:all", "orders:view:department", "orders:view:own"))
-
-	// group.GET("/orders/:id", orderController.FindOrder, authMW.AuthorizeAny("orders:view:all", "orders:view:department", "orders:view:own")) // Просмотр конкретной заявки
-	// group.PUT("/orders/:id", orderController.UpdateOrder, authMW.AuthorizeAny("orders:update:own", "orders:manage:all")) // Обновление своей заявки
+	secureGroup.POST("/order", orderController.CreateOrder, authMW.AuthorizeAny("orders:create"))
+	secureGroup.GET("/order", orderController.GetOrders, authMW.AuthorizeAny("orders:view"))
+	secureGroup.GET("/order/:id", orderController.FindOrder, authMW.AuthorizeAny("orders:view"))
+	//secureGroup.POST("/order/:id/delegate", orderController.DelegateOrder, authMW.AuthorizeAny("orders:delegate"))
+	secureGroup.PUT("/order/:id", orderController.UpdateOrder, authMW.AuthorizeAny("orders:update"))
+	secureGroup.DELETE("/order/:id", orderController.DeleteOrder, authMW.AuthorizeAny("orders:delete"))
 }

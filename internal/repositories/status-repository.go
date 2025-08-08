@@ -8,6 +8,7 @@ import (
 	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -35,7 +36,7 @@ func (db *dbStatus) ToDTO() dto.StatusDTO {
 		Type:      db.Type,
 		Code:      utils.NullStringToString(db.Code),
 		CreatedAt: db.CreatedAt.Local().Format("2006-01-02 15:04:05"),
-		UpdatedAt: utils.NullTimeToString(db.UpdatedAt),
+		UpdatedAt: utils.NullTimeToEmptyString(db.UpdatedAt),
 	}
 }
 
@@ -46,8 +47,8 @@ type StatusRepositoryInterface interface {
 	GetStatuses(ctx context.Context, limit uint64, offset uint64) ([]dto.StatusDTO, uint64, error)
 	FindStatus(ctx context.Context, id uint64) (*dto.StatusDTO, error)
 	FindByCode(ctx context.Context, code string) (*dto.StatusDTO, error)
-	CreateStatus(ctx context.Context, dto dto.CreateStatusDTO) (*dto.StatusDTO, error)
-	UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO) (*dto.StatusDTO, error)
+	CreateStatus(ctx context.Context, dto dto.CreateStatusDTO, iconSmallPath, iconBigPath string) (*dto.StatusDTO, error)
+	UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO, iconSmallPath, iconBigPath *string) (*dto.StatusDTO, error)
 	DeleteStatus(ctx context.Context, id uint64) error
 }
 
@@ -131,28 +132,81 @@ func (r *statusRepository) DeleteStatus(ctx context.Context, id uint64) error {
 	return nil
 }
 
-func (r *statusRepository) CreateStatus(ctx context.Context, payload dto.CreateStatusDTO) (*dto.StatusDTO, error) {
-	query := fmt.Sprintf("INSERT INTO %s (icon_small, icon_big, name, type, code) VALUES($1, $2, $3, $4, $5) RETURNING %s", statusTable, statusFields)
+// ИСПРАВЛЕНИЕ: Комментарий и функция теперь на разных строках
+// ПРИМЕЧАНИЕ: Ваш CreateStatusDTO имеет поля IconSmall/IconBig как string
+func (r *statusRepository) CreateStatus(ctx context.Context, payload dto.CreateStatusDTO, iconSmallPath, iconBigPath string) (*dto.StatusDTO, error) {
+	// В INSERT нет ID, база данных сгенерирует его сама
+	query := fmt.Sprintf("INSERT INTO %s (name, type, code, icon_small, icon_big) VALUES($1, $2, $3, $4, $5) RETURNING %s", statusTable, statusFields)
+
 	var dbRow dbStatus
-	err := r.storage.QueryRow(ctx, query, payload.IconSmall, payload.IconBig, payload.Name, payload.Type, payload.Code).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+	// Передаем поля из DTO и пути к иконкам
+	err := r.storage.QueryRow(ctx, query,
+		payload.Name, payload.Type, payload.Code,
+		iconSmallPath, iconBigPath,
+	).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+
 	if err != nil {
-		// Here you might want to check for specific pg errors, like unique constraint violations
+		// Эта проверка отловит дубликаты по другим уникальным полям, если они есть (например, `code`)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // 23505 - unique_violation
+			return nil, apperrors.ErrConflict
+		}
 		return nil, err
 	}
+
 	statusDTO := dbRow.ToDTO()
 	return &statusDTO, nil
 }
+func (r *statusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO, iconSmallPath, iconBigPath *string) (*dto.StatusDTO, error) {
+	var setClauses []string
+	var args []interface{}
+	argId := 1
 
-func (r *statusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO) (*dto.StatusDTO, error) {
-	query := fmt.Sprintf("UPDATE %s SET icon_small = $1, icon_big = $2, name = $3, type = $4, code = $5, updated_at = NOW() WHERE id = $6 RETURNING %s", statusTable, statusFields)
+	if dto.Name != nil {
+		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argId))
+		args = append(args, *dto.Name)
+		argId++
+	}
+	if dto.Type != nil {
+		setClauses = append(setClauses, fmt.Sprintf("type = $%d", argId))
+		args = append(args, *dto.Type)
+		argId++
+	}
+	if dto.Code != nil {
+		setClauses = append(setClauses, fmt.Sprintf("code = $%d", argId))
+		args = append(args, *dto.Code)
+		argId++
+	}
+	if iconSmallPath != nil {
+		setClauses = append(setClauses, fmt.Sprintf("icon_small = $%d", argId))
+		args = append(args, *iconSmallPath)
+		argId++
+	}
+	if iconBigPath != nil {
+		setClauses = append(setClauses, fmt.Sprintf("icon_big = $%d", argId))
+		args = append(args, *iconBigPath)
+		argId++
+	}
+
+	if len(setClauses) == 0 {
+		return r.FindStatus(ctx, id)
+	}
+
+	setClauses = append(setClauses, "updated_at = NOW()")
+	setQuery := strings.Join(setClauses, ", ")
+
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d RETURNING %s", statusTable, setQuery, argId, statusFields)
+	args = append(args, id)
+
 	var dbRow dbStatus
-	err := r.storage.QueryRow(ctx, query, dto.IconSmall, dto.IconBig, dto.Name, dto.Type, dto.Code, id).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+	err := r.storage.QueryRow(ctx, query, args...).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+
 	statusDTO := dbRow.ToDTO()
 	return &statusDTO, nil
 }

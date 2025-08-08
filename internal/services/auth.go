@@ -19,10 +19,10 @@ import (
 
 const (
 	maxLoginAttempts      = 5
-	lockoutDuration       = 1 * time.Minute
-	verificationCodeTTL   = 1 * time.Minute
-	resetPasswordTokenTTL = 1 * time.Minute
-	resetCodeAttemptsTTL  = 1 * time.Minute
+	lockoutDuration       = 5 * time.Minute
+	verificationCodeTTL   = 5 * time.Minute
+	resetPasswordTokenTTL = 5 * time.Minute
+	resetCodeAttemptsTTL  = 5 * time.Minute
 	maxResetCodeAttempts  = 5
 )
 
@@ -179,7 +179,6 @@ func (s *AuthService) resetLoginAttempts(ctx context.Context, userID uint64) {
 	lockoutKey := fmt.Sprintf("lockout:%d", userID)
 	if err := s.cacheRepo.Del(ctx, attemptsKey, lockoutKey); err != nil {
 		s.logger.Error("Ошибка удаления ключей попыток и блокировки из кеша", zap.Error(err))
-	
 	}
 }
 func (s *AuthService) CheckRecoveryOptions(ctx context.Context, payload dto.ForgotPasswordInitDTO) (*dto.ForgotPasswordOptionsDTO, error) {
@@ -194,7 +193,7 @@ func (s *AuthService) CheckRecoveryOptions(ctx context.Context, payload dto.Forg
 
 	options := []string{"email"}
 	if user.PhoneNumber != "" {
-		options = append(options, "phone_number")
+		options = append(options, "phone")
 	}
 
 	logger.Info("Опции восстановления найдены", zap.Strings("options", options))
@@ -215,17 +214,18 @@ func (s *AuthService) SendRecoveryInstructions(ctx context.Context, payload dto.
 		return s.sendEmailRecovery(ctx, user)
 	}
 
-	if payload.Method == "phone_number" {
+	if payload.Method == "phone" {
 		return s.sendPhoneRecovery(ctx, user)
 	}
 
-	return apperrors.ErrBadRequest
+	return apperrors.ErrBadRequest // На случай, если метод не "email" и не "phone"
 }
 
 func (s *AuthService) ResetPasswordWithEmail(ctx context.Context, payload dto.ResetPasswordEmailDTO) error {
 	logger := s.logger.With(zap.String("token_suffix", payload.Token[len(payload.Token)-4:]))
 	logger.Info("Сброс пароля по email токену")
 
+	// Получаем ID пользователя из кеша
 	cacheKey := fmt.Sprintf("reset_token:%s", payload.Token)
 	userIDStr, err := s.cacheRepo.Get(ctx, cacheKey)
 	if err != nil {
@@ -233,10 +233,7 @@ func (s *AuthService) ResetPasswordWithEmail(ctx context.Context, payload dto.Re
 		return apperrors.ErrInvalidResetToken
 	}
 
-	if err := s.cacheRepo.Del(ctx, cacheKey); err != nil {
-		logger.Error("Ошибка удаления кода сброса из кеша", zap.Error(err))
-		return apperrors.ErrInternalServer
-	}
+	s.cacheRepo.Del(ctx, cacheKey)
 
 	userID, err := strconv.ParseUint(userIDStr, 10, 64)
 	if err != nil {

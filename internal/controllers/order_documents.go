@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap"
 )
 
-
 type OrderDocumentController struct {
 	orderDocumentService *services.OrderDocumentService
 	logger               *zap.Logger
@@ -82,12 +81,12 @@ func (c *OrderDocumentController) CreateOrderDocument(ctx echo.Context) error {
 	var dto dto.CreateOrderDocumentDTO
 	if err := ctx.Bind(&dto); err != nil {
 		c.logger.Error("Ошибка при связывании запроса для создания документа заказа", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("request binding failed: %w", apperrors.ErrBadRequest))
+		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
 	}
 
 	if err := ctx.Validate(&dto); err != nil {
 		c.logger.Error("Ошибка при валидации данных для создания документа заказа", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("validation failed: %w", apperrors.ErrBadRequest))
+		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
 	}
 
 	res, err := c.orderDocumentService.CreateOrderDocument(reqCtx, dto)

@@ -2,13 +2,13 @@ package services
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
+	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
+	apperrors "request-system/pkg/errors"
+	"request-system/pkg/utils"
 
-	"github.com/jackc/pgx/v4"
 	"go.uber.org/zap"
 )
 
@@ -22,31 +22,49 @@ type RoleServiceInterface interface {
 
 type RoleService struct {
 	repo                  repositories.RoleRepositoryInterface
+	userRepo              repositories.UserRepositoryInterface
 	authPermissionService AuthPermissionServiceInterface
 	logger                *zap.Logger
 }
 
 func NewRoleService(
 	repo repositories.RoleRepositoryInterface,
+	userRepo repositories.UserRepositoryInterface,
 	authPermissionService AuthPermissionServiceInterface,
 	logger *zap.Logger,
 ) RoleServiceInterface {
-	return &RoleService{
-		repo:                  repo,
-		authPermissionService: authPermissionService,
-		logger:                logger,
+	return &RoleService{repo: repo, userRepo: userRepo, authPermissionService: authPermissionService, logger: logger}
+}
+
+// buildAuthzContext - приватный хелпер для сборки контекста авторизации
+func (s *RoleService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
+	userID, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
 	}
+	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	actor, err := s.userRepo.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, apperrors.ErrUserNotFound
+	}
+	return &authz.Context{Actor: actor, Permissions: permissionsMap, Target: nil}, nil
 }
 
 func (s *RoleService) GetRoles(ctx context.Context, limit uint64, offset uint64) (*dto.PaginatedResponse[dto.RoleDTO], error) {
-	roles, total, err := s.repo.GetRoles(ctx, limit, offset)
+	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
-		s.logger.Error("ошибка при получении списка ролей в сервисе", zap.Error(err))
 		return nil, err
 	}
+	if !authz.CanDo("roles:view", *authContext) {
+		return nil, apperrors.ErrForbidden
+	}
 
-	if roles == nil {
-		roles = []dto.RoleDTO{}
+	roles, total, err := s.repo.GetRoles(ctx, limit, offset)
+	if err != nil {
+		return nil, err
 	}
 
 	var currentPage uint64 = 1
@@ -54,107 +72,98 @@ func (s *RoleService) GetRoles(ctx context.Context, limit uint64, offset uint64)
 		currentPage = (offset / limit) + 1
 	}
 
-	response := &dto.PaginatedResponse[dto.RoleDTO]{
-		List: roles,
-		Pagination: dto.PaginationObject{
-			TotalCount: total,
-			Page:       currentPage,
-			Limit:      limit,
-		},
-	}
-	return response, nil
+	return &dto.PaginatedResponse[dto.RoleDTO]{
+		List:       roles,
+		Pagination: dto.PaginationObject{TotalCount: total, Page: currentPage, Limit: limit},
+	}, nil
 }
+
 func (s *RoleService) FindRole(ctx context.Context, id uint64) (*dto.RoleDTO, error) {
+	authContext, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !authz.CanDo("roles:view", *authContext) {
+		return nil, apperrors.ErrForbidden
+	}
 	return s.repo.FindByID(ctx, id)
 }
 
 func (s *RoleService) CreateRole(ctx context.Context, dto dto.CreateRoleDTO) (*dto.RoleDTO, error) {
+	authContext, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !authz.CanDo("roles:create", *authContext) {
+		return nil, apperrors.ErrForbidden
+	}
+
 	tx, err := s.repo.BeginTx(ctx)
 	if err != nil {
-		s.logger.Error("CreateRole: не удалось начать транзакцию", zap.Error(err))
 		return nil, fmt.Errorf("ошибка создания роли: %w", err)
 	}
-	defer func() {
-		if rbErr := tx.Rollback(ctx); rbErr != nil && rbErr != pgx.ErrTxClosed {
-			s.logger.Error("CreateRole: ошибка при откате транзакции", zap.Error(rbErr))
-		}
-	}()
+	defer tx.Rollback(ctx)
 
 	newRoleID, err := s.repo.CreateRoleInTx(ctx, tx, dto)
 	if err != nil {
-		s.logger.Error("CreateRole: ошибка при создании роли в транзакции", zap.Any("dto", dto), zap.Error(err))
 		return nil, fmt.Errorf("ошибка создания роли: %w", err)
 	}
 
 	if len(dto.PermissionIDs) > 0 {
-		err = s.repo.LinkPermissionsToRoleInTx(ctx, tx, newRoleID, dto.PermissionIDs)
-		if err != nil {
-			s.logger.Error("CreateRole: ошибка при привязке прав к роли", zap.Uint64("roleId", newRoleID), zap.Error(err))
+		if err := s.repo.LinkPermissionsToRoleInTx(ctx, tx, newRoleID, dto.PermissionIDs); err != nil {
 			return nil, fmt.Errorf("ошибка привязки прав: %w", err)
 		}
 	}
-
 	if err := tx.Commit(ctx); err != nil {
-		s.logger.Error("CreateRole: не удалось закоммитить транзакцию", zap.Error(err))
 		return nil, fmt.Errorf("ошибка создания роли: %w", err)
 	}
-
-	if err := s.authPermissionService.InvalidateRolePermissionsCache(ctx, newRoleID); err != nil {
-		s.logger.Error("CreateRole: ошибка инвалидации кеша привилегий для новой роли", zap.Uint64("roleId", newRoleID), zap.Error(err))
-	}
-
-	s.logger.Info("роль успешно создана", zap.Uint64("newRoleId", newRoleID))
+	s.authPermissionService.InvalidateRolePermissionsCache(ctx, newRoleID)
 	return s.repo.FindByID(ctx, newRoleID)
 }
 
 func (s *RoleService) UpdateRole(ctx context.Context, id uint64, dto dto.UpdateRoleDTO) (*dto.RoleDTO, error) {
+	authContext, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !authz.CanDo("roles:update", *authContext) {
+		return nil, apperrors.ErrForbidden
+	}
+
 	tx, err := s.repo.BeginTx(ctx)
 	if err != nil {
-		s.logger.Error("UpdateRole: не удалось начать транзакцию для обновления", zap.Error(err))
 		return nil, fmt.Errorf("ошибка обновления роли: %w", err)
 	}
-	defer func() {
-		if rErr := tx.Rollback(ctx); rErr != nil && !errors.Is(rErr, sql.ErrTxDone) {
-			s.logger.Error("не удалось откатить транзакцию", zap.Error(rErr))
-		}
-	}()
+	defer tx.Rollback(ctx)
 
-	err = s.repo.UpdateRoleInTx(ctx, tx, id, dto)
-	if err != nil {
-		s.logger.Error("UpdateRole: ошибка при обновлении роли в транзакции", zap.Uint64("id", id), zap.Error(err))
+	if err := s.repo.UpdateRoleInTx(ctx, tx, id, dto); err != nil {
 		return nil, fmt.Errorf("ошибка обновления роли: %w", err)
 	}
 
 	if dto.PermissionIDs != nil {
-		err = s.repo.UnlinkAllPermissionsFromRoleInTx(ctx, tx, id)
-		if err != nil {
-			s.logger.Error("UpdateRole: ошибка при отвязке старых прав", zap.Uint64("id", id), zap.Error(err))
+		if err := s.repo.UnlinkAllPermissionsFromRoleInTx(ctx, tx, id); err != nil {
 			return nil, fmt.Errorf("ошибка отвязки прав: %w", err)
 		}
-		err = s.repo.LinkPermissionsToRoleInTx(ctx, tx, id, *dto.PermissionIDs)
-		if err != nil {
-			s.logger.Error("UpdateRole: ошибка при привязке новых прав", zap.Uint64("id", id), zap.Error(err))
+		if err := s.repo.LinkPermissionsToRoleInTx(ctx, tx, id, *dto.PermissionIDs); err != nil {
 			return nil, fmt.Errorf("ошибка привязки прав: %w", err)
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		s.logger.Error("UpdateRole: не удалось закоммитить транзакцию обновления", zap.Error(err))
 		return nil, fmt.Errorf("ошибка обновления роли: %w", err)
 	}
-
-	// Инвалидация кеша для обновленной роли после коммита
-	if err := s.authPermissionService.InvalidateRolePermissionsCache(ctx, id); err != nil { // <-- ИСПРАВЛЕНО: добавлена ctx
-		s.logger.Error("UpdateRole: ошибка инвалидации кеша привилегий для обновленной роли", zap.Uint64("id", id), zap.Error(err))
-	}
-
-	s.logger.Info("роль успешно обновлена", zap.Uint64("id", id))
+	s.authPermissionService.InvalidateRolePermissionsCache(ctx, id)
 	return s.repo.FindByID(ctx, id)
 }
 
 func (s *RoleService) DeleteRole(ctx context.Context, id uint64) error {
-	if err := s.authPermissionService.InvalidateRolePermissionsCache(ctx, id); err != nil {
-		s.logger.Error("DeleteRole: ошибка инвалидации кеша привилегий для удаляемой роли", zap.Uint64("id", id), zap.Error(err))
+	authContext, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return err
 	}
+	if !authz.CanDo("roles:delete", *authContext) {
+		return apperrors.ErrForbidden
+	}
+	s.authPermissionService.InvalidateRolePermissionsCache(ctx, id)
 	return s.repo.DeleteRole(ctx, id)
 }

@@ -1,29 +1,41 @@
+// config/upload_config.go
+
 package config
 
-// UploadConfig описывает правила для одного типа загрузки.
 type UploadConfig struct {
-	AllowedMimeTypes []string // Список разрешенных MIME-типов
-	MaxSizeMB        int64    // Максимальный размер файла в мегабайтах
+	AllowedMimeTypes []string
+	MaxSizeMB        int64
+	ExpectedWidth    int
+	ExpectedHeight   int
+
+	PathPrefix string
 }
 
-// UploadContexts - это наша главная карта, "мозг" всей системы.
-// Ключ - это "контекст" загрузки, который фронтенд будет передавать в URL.
-// Значение - правила для этого контекста.
 var UploadContexts = map[string]UploadConfig{
 	"profile_photo": {
 		AllowedMimeTypes: []string{"image/jpeg", "image/png", "image/gif", "image/webp"},
-		MaxSizeMB:        5, // Максимум 5 МБ для аватарок
+		MaxSizeMB:        5,
+		PathPrefix:       "avatars", // <---
 	},
 	"order_document": {
 		AllowedMimeTypes: []string{
-			"image/jpeg", "image/png",
-			"application/pdf",
-			"application/msword", // .doc
-			"application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
-			"application/vnd.ms-excel", // .xls
-			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",      // .xlsx
+			"image/jpeg", "image/png", "application/pdf", // ... и другие ...
 		},
-		MaxSizeMB: 20, // Максимум 20 МБ для документов
+		MaxSizeMB:  20,
+		PathPrefix: "orders", // <---
 	},
- 
+	"status_icon_small": {
+		AllowedMimeTypes: []string{"image/png", "image/jpeg", "image/gif", "image/svg"},
+		MaxSizeMB:        1,
+		ExpectedWidth:    16,
+		ExpectedHeight:   16,
+		PathPrefix:       "icons", // <---
+	},
+	"status_icon_big": {
+		AllowedMimeTypes: []string{"image/png", "image/jpeg", "image/gif", "image/svg"},
+		MaxSizeMB:        1,
+		ExpectedWidth:    24,
+		ExpectedHeight:   24,
+		PathPrefix:       "icons", // <---
+	},
 }
