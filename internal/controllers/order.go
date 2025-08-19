@@ -46,12 +46,13 @@ func (c *OrderController) FindOrder(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	orderID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID заявки", err))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID", err))
 	}
 
 	order, err := c.orderService.FindOrderByID(reqCtx, orderID)
 	if err != nil {
-		return utils.ErrorResponse(ctx, err) // Сервис вернет 403, 404 или 500
+		c.logger.Warn("Ошибка при поиске заявки по ID", zap.Uint64("orderID", orderID), zap.Error(err))
+		return utils.ErrorResponse(ctx, err)
 	}
 
 	return utils.SuccessResponse(ctx, order, "Заявка успешно найдена", http.StatusOK)
@@ -79,11 +80,12 @@ func (c *OrderController) CreateOrder(ctx echo.Context) error {
 func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 	orderID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID заявки", err))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID", err))
 	}
 
 	dataString := ctx.FormValue("data")
-	var dto dto.UpdateOrderDTO // Используем наш новый DTO
+	var dto dto.UpdateOrderDTO
+
 	if dataString != "" {
 		if err := json.Unmarshal([]byte(dataString), &dto); err != nil {
 			return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "некорректный JSON в поле 'data'", err))
@@ -116,11 +118,10 @@ func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 func (c *OrderController) DeleteOrder(ctx echo.Context) error {
 	orderID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID заявки", err))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID", err))
 	}
 
-	err = c.orderService.DeleteOrder(ctx.Request().Context(), orderID)
-	if err != nil {
+	if err := c.orderService.DeleteOrder(ctx.Request().Context(), orderID); err != nil {
 		c.logger.Error("Ошибка при удалении заявки", zap.Uint64("orderID", orderID), zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}

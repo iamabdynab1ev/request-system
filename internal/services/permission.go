@@ -2,15 +2,17 @@ package services
 
 import (
 	"context"
-	"fmt"
+	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
+	apperrors "request-system/pkg/errors"
+	"request-system/pkg/utils"
 
 	"go.uber.org/zap"
 )
 
 type PermissionServiceInterface interface {
-	GetPermissions(ctx context.Context, limit uint64, offset uint64) (*dto.PaginatedResponse[dto.PermissionDTO], error)
+	GetPermissions(ctx context.Context, limit uint64, offset uint64, search string) (*dto.PaginatedResponse[dto.PermissionDTO], error)
 	FindPermissionByID(ctx context.Context, id uint64) (*dto.PermissionDTO, error)
 	CreatePermission(ctx context.Context, dto dto.CreatePermissionDTO) (*dto.PermissionDTO, error)
 	UpdatePermission(ctx context.Context, id uint64, dto dto.UpdatePermissionDTO) (*dto.PermissionDTO, error)
@@ -19,65 +21,108 @@ type PermissionServiceInterface interface {
 
 type PermissionService struct {
 	permissionRepository repositories.PermissionRepositoryInterface
+	userRepo             repositories.UserRepositoryInterface
 	logger               *zap.Logger
 }
 
-func NewPermissionService(permissionRepository repositories.PermissionRepositoryInterface, logger *zap.Logger) PermissionServiceInterface {
+func NewPermissionService(
+	permissionRepository repositories.PermissionRepositoryInterface,
+	userRepo repositories.UserRepositoryInterface,
+	logger *zap.Logger,
+) PermissionServiceInterface {
 	return &PermissionService{
 		permissionRepository: permissionRepository,
+		userRepo:             userRepo,
 		logger:               logger,
 	}
 }
-func (s *PermissionService) GetPermissions(ctx context.Context, limit uint64, offset uint64) (*dto.PaginatedResponse[dto.PermissionDTO], error) {
-	permissions, total, err := s.permissionRepository.GetPermissions(ctx, limit, offset)
+
+func (s *PermissionService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
+	userID, err := utils.GetUserIDFromCtx(ctx)
 	if err != nil {
-		s.logger.Error("Ошибка при получении списка привилегий из репозитория", zap.Error(err))
-		return nil, fmt.Errorf("ошибка получения привилегий: %w", err)
+		return nil, err
 	}
+	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	actor, err := s.userRepo.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, apperrors.ErrUserNotFound
+	}
+	return &authz.Context{Actor: actor, Permissions: permissionsMap, Target: nil}, nil
+}
+
+func (s *PermissionService) GetPermissions(ctx context.Context, limit uint64, offset uint64, search string) (*dto.PaginatedResponse[dto.PermissionDTO], error) {
+	authContext, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if !authz.CanDo(authz.PermissionsView, *authContext) {
+		s.logger.Warn("Отказано в доступе на просмотр привилегий", zap.Uint64("actorID", authContext.Actor.ID))
+		return nil, apperrors.ErrForbidden
+	}
+
+	permissions, total, err := s.permissionRepository.GetPermissions(ctx, limit, offset, search)
+	if err != nil {
+		return nil, err
+	}
+
 	if permissions == nil {
 		permissions = []dto.PermissionDTO{}
 	}
 	var currentPage uint64 = 1
-	if limit > 0 { // Проверка, чтобы избежать деления на ноль
+	if limit > 0 {
 		currentPage = (offset / limit) + 1
 	}
-	response := &dto.PaginatedResponse[dto.PermissionDTO]{
-		List: permissions,
-		Pagination: dto.PaginationObject{
-			TotalCount: total,
-			Page:       currentPage,
-			Limit:      limit,
-		},
-	}
-	return response, nil
+
+	return &dto.PaginatedResponse[dto.PermissionDTO]{
+		List:       permissions,
+		Pagination: dto.PaginationObject{TotalCount: total, Page: currentPage, Limit: limit},
+	}, nil
 }
 
 func (s *PermissionService) FindPermissionByID(ctx context.Context, id uint64) (*dto.PermissionDTO, error) {
-
-	permission, err := s.permissionRepository.FindPermissionByID(ctx, id)
+	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
-		s.logger.Error("Ошибка при поиске привилегии", zap.Error(err), zap.Uint64("permID", id))
-		return nil, fmt.Errorf("ошибка поиска привилегии: %w", err)
+		return nil, err
 	}
-	s.logger.Info("Привилегия успешно найдена", zap.Any("permission", permission))
-	return permission, nil
-	// <-- УДАЛЕНО: лишняя строка "return s.permissionRepository.FindPermissionByID(ctx, id)"
+	if !authz.CanDo(authz.PermissionsView, *authContext) {
+		return nil, apperrors.ErrForbidden
+	}
+	return s.permissionRepository.FindPermissionByID(ctx, id)
 }
 
 func (s *PermissionService) CreatePermission(ctx context.Context, dto dto.CreatePermissionDTO) (*dto.PermissionDTO, error) {
-	permission, err := s.permissionRepository.CreatePermission(ctx, dto)
+	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
-		s.logger.Error("Ошибка при создании привилегии", zap.Error(err))
 		return nil, err
 	}
-	s.logger.Info("Привилегия успешно создана", zap.Any("permission", permission))
-	return permission, nil
+	if !authContext.Permissions[authz.Superuser] {
+		return nil, apperrors.ErrForbidden
+	}
+	return s.permissionRepository.CreatePermission(ctx, dto)
 }
 
 func (s *PermissionService) UpdatePermission(ctx context.Context, id uint64, dto dto.UpdatePermissionDTO) (*dto.PermissionDTO, error) {
+	authContext, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !authContext.Permissions[authz.Superuser] {
+		return nil, apperrors.ErrForbidden
+	}
 	return s.permissionRepository.UpdatePermission(ctx, id, dto)
 }
 
 func (s *PermissionService) DeletePermission(ctx context.Context, id uint64) error {
+	authContext, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !authContext.Permissions[authz.Superuser] {
+		return apperrors.ErrForbidden
+	}
 	return s.permissionRepository.DeletePermission(ctx, id)
 }

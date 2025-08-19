@@ -3,12 +3,14 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -23,7 +25,7 @@ type RoleServiceInterface interface {
 type RoleService struct {
 	repo                  repositories.RoleRepositoryInterface
 	userRepo              repositories.UserRepositoryInterface
-	authPermissionService AuthPermissionServiceInterface
+	authPermissionService AuthPermissionServiceInterface // <-- ВОТ ГДЕ ОШИБКА
 	logger                *zap.Logger
 }
 
@@ -58,7 +60,7 @@ func (s *RoleService) GetRoles(ctx context.Context, limit uint64, offset uint64)
 	if err != nil {
 		return nil, err
 	}
-	if !authz.CanDo("roles:view", *authContext) {
+	if !authz.CanDo(authz.RolesView, *authContext) {
 		return nil, apperrors.ErrForbidden
 	}
 
@@ -83,7 +85,8 @@ func (s *RoleService) FindRole(ctx context.Context, id uint64) (*dto.RoleDTO, er
 	if err != nil {
 		return nil, err
 	}
-	if !authz.CanDo("roles:view", *authContext) {
+
+	if !authz.CanDo(authz.RolesView, *authContext) {
 		return nil, apperrors.ErrForbidden
 	}
 	return s.repo.FindByID(ctx, id)
@@ -94,7 +97,8 @@ func (s *RoleService) CreateRole(ctx context.Context, dto dto.CreateRoleDTO) (*d
 	if err != nil {
 		return nil, err
 	}
-	if !authz.CanDo("roles:create", *authContext) {
+
+	if !authz.CanDo(authz.RolesCreate, *authContext) {
 		return nil, apperrors.ErrForbidden
 	}
 
@@ -102,7 +106,11 @@ func (s *RoleService) CreateRole(ctx context.Context, dto dto.CreateRoleDTO) (*d
 	if err != nil {
 		return nil, fmt.Errorf("ошибка создания роли: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && err != pgx.ErrTxClosed {
+			log.Println("Ошибка при rollback:", err)
+		}
+	}()
 
 	newRoleID, err := s.repo.CreateRoleInTx(ctx, tx, dto)
 	if err != nil {
@@ -126,7 +134,8 @@ func (s *RoleService) UpdateRole(ctx context.Context, id uint64, dto dto.UpdateR
 	if err != nil {
 		return nil, err
 	}
-	if !authz.CanDo("roles:update", *authContext) {
+
+	if !authz.CanDo(authz.RolesUpdate, *authContext) {
 		return nil, apperrors.ErrForbidden
 	}
 
@@ -134,7 +143,11 @@ func (s *RoleService) UpdateRole(ctx context.Context, id uint64, dto dto.UpdateR
 	if err != nil {
 		return nil, fmt.Errorf("ошибка обновления роли: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil && err != pgx.ErrTxClosed {
+			log.Println("Ошибка при rollback:", err)
+		}
+	}()
 
 	if err := s.repo.UpdateRoleInTx(ctx, tx, id, dto); err != nil {
 		return nil, fmt.Errorf("ошибка обновления роли: %w", err)
@@ -161,7 +174,7 @@ func (s *RoleService) DeleteRole(ctx context.Context, id uint64) error {
 	if err != nil {
 		return err
 	}
-	if !authz.CanDo("roles:delete", *authContext) {
+	if !authz.CanDo(authz.RolesDelete, *authContext) {
 		return apperrors.ErrForbidden
 	}
 	s.authPermissionService.InvalidateRolePermissionsCache(ctx, id)

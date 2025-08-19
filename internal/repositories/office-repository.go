@@ -1,29 +1,27 @@
+// Файл: internal/repositories/office-repository.go
+// СКОПИРУЙТЕ И ПОЛНОСТЬЮ ЗАМЕНИТЕ СОДЕРЖИМОЕ
+
 package repositories
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const officeTableForJoinFinal = "offices"
-const officeFieldsForJoinFinal = "o.id, o.name, o.address, o.open_date, o.branch_id, o.status_id, o.created_at, o.updated_at"
-
-const branchTableForOfficeJoinFinalRepo = "branches"
-const branchFieldsShortForOfficeJoinFinalRepo = "b.id, b.name, b.short_name"
-
-const statusTableForOfficeFinalRepo = "statuses"
-const statusFieldsShortForOfficeFinalRepo = "s.id, s.name"
+const officeTable = "offices"
 
 type OfficeRepositoryInterface interface {
-	GetOffices(ctx context.Context, limit uint64, offset uint64) ([]dto.OfficeDTO, error)
+	GetOffices(ctx context.Context, limit uint64, offset uint64) ([]dto.OfficeDTO, uint64, error)
 	FindOffice(ctx context.Context, id uint64) (*dto.OfficeDTO, error)
-	CreateOffice(ctx context.Context, dto dto.CreateOfficeDTO) error
+	CreateOffice(ctx context.Context, dto dto.CreateOfficeDTO) (uint64, error)
 	UpdateOffice(ctx context.Context, id uint64, dto dto.UpdateOfficeDTO) error
 	DeleteOffice(ctx context.Context, id uint64) error
 }
@@ -38,202 +36,151 @@ func NewOfficeRepository(storage *pgxpool.Pool) OfficeRepositoryInterface {
 	}
 }
 
-func (r *OfficeRepository) GetOffices(ctx context.Context, limit uint64, offset uint64) ([]dto.OfficeDTO, error) {
+func (r *OfficeRepository) GetOffices(ctx context.Context, limit uint64, offset uint64) ([]dto.OfficeDTO, uint64, error) {
+	var total uint64
+	err := r.storage.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", officeTable)).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка подсчета офисов: %w", err)
+	}
+
+	if total == 0 {
+		return []dto.OfficeDTO{}, 0, nil
+	}
+
 	query := fmt.Sprintf(`
 		SELECT
-			%s,
-			%s,
-            %s
+			o.id, o.name, o.address, o.open_date, o.created_at, o.updated_at,
+			b.id, b.name, b.short_name,
+            s.id, s.name
 		FROM %s o
 		LEFT JOIN %s b ON o.branch_id = b.id
         LEFT JOIN %s s ON o.status_id = s.id
-		`,
-		officeFieldsForJoinFinal,
-		branchFieldsShortForOfficeJoinFinalRepo,
-		statusFieldsShortForOfficeFinalRepo,
-		officeTableForJoinFinal,
-		branchTableForOfficeJoinFinalRepo,
-		statusTableForOfficeFinalRepo,
-	)
+		ORDER BY o.id DESC LIMIT $1 OFFSET $2
+		`, officeTable, branchTable, statusTable)
 
-	rows, err := r.storage.Query(ctx, query)
+	rows, err := r.storage.Query(ctx, query, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
-	offices := make([]dto.OfficeDTO, 0, 20)
-
+	var offices []dto.OfficeDTO
 	for rows.Next() {
 		var office dto.OfficeDTO
 		var branch dto.ShortBranchDTO
 		var status dto.ShortStatusDTO
-
-		var openDate time.Time
-		var createdAt time.Time
-		var updatedAt time.Time
-		var branchesIDFromOfficeTable int
-		var statusIDFromOfficeTable int
-
-		err := rows.Scan(
-			&office.ID,
-			&office.Name,
-			&office.Address,
-			&openDate,
-
-			&branchesIDFromOfficeTable,
-			&statusIDFromOfficeTable,
-
-			&createdAt,
-			&updatedAt,
-
-			&branch.ID,
-			&branch.Name,
-			&branch.ShortName,
-
-			&status.ID,
-			&status.Name,
-		)
-
-		if err != nil {
-			return nil, err
+		if err := rows.Scan(
+			&office.ID, &office.Name, &office.Address, &office.OpenDate, &office.CreatedAt, &office.UpdatedAt,
+			&branch.ID, &branch.Name, &branch.ShortName,
+			&status.ID, &status.Name,
+		); err != nil {
+			return nil, 0, err
 		}
-
-		office.OpenDate = openDate.Format("2006-01-02")
-		office.CreatedAt = createdAt.Format("2006-01-02, 15:04:05")
-		office.UpdatedAt = updatedAt.Format("2006-01-02, 15:04:05")
-
-		office.Branch = branch
-		office.Status = status
-
+		office.Branch = &branch
+		office.Status = &status
 		offices = append(offices, office)
 	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return offices, nil
+	return offices, total, nil
 }
 
 func (r *OfficeRepository) FindOffice(ctx context.Context, id uint64) (*dto.OfficeDTO, error) {
 	query := fmt.Sprintf(`
 		SELECT
-			%s,
-            %s,
-			%s
+			o.id, o.name, o.address, o.open_date, o.created_at, o.updated_at,
+			b.id, b.name, b.short_name,
+			s.id, s.name
 		FROM %s o
 		LEFT JOIN %s b ON o.branch_id = b.id
 		LEFT JOIN %s s ON o.status_id = s.id
 		WHERE o.id = $1
-	`,
-		officeFieldsForJoinFinal,
-		branchFieldsShortForOfficeJoinFinalRepo,
-		statusFieldsShortForOfficeFinalRepo,
-		officeTableForJoinFinal,
-		branchTableForOfficeJoinFinalRepo,
-		statusTableForOfficeFinalRepo,
-	)
+	`, officeTable, branchTable, statusTable)
 
 	var office dto.OfficeDTO
 	var branch dto.ShortBranchDTO
 	var status dto.ShortStatusDTO
-	var openDate time.Time
-	var createdAt time.Time
-	var updatedAt time.Time
-	var branchesIDFromOfficeTable int
-	var statusIDFromOfficeTable int
-
 	err := r.storage.QueryRow(ctx, query, id).Scan(
-		&office.ID,
-		&office.Name,
-		&office.Address,
-		&openDate,
-		&branchesIDFromOfficeTable,
-		&statusIDFromOfficeTable,
-
-		&createdAt,
-		&updatedAt,
-
-		&branch.ID,
-		&branch.Name,
-		&branch.ShortName,
-
-		&status.ID,
-		&status.Name,
+		&office.ID, &office.Name, &office.Address, &office.OpenDate, &office.CreatedAt, &office.UpdatedAt,
+		&branch.ID, &branch.Name, &branch.ShortName,
+		&status.ID, &status.Name,
 	)
-
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
-
-	office.OpenDate = openDate.Format("2006-01-02")
-	office.CreatedAt = createdAt.Format("2006-01-02, 15:04:05")
-	office.UpdatedAt = updatedAt.Format("2006-01-02, 15:04:05")
-	office.Branch = branch
-	office.Status = status
-
+	office.Branch = &branch
+	office.Status = &status
 	return &office, nil
 }
 
-func (r *OfficeRepository) CreateOffice(ctx context.Context, dto dto.CreateOfficeDTO) error {
+func (r *OfficeRepository) CreateOffice(ctx context.Context, dto dto.CreateOfficeDTO) (uint64, error) {
 	query := fmt.Sprintf(`
         INSERT INTO %s (name, address, open_date, branch_id, status_id)
-        VALUES ($1, $2, $3, $4, $5)
-    `, officeTableForJoinFinal)
+        VALUES ($1, $2, $3, $4, $5) RETURNING id
+    `, officeTable)
 
 	openDate, err := time.Parse("2006-01-02", dto.OpenDate)
 	if err != nil {
-		return fmt.Errorf("invalid open_date format: %w", err)
+		return 0, fmt.Errorf("invalid open_date format: %w", err)
 	}
 
-	_, err = r.storage.Exec(ctx, query,
-		dto.Name,
-		dto.Address,
-		openDate,
-		dto.BranchID,
-		dto.StatusID,
-	)
-
+	var newID uint64
+	err = r.storage.QueryRow(ctx, query, dto.Name, dto.Address, openDate, dto.BranchID, dto.StatusID).Scan(&newID)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return nil
+	return newID, nil
 }
 
 func (r *OfficeRepository) UpdateOffice(ctx context.Context, id uint64, dto dto.UpdateOfficeDTO) error {
-	var parsedOpenDate time.Time
-	var err error
+	updates := make([]string, 0)
+	args := make([]interface{}, 0)
+	argID := 1
 
+	if dto.Name != "" {
+		updates = append(updates, fmt.Sprintf("name = $%d", argID))
+		args = append(args, dto.Name)
+		argID++
+	}
+	if dto.Address != "" {
+		updates = append(updates, fmt.Sprintf("address = $%d", argID))
+		args = append(args, dto.Address)
+		argID++
+	}
+	if dto.BranchID != 0 {
+		updates = append(updates, fmt.Sprintf("branch_id = $%d", argID))
+		args = append(args, dto.BranchID)
+		argID++
+	}
+	if dto.StatusID != 0 {
+		updates = append(updates, fmt.Sprintf("status_id = $%d", argID))
+		args = append(args, dto.StatusID)
+		argID++
+	}
 	if dto.OpenDate != "" {
-		parsedOpenDate, err = time.Parse("2006-01-02", dto.OpenDate)
+		openDate, err := time.Parse("2006-01-02", dto.OpenDate)
 		if err != nil {
 			return fmt.Errorf("invalid open_date format: %w", err)
 		}
+		updates = append(updates, fmt.Sprintf("open_date = $%d", argID))
+		args = append(args, openDate)
+		argID++
 	}
 
-	query := fmt.Sprintf(`
-        UPDATE %s
-        SET name = $1, address = $2, open_date = $3, branch_id = $4, status_id = $5, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $6
-    `, officeTableForJoinFinal)
+	if len(updates) == 0 {
+		return nil
+	}
+	updates = append(updates, fmt.Sprintf("updated_at = $%d", argID))
+	args = append(args, time.Now())
+	argID++
+	args = append(args, id)
 
-	result, err := r.storage.Exec(ctx, query,
-		dto.Name,
-		dto.Address,
-		parsedOpenDate,
-		dto.BranchID,
-		dto.StatusID,
-		id,
-	)
-
+	query := fmt.Sprintf(`UPDATE %s SET %s WHERE id = $%d`, officeTable, strings.Join(updates, ", "), argID)
+	result, err := r.storage.Exec(ctx, query, args...)
 	if err != nil {
 		return err
 	}
-
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
@@ -241,16 +188,13 @@ func (r *OfficeRepository) UpdateOffice(ctx context.Context, id uint64, dto dto.
 }
 
 func (r *OfficeRepository) DeleteOffice(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", officeTableForJoinFinal)
-
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", officeTable)
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
-
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
-
 	return nil
 }

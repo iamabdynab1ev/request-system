@@ -37,12 +37,33 @@ func (r *RoleRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 
 func (r *RoleRepository) GetRoles(ctx context.Context, limit uint64, offset uint64) ([]dto.RoleDTO, uint64, error) {
 	var total uint64
-	err := r.storage.QueryRow(ctx, "SELECT COUNT(*) FROM roles").Scan(&total)
-	if err != nil {
+	if err := r.storage.QueryRow(ctx, "SELECT COUNT(*) FROM public.roles").Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("ошибка подсчета ролей: %w", err)
 	}
 
-	query := `SELECT id, name, description, status_id, created_at, updated_at FROM roles ORDER BY id LIMIT $1 OFFSET $2`
+	if total == 0 {
+		return []dto.RoleDTO{}, 0, nil
+	}
+
+	query := `
+		SELECT
+			r.id,
+			r.name,
+			r.description,
+			r.status_id,
+			r.created_at,
+			r.updated_at,
+			COALESCE(ARRAY_AGG(rp.permission_id) FILTER (WHERE rp.permission_id IS NOT NULL), '{}') AS permissions
+		FROM
+			public.roles r
+		LEFT JOIN
+			public.role_permissions rp ON r.id = rp.role_id
+		GROUP BY
+			r.id
+		ORDER BY
+			r.id
+		LIMIT $1 OFFSET $2;
+	`
 	rows, err := r.storage.Query(ctx, query, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("ошибка получения списка ролей: %w", err)
@@ -52,17 +73,33 @@ func (r *RoleRepository) GetRoles(ctx context.Context, limit uint64, offset uint
 	roles := make([]dto.RoleDTO, 0)
 	for rows.Next() {
 		var role dto.RoleDTO
-		if err := rows.Scan(&role.ID, &role.Name, &role.Description, &role.StatusID, &role.CreatedAt, &role.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&role.ID,
+			&role.Name,
+			&role.Description,
+			&role.StatusID,
+			&role.CreatedAt,
+			&role.UpdatedAt,
+			&role.Permissions, // Теперь это []uint64, и ошибки не будет
+		); err != nil {
 			return nil, 0, fmt.Errorf("ошибка сканирования строки роли: %w", err)
+		}
+
+		// Эта проверка нужна и полезна здесь
+		if len(role.Permissions) == 1 && role.Permissions[0] == 0 {
+			role.Permissions = []uint64{}
 		}
 		roles = append(roles, role)
 	}
-
-	return roles, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("ошибка после итерации по ролям: %w", err)
+	}
+	return roles, total, nil
 }
 
 func (r *RoleRepository) FindByID(ctx context.Context, id uint64) (*dto.RoleDTO, error) {
 	role := &dto.RoleDTO{}
+	// Сначала получаем саму роль
 	queryRole := `SELECT id, name, description, status_id, created_at, updated_at FROM roles WHERE id = $1`
 	err := r.storage.QueryRow(ctx, queryRole, id).Scan(&role.ID, &role.Name, &role.Description, &role.StatusID, &role.CreatedAt, &role.UpdatedAt)
 	if err != nil {
@@ -72,31 +109,30 @@ func (r *RoleRepository) FindByID(ctx context.Context, id uint64) (*dto.RoleDTO,
 		return nil, fmt.Errorf("ошибка поиска роли: %w", err)
 	}
 
-	queryPerms := `
-		SELECT p.id, p.name, p.description, p.created_at, p.updated_at FROM permissions p
-		INNER JOIN role_permissions rp ON p.id = rp.permission_id
-		WHERE rp.role_id = $1 ORDER BY p.name`
+	// Теперь получаем только ID разрешений
+	queryPerms := `SELECT permission_id FROM public.role_permissions WHERE role_id = $1 ORDER BY permission_id`
 	rows, err := r.storage.Query(ctx, queryPerms, id)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка получения прав для роли: %w", err)
+		return nil, fmt.Errorf("ошибка получения ID прав для роли: %w", err)
 	}
 	defer rows.Close()
 
-	permissions := make([]dto.PermissionDTO, 0)
+	permissionIDs := make([]uint64, 0)
 	for rows.Next() {
-		var p dto.PermissionDTO
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("ошибка сканирования права: %w", err)
+		var permID uint64
+		if err := rows.Scan(&permID); err != nil {
+			return nil, fmt.Errorf("ошибка сканирования ID права: %w", err)
 		}
-		permissions = append(permissions, p)
+		permissionIDs = append(permissionIDs, permID)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("ошибка после итерации по правам: %w", err)
+		return nil, fmt.Errorf("ошибка после итерации по ID прав: %w", err)
 	}
-	role.Permissions = permissions
+
+	// Присваиваем слайс чисел полю, которое тоже является слайсом чисел. Все работает.
+	role.Permissions = permissionIDs
 	return role, nil
 }
-
 func (r *RoleRepository) CreateRoleInTx(ctx context.Context, tx pgx.Tx, dto dto.CreateRoleDTO) (uint64, error) {
 	var newID uint64
 	query := `INSERT INTO roles (name, description, status_id) VALUES ($1, $2, $3) RETURNING id`
@@ -134,19 +170,25 @@ func (r *RoleRepository) UpdateRoleInTx(ctx context.Context, tx pgx.Tx, id uint6
 		queryBuilder.WriteString(", description = @description")
 		args["description"] = dto.Description
 	}
-	if dto.StatusID != nil {
+	if dto.StatusID != 0 {
 		queryBuilder.WriteString(", status_id = @status_id")
-		args["status_id"] = *dto.StatusID
+		args["status_id"] = dto.StatusID
 	}
+
+	if len(args) == 1 {
+		return nil
+	}
+
 	queryBuilder.WriteString(" WHERE id = @id")
 
 	result, err := tx.Exec(ctx, queryBuilder.String(), args)
 	if err != nil {
-		return fmt.Errorf("ошибка обновления роли: %w", err)
+		return err
 	}
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
+
 	return nil
 }
 

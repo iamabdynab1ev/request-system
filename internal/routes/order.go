@@ -2,6 +2,7 @@
 package routes
 
 import (
+	"request-system/internal/authz" // <-- ШАГ 1: Импортируем наши константы
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
@@ -13,39 +14,31 @@ import (
 	"go.uber.org/zap"
 )
 
-func runOrderRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware, authPermissionService services.AuthPermissionServiceInterface) {
+func runOrderRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
 
+	// Инициализация зависимостей (твой код здесь идеален)
 	txManager := repositories.NewTxManager(dbConn)
-	orderRepo := repositories.NewOrderRepository(dbConn)
+	orderRepo := repositories.NewOrderRepository(dbConn, logger)
 	userRepo := repositories.NewUserRepository(dbConn, logger)
 	statusRepo := repositories.NewStatusRepository(dbConn)
 	priorityRepo := repositories.NewPriorityRepository(dbConn)
 	attachRepo := repositories.NewAttachmentRepository(dbConn)
 	historyRepo := repositories.NewOrderHistoryRepository(dbConn)
-
 	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
 	if err != nil {
 		logger.Fatal("не удалось создать файловое хранилище для OrderRouter", zap.Error(err))
 	}
-
 	orderService := services.NewOrderService(
-		txManager,
-		orderRepo,
-		userRepo,
-		statusRepo,
-		priorityRepo,
-		attachRepo,
-		historyRepo,
-		fileStorage,
-		logger,
+		txManager, orderRepo, userRepo, statusRepo, priorityRepo,
+		attachRepo, historyRepo, fileStorage, logger,
 	)
-
 	orderController := controllers.NewOrderController(orderService, logger)
 
-	secureGroup.POST("/order", orderController.CreateOrder, authMW.AuthorizeAny("orders:create"))
-	secureGroup.GET("/order", orderController.GetOrders, authMW.AuthorizeAny("orders:view"))
-	secureGroup.GET("/order/:id", orderController.FindOrder, authMW.AuthorizeAny("orders:view"))
-	//secureGroup.POST("/order/:id/delegate", orderController.DelegateOrder, authMW.AuthorizeAny("orders:delegate"))
-	secureGroup.PUT("/order/:id", orderController.UpdateOrder, authMW.AuthorizeAny("orders:update"))
-	secureGroup.DELETE("/order/:id", orderController.DeleteOrder, authMW.AuthorizeAny("orders:delete"))
+	// --- ШАГ 2: Заменяем строки на константы ---
+	orders := secureGroup.Group("/order") // Группируем роуты для чистоты
+	orders.POST("", orderController.CreateOrder, authMW.AuthorizeAny(authz.OrdersCreate))
+	orders.GET("", orderController.GetOrders, authMW.AuthorizeAny(authz.OrdersView))
+	orders.GET("/:id", orderController.FindOrder, authMW.AuthorizeAny(authz.OrdersView))
+	orders.PUT("/:id", orderController.UpdateOrder, authMW.AuthorizeAny(authz.OrdersUpdate, authz.OrdersDelegate))
+	orders.DELETE("/:id", orderController.DeleteOrder, authMW.AuthorizeAny(authz.OrdersDelete))
 }

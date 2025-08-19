@@ -1,7 +1,10 @@
+// dto/permission-dto.go
 // Package dto содержит структуры передачи данных.
 package dto
 
-import "time"
+import (
+	"time"
+)
 
 type PermissionDTO struct {
 	ID          uint64    `json:"id"`
@@ -21,7 +24,7 @@ type UpdatePermissionDTO struct {
 	Description string `json:"description" validate:"required"`
 }
 
-type ShortPermissionDTO struct {
-	ID   uint64 `json:"id"`
-	Name string `json:"name"`
+type PermissionListResponseDTO struct {
+	List       []PermissionDTO `json:"list"`
+	TotalCount int64           `json:"total_count"`
 }

@@ -25,7 +25,7 @@ type JWTService interface {
 }
 
 type jwtService struct {
-	SecretKey       string
+	SecretKey       string	// Секретный ключ для подписи токенов
 	AccessTokenExp  time.Duration
 	RefreshTokenExp time.Duration
 	logger          *zap.Logger

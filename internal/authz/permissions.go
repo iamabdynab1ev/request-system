@@ -1,54 +1,83 @@
-// internal/authz/permissions.go
 package authz
 
-// --- СПИСОК ВСЕХ ПЕРМИШЕНОВ В СИСТЕМЕ ---
-
 const (
-	// Глобальные
-	Superuser = "superuser"
+	// ГЛОБАЛЬНЫЕ
+	Superuser = "superuser" // Полный доступ, обходит все проверки.
 
-	// Заявки (Orders)
-	OrdersCreate            = "orders:create"
-	OrdersView              = "orders:view"
-	OrdersUpdate            = "orders:update"
-	OrdersDelete            = "orders:delete"
-	OrdersDelegate          = "orders:delegate"
-	OrdersAttachmentsCreate = "orders:attachments:create"
-	OrdersAttachmentsDelete = "orders:attachments:delete"
+	// СЛОЖНЫЕ СУЩНОСТИ
+	OrdersCreate = "orders:create"
+	OrdersView   = "orders:view"
+	OrdersUpdate = "orders:update"
+	OrdersDelete = "orders:delete"
 
-	// Пользователи (Users)
-	UsersCreate        = "users:create"
-	UsersView          = "users:view"
-	UsersUpdate        = "users:update"
-	UsersDelete        = "users:delete"
-	UsersPasswordReset = "users:password:reset"
-	ProfileUpdate      = "profile:update"
-	PasswordUpdate     = "password:update"
+	UsersCreate = "users:create"
+	UsersView   = "users:view"
+	UsersUpdate = "users:update"
+	UsersDelete = "users:delete"
 
-	// Роли (Roles)
+	// СПРАВОЧНИКИ И УПРАВЛЕНИЕ СИСТЕМОЙ
+	// Для каждой сущности свой, независимый набор прав
+
 	RolesCreate = "roles:create"
 	RolesView   = "roles:view"
 	RolesUpdate = "roles:update"
 	RolesDelete = "roles:delete"
 
-	// Пермишены (Permissions)
-	PermissionsView = "permissions:view"
+	PermissionsView = "permissions:view" // Управлять (C/U/D) может только superuser
 
-	// Структура (Structure)
-	StructureCreate = "structure:create"
-	StructureView   = "structure:view"
-	StructureUpdate = "structure:update"
-	StructureDelete = "structure:delete"
+	StatusesCreate = "statuses:create"
+	StatusesView   = "statuses:view"
+	StatusesUpdate = "statuses:update"
+	StatusesDelete = "statuses:delete"
 
-	// Справочники (Catalogs)
-	CatalogsCreate = "catalogs:create"
-	CatalogsView   = "catalogs:view"
-	CatalogsUpdate = "catalogs:update"
-	CatalogsDelete = "catalogs:delete"
+	PrioritiesCreate = "priorities:create"
+	PrioritiesView   = "priorities:view"
+	PrioritiesUpdate = "priorities:update"
+	PrioritiesDelete = "priorities:delete"
 
-	// Модификаторы Области (Scopes)
+	DepartmentsCreate = "departments:create"
+	DepartmentsView   = "departments:view"
+	DepartmentsUpdate = "departments:update"
+	DepartmentsDelete = "departments:delete"
+
+	OtdelsCreate = "otdels:create"
+	OtdelsView   = "otdels:view"
+	OtdelsUpdate = "otdels:update"
+	OtdelsDelete = "otdels:delete"
+
+	BranchesCreate = "branches:create"
+	BranchesView   = "branches:view"
+	BranchesUpdate = "branches:update"
+	BranchesDelete = "branches:delete"
+
+	OfficesCreate = "offices:create"
+	OfficesView   = "offices:view"
+	OfficesUpdate = "offices:update"
+	OfficesDelete = "offices:delete"
+
+	EquipmentsCreate = "equipments:create"
+	EquipmentsView   = "equipments:view"
+	EquipmentsUpdate = "equipments:update"
+	EquipmentsDelete = "equipments:delete"
+
+	EquipmentTypesCreate = "equipment_types:create"
+	EquipmentTypesView   = "equipment_types:view"
+	EquipmentTypesUpdate = "equipment_types:update"
+	EquipmentTypesDelete = "equipment_types:delete"
+
+	PositionsCreate = "positions:create"
+	PositionsView   = "positions:view"
+	PositionsUpdate = "positions:update"
+	PositionsDelete = "positions:delete"
+
+	// СПЕЦИФИЧЕСКИЕ БИЗНЕС-ПРАВА
+	OrdersDelegate     = "orders:delegate"
+	UsersPasswordReset = "users:password:reset"
+	ProfileUpdate      = "profile:update"
+	PasswordUpdate     = "password:update"
+
+	// SCOPES (Модификаторы Области)
 	ScopeOwn        = "scope:own"
 	ScopeDepartment = "scope:department"
-	ScopeBranch     = "scope:branch"
 	ScopeAll        = "scope:all"
 )

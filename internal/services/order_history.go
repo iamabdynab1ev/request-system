@@ -125,6 +125,7 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 					line = fmt.Sprintf("Назначены исполнитель: %s", *event.NewValue)
 				}
 				if event.Comment != nil && strings.Contains(*event.Comment, "после перевода заявки") {
+					line += fmt.Sprintf(" (%s)", *event.Comment)
 				}
 			case "DEPARTMENT_CHANGE":
 				eventDTO.Icon = "status_transfer"

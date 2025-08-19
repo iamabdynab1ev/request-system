@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 const (
@@ -32,7 +33,7 @@ var orderAllowedSortFields = map[string]bool{
 type OrderRepositoryInterface interface {
 	BeginTx(ctx context.Context) (pgx.Tx, error)
 	FindByID(ctx context.Context, orderID uint64) (*entities.Order, error)
-	GetOrders(ctx context.Context, filter types.Filter, actor *entities.User) ([]entities.Order, uint64, error)
+	GetOrders(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.Order, uint64, error)
 	Create(ctx context.Context, tx pgx.Tx, order *entities.Order) (uint64, error)
 	Update(ctx context.Context, tx pgx.Tx, order *entities.Order) error
 	DeleteOrder(ctx context.Context, orderID uint64) error
@@ -40,12 +41,11 @@ type OrderRepositoryInterface interface {
 
 type OrderRepository struct {
 	storage *pgxpool.Pool
+	logger  *zap.Logger
 }
 
-func NewOrderRepository(storage *pgxpool.Pool) OrderRepositoryInterface {
-	return &OrderRepository{
-		storage: storage,
-	}
+func NewOrderRepository(storage *pgxpool.Pool, logger *zap.Logger) OrderRepositoryInterface {
+	return &OrderRepository{storage: storage, logger: logger}
 }
 
 func (r *OrderRepository) scanOrder(row pgx.Row) (*entities.Order, error) {
@@ -65,34 +65,41 @@ func (r *OrderRepository) scanOrder(row pgx.Row) (*entities.Order, error) {
 	return &order, nil
 }
 
-func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, actor *entities.User) ([]entities.Order, uint64, error) {
-	var args []interface{}
+func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.Order, uint64, error) {
+	allArgs := make([]interface{}, 0)
 	conditions := []string{"deleted_at IS NULL"}
-	placeholderID := 1
+	placeholderNum := 1
 
-	switch actor.RoleName {
-	case "Super Admin", "Admin", "Viewing audit":
-	case "User":
-		conditions = append(conditions, fmt.Sprintf("department_id = $%d", placeholderID))
-		args = append(args, actor.DepartmentID)
-		placeholderID++
-	default:
-		conditions = append(conditions, fmt.Sprintf("executor_id = $%d", placeholderID))
-		args = append(args, actor.ID)
-		placeholderID++
+	if securityFilter != "" {
+		conditions = append(conditions, securityFilter)
+		allArgs = append(allArgs, securityArgs...)
+		placeholderNum += len(securityArgs)
 	}
 
 	if filter.Search != "" {
-		conditions = append(conditions, fmt.Sprintf("name ILIKE $%d", placeholderID))
-		args = append(args, "%"+filter.Search+"%")
-		placeholderID++
+		searchPattern := "%" + filter.Search + "%"
+		conditions = append(conditions, fmt.Sprintf("name ILIKE $%d", placeholderNum))
+		allArgs = append(allArgs, searchPattern)
+		placeholderNum++
 	}
 
 	for key, value := range filter.Filter {
-		if orderAllowedFilterFields[key] {
-			conditions = append(conditions, fmt.Sprintf("%s = $%d", key, placeholderID))
-			args = append(args, value)
-			placeholderID++
+		if !orderAllowedFilterFields[key] {
+			continue
+		}
+		if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
+			items := strings.Split(strVal, ",")
+			placeholders := make([]string, len(items))
+			for i, item := range items {
+				placeholders[i] = fmt.Sprintf("$%d", placeholderNum)
+				allArgs = append(allArgs, item)
+				placeholderNum++
+			}
+			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", key, strings.Join(placeholders, ",")))
+		} else {
+			conditions = append(conditions, fmt.Sprintf("%s = $%d", key, placeholderNum))
+			allArgs = append(allArgs, value)
+			placeholderNum++
 		}
 	}
 
@@ -100,7 +107,7 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, ac
 
 	countQuery := fmt.Sprintf("SELECT COUNT(id) FROM %s %s", orderTable, whereClause)
 	var totalCount uint64
-	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&totalCount); err != nil {
+	if err := r.storage.QueryRow(ctx, countQuery, allArgs...).Scan(&totalCount); err != nil {
 		return nil, 0, fmt.Errorf("ошибка подсчета заявок: %w", err)
 	}
 
@@ -109,23 +116,33 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, ac
 	}
 
 	orderByClause := "ORDER BY id DESC"
+	if len(filter.Sort) > 0 {
+		var sortParts []string
+		for field, direction := range filter.Sort {
+			if orderAllowedSortFields[field] {
+				sortParts = append(sortParts, fmt.Sprintf("%s %s", field, direction))
+			}
+		}
+		if len(sortParts) > 0 {
+			orderByClause = "ORDER BY " + strings.Join(sortParts, ", ")
+		}
+	}
 
 	limitClause := ""
 	if filter.WithPagination {
-		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", placeholderID, placeholderID+1)
-		args = append(args, filter.Limit, filter.Offset)
+		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", placeholderNum, placeholderNum+1)
+		allArgs = append(allArgs, filter.Limit, filter.Offset)
 	}
 
-	mainQuery := fmt.Sprintf("SELECT %s FROM %s %s %s %s",
-		orderSelectFields, orderTable, whereClause, orderByClause, limitClause)
+	mainQuery := fmt.Sprintf("SELECT %s FROM %s %s %s %s", orderSelectFields, orderTable, whereClause, orderByClause, limitClause)
 
-	rows, err := r.storage.Query(ctx, mainQuery, args...)
+	rows, err := r.storage.Query(ctx, mainQuery, allArgs...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка получения заявок: %w", err)
+		return nil, 0, err
 	}
 	defer rows.Close()
 
-	orders := make([]entities.Order, 0, filter.Limit)
+	orders := make([]entities.Order, 0)
 	for rows.Next() {
 		order, err := r.scanOrder(rows)
 		if err != nil {
@@ -133,7 +150,6 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, ac
 		}
 		orders = append(orders, *order)
 	}
-
 	return orders, totalCount, rows.Err()
 }
 
@@ -150,40 +166,33 @@ func (r *OrderRepository) FindByID(ctx context.Context, orderID uint64) (*entiti
 func (r *OrderRepository) Create(ctx context.Context, tx pgx.Tx, order *entities.Order) (uint64, error) {
 	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
 		orderTable, orderInsertFields)
-
 	var orderID uint64
 	err := tx.QueryRow(ctx, query,
 		order.Name, order.Address, order.DepartmentID, order.OtdelID, order.BranchID,
 		order.OfficeID, order.EquipmentID, order.StatusID, order.PriorityID,
 		order.CreatorID, order.ExecutorID,
 	).Scan(&orderID)
-
 	return orderID, err
 }
 
 func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities.Order) error {
 	query := fmt.Sprintf(`UPDATE %s SET %s WHERE id = $13 AND deleted_at IS NULL`, orderTable, orderUpdateSetClause)
-
 	_, err := tx.Exec(ctx, query,
 		order.Name, order.Address, order.DepartmentID, order.OtdelID, order.BranchID,
 		order.OfficeID, order.EquipmentID, order.StatusID, order.PriorityID,
 		order.CreatorID, order.ExecutorID, utils.StringPtrToNullString(order.Duration), order.ID,
 	)
-
 	return err
 }
 
 func (r *OrderRepository) DeleteOrder(ctx context.Context, orderID uint64) error {
 	query := `UPDATE orders SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
-
 	result, err := r.storage.Exec(ctx, query, orderID)
 	if err != nil {
 		return err
 	}
-
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
-
 	return nil
 }

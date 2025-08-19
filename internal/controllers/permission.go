@@ -1,3 +1,4 @@
+// controllers/permission.go
 package controllers
 
 import (
@@ -18,96 +19,80 @@ type PermissionController struct {
 }
 
 func NewPermissionController(permService services.PermissionServiceInterface, logger *zap.Logger) *PermissionController {
-	return &PermissionController{
-		permService: permService,
-		logger:      logger,
-	}
+	return &PermissionController{permService: permService, logger: logger}
 }
 
 func (c *PermissionController) GetPermissions(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
+	search := ctx.QueryParam("search")
 
-	res, err := c.permService.GetPermissions(reqCtx, uint64(filter.Limit), uint64(filter.Offset))
+	res, err := c.permService.GetPermissions(reqCtx, uint64(filter.Limit), uint64(filter.Offset), search)
 	if err != nil {
 		c.logger.Error("Ошибка получения списка привилегий", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	total := res.Pagination.TotalCount
-
-	return utils.SuccessResponse(ctx, res, "Список привилегий успешно получен", http.StatusOK, total)
+	return utils.SuccessResponse(ctx, res.List, "Список привилегий успешно получен", http.StatusOK, res.Pagination.TotalCount)
 }
-
-// FindPermissionByID: Получение одной привилегии по ID.
 func (c *PermissionController) FindPermission(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный ID привилегии", err))
 	}
 
-	res, err := c.permService.FindPermissionByID(reqCtx, id)
+	res, err := c.permService.FindPermissionByID(ctx.Request().Context(), id)
 	if err != nil {
-		c.logger.Error("Ошибка поиска привилегии", zap.Error(err), zap.Uint64("permID", id))
 		return utils.ErrorResponse(ctx, err)
 	}
 	return utils.SuccessResponse(ctx, res, "Привилегия успешно найдена", http.StatusOK)
 }
 
-// CreatePermission: Создание новой привилегии.
 func (c *PermissionController) CreatePermission(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
 	var dto dto.CreatePermissionDTO
 	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат запроса", err))
 	}
 	if err := ctx.Validate(&dto); err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	res, err := c.permService.CreatePermission(reqCtx, dto)
+	res, err := c.permService.CreatePermission(ctx.Request().Context(), dto)
 	if err != nil {
-		c.logger.Error("Ошибка при создании привилегии", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
 	return utils.SuccessResponse(ctx, res, "Привилегия успешно создана", http.StatusCreated)
 }
 
-// UpdatePermission: Обновление привилегии.
 func (c *PermissionController) UpdatePermission(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный ID привилегии", err))
 	}
+
 	var dto dto.UpdatePermissionDTO
 	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат запроса", err))
 	}
 	if err := ctx.Validate(&dto); err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	res, err := c.permService.UpdatePermission(reqCtx, id, dto)
+	res, err := c.permService.UpdatePermission(ctx.Request().Context(), id, dto)
 	if err != nil {
-		c.logger.Error("Ошибка при обновлении привилегии", zap.Uint64("permID", id), zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
 	return utils.SuccessResponse(ctx, res, "Привилегия успешно обновлена", http.StatusOK)
 }
 
-// DeletePermission: Удаление привилегии.
 func (c *PermissionController) DeletePermission(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный ID привилегии", err))
 	}
 
-	err = c.permService.DeletePermission(reqCtx, id)
+	err = c.permService.DeletePermission(ctx.Request().Context(), id)
 	if err != nil {
-		c.logger.Error("Ошибка при удалении привилегии", zap.Uint64("permID", id), zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
 	return utils.SuccessResponse(ctx, struct{}{}, "Привилегия успешно удалена", http.StatusOK)

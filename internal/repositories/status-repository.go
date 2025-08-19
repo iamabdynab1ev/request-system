@@ -44,7 +44,7 @@ const statusTable = "statuses"
 const statusFields = "id, icon_small, icon_big, name, type, code, created_at, updated_at"
 
 type StatusRepositoryInterface interface {
-	GetStatuses(ctx context.Context, limit uint64, offset uint64) ([]dto.StatusDTO, uint64, error)
+	GetStatuses(ctx context.Context, limit, offset uint64, search string) ([]dto.StatusDTO, uint64, error)
 	FindStatus(ctx context.Context, id uint64) (*dto.StatusDTO, error)
 	FindByCode(ctx context.Context, code string) (*dto.StatusDTO, error)
 	CreateStatus(ctx context.Context, dto dto.CreateStatusDTO, iconSmallPath, iconBigPath string) (*dto.StatusDTO, error)
@@ -52,26 +52,35 @@ type StatusRepositoryInterface interface {
 	DeleteStatus(ctx context.Context, id uint64) error
 }
 
-type statusRepository struct {
-	storage *pgxpool.Pool
-}
+type statusRepository struct{ storage *pgxpool.Pool }
 
 func NewStatusRepository(storage *pgxpool.Pool) StatusRepositoryInterface {
 	return &statusRepository{storage: storage}
 }
 
-func (r *statusRepository) GetStatuses(ctx context.Context, limit, offset uint64) ([]dto.StatusDTO, uint64, error) {
+func (r *statusRepository) GetStatuses(ctx context.Context, limit, offset uint64, search string) ([]dto.StatusDTO, uint64, error) {
 	var total uint64
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", statusTable)
-	if err := r.storage.QueryRow(ctx, countQuery).Scan(&total); err != nil {
+	var args []interface{}
+	whereClause := ""
+
+	if search != "" {
+		whereClause = "WHERE name ILIKE $1 OR code ILIKE $1"
+		args = append(args, "%"+search+"%")
+	}
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", statusTable, whereClause)
+	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	if total == 0 {
-		return make([]dto.StatusDTO, 0), 0, nil
+		return []dto.StatusDTO{}, 0, nil
 	}
 
-	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY id LIMIT $1 OFFSET $2", statusFields, statusTable)
-	rows, err := r.storage.Query(ctx, query, limit, offset)
+	queryArgs := append(args, limit, offset)
+	query := fmt.Sprintf("SELECT %s FROM %s %s ORDER BY id LIMIT $%d OFFSET $%d",
+		statusFields, statusTable, whereClause, len(args)+1, len(args)+2)
+
+	rows, err := r.storage.Query(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -116,47 +125,21 @@ func (r *statusRepository) FindByCode(ctx context.Context, code string) (*dto.St
 	return &statusDTO, nil
 }
 
-func (r *statusRepository) DeleteStatus(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", statusTable)
-	result, err := r.storage.Exec(ctx, query, id)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			return apperrors.ErrStatusInUse
-		}
-		return err
-	}
-	if result.RowsAffected() == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
-}
-
-// ИСПРАВЛЕНИЕ: Комментарий и функция теперь на разных строках
-// ПРИМЕЧАНИЕ: Ваш CreateStatusDTO имеет поля IconSmall/IconBig как string
 func (r *statusRepository) CreateStatus(ctx context.Context, payload dto.CreateStatusDTO, iconSmallPath, iconBigPath string) (*dto.StatusDTO, error) {
-	// В INSERT нет ID, база данных сгенерирует его сама
 	query := fmt.Sprintf("INSERT INTO %s (name, type, code, icon_small, icon_big) VALUES($1, $2, $3, $4, $5) RETURNING %s", statusTable, statusFields)
-
 	var dbRow dbStatus
-	// Передаем поля из DTO и пути к иконкам
-	err := r.storage.QueryRow(ctx, query,
-		payload.Name, payload.Type, payload.Code,
-		iconSmallPath, iconBigPath,
-	).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
-
+	err := r.storage.QueryRow(ctx, query, payload.Name, payload.Type, payload.Code, iconSmallPath, iconBigPath).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
 	if err != nil {
-		// Эта проверка отловит дубликаты по другим уникальным полям, если они есть (например, `code`)
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // 23505 - unique_violation
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, apperrors.ErrConflict
 		}
 		return nil, err
 	}
-
 	statusDTO := dbRow.ToDTO()
 	return &statusDTO, nil
 }
+
 func (r *statusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO, iconSmallPath, iconBigPath *string) (*dto.StatusDTO, error) {
 	var setClauses []string
 	var args []interface{}
@@ -187,7 +170,6 @@ func (r *statusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.
 		args = append(args, *iconBigPath)
 		argId++
 	}
-
 	if len(setClauses) == 0 {
 		return r.FindStatus(ctx, id)
 	}
@@ -206,7 +188,22 @@ func (r *statusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.
 		}
 		return nil, err
 	}
-
 	statusDTO := dbRow.ToDTO()
 	return &statusDTO, nil
+}
+
+func (r *statusRepository) DeleteStatus(ctx context.Context, id uint64) error {
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", statusTable)
+	result, err := r.storage.Exec(ctx, query, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return apperrors.ErrStatusInUse
+		}
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }

@@ -55,6 +55,20 @@ func main() {
 
 	e := echo.New()
 	logger := applogger.NewLogger()
+	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
+		StackSize: 1 << 10, // 1 KB
+		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
+			// Используем твой zap.Logger для логирования паники
+			logger.Error("!!! ОБНАРУЖЕНА ПАНИКА В ЗАПРОСЕ !!!",
+				zap.String("uri", c.Request().RequestURI),
+				zap.Error(err),
+				zap.String("stacktrace", string(stack)),
+			)
+			// Мы не возвращаем ошибку, чтобы Echo сам отправил стандартный 500 Internal Server Error
+			// Если вернуть err, он может залогировать его второй раз.
+			return nil
+		},
+	}))
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			c.Response().Header().Set("ngrok-skip-browser-warning", "true")
@@ -65,8 +79,8 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{
 			"http://localhost:5173",
-			"https://65006e9a1844.ngrok-free.app",
-			"https://eec4e17c3a10.ngrok-free.app",
+			"https://a33c6f25b0e9.ngrok-free.app",
+			"https://3904fb24dc9d.ngrok-free.app",
 		},
 		AllowMethods: []string{
 			http.MethodGet, http.MethodPost, http.MethodPut,

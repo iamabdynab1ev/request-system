@@ -2,6 +2,7 @@ package utils
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v4"
 )
 
@@ -20,8 +22,8 @@ type HTTPResponse struct {
 }
 
 const (
-	DefaultLimit = 10
-	MaxLimit     = 100
+	DefaultLimit = 100
+	MaxLimit     = 500
 )
 
 func ParseFilterFromQuery(values url.Values) types.Filter {
@@ -124,7 +126,21 @@ func ErrorResponse(c echo.Context, err error) error {
 			"message": httpErr.Message,
 		})
 	}
+	var validationErrors validator.ValidationErrors
+	if errors.As(err, &validationErrors) {
+		// Собираем красивое сообщение для фронтенда
+		var errorMessages []string
+		for _, e := range validationErrors {
+			// Можно сделать более сложные переводы
+			errorMessages = append(errorMessages,
+				fmt.Sprintf("Поле '%s' не прошло проверку по правилу '%s'", e.Field(), e.Tag()))
+		}
 
+		return c.JSON(http.StatusBadRequest, map[string]interface{}{
+			"status":  false,
+			"message": "Ошибка валидации: " + strings.Join(errorMessages, "; "),
+		})
+	}
 	var echoHttpErr *echo.HTTPError
 	if errors.As(err, &echoHttpErr) {
 
@@ -138,4 +154,5 @@ func ErrorResponse(c echo.Context, err error) error {
 		"status":  false,
 		"message": "Внутренняя ошибка сервера",
 	})
+	
 }

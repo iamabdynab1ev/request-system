@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
@@ -168,28 +169,52 @@ func (r *DepartmentRepository) CreateDepartment(ctx context.Context, createDTO d
 
 // ИСПРАВЛЕНИЕ 2: Параметр переименован в `updateDTO`.
 func (r *DepartmentRepository) UpdateDepartment(ctx context.Context, id uint64, updateDTO dto.UpdateDepartmentDTO) (*dto.DepartmentDTO, error) {
-	query := fmt.Sprintf(`
-		UPDATE %s SET name = $1, status_id = $2, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $3
-		RETURNING %s
-	`, departmentTable, departmentFields)
+	setClauses := make([]string, 0)
+	args := make([]interface{}, 0)
+	argID := 1
 
-	row := r.storage.QueryRow(ctx, query, updateDTO.Name, updateDTO.StatusID, id)
+	// Динамически строим SET часть запроса
+	if updateDTO.Name != nil {
+		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argID))
+		args = append(args, *updateDTO.Name)
+		argID++
+	}
+	if updateDTO.StatusID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("status_id = $%d", argID))
+		args = append(args, *updateDTO.StatusID)
+		argID++
+	}
 
+	// Если не пришло ни одного поля для обновления, не делаем запрос
+	if len(setClauses) == 0 {
+		return r.FindDepartment(ctx, id)
+	}
+
+	setClauses = append(setClauses, "updated_at = NOW()")
+	setQuery := strings.Join(setClauses, ", ")
+
+	query := fmt.Sprintf(`UPDATE %s SET %s WHERE id = $%d RETURNING %s`,
+		departmentTable, setQuery, argID, departmentFields)
+
+	args = append(args, id) // Добавляем ID в конец списка аргументов
+
+	row := r.storage.QueryRow(ctx, query, args...)
 	var department dto.DepartmentDTO
 	var createdAt, updatedAt time.Time
+
 	err := row.Scan(&department.ID, &department.Name, &department.StatusID, &createdAt, &updatedAt)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
+
 	department.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
 	department.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+
 	return &department, nil
 }
-
 func (r *DepartmentRepository) DeleteDepartment(ctx context.Context, id uint64) error {
 	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", departmentTable)
 	result, err := r.storage.Exec(ctx, query, id)

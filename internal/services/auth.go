@@ -56,15 +56,17 @@ func NewAuthService(
 }
 
 func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error) {
+	// Используем `FindUserByEmailOrLogin` из UserRepository, который мы реализовали
 	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, payload.Login)
 	if err != nil {
-		return nil, apperrors.ErrInvalidCredentials
+		return nil, apperrors.ErrInvalidCredentials // Общая ошибка для безопасности
 	}
 
 	if err := s.checkLockout(ctx, user.ID); err != nil {
 		return nil, err
 	}
 
+	// Используем utils.ComparePasswords, как мы договорились
 	if err := utils.ComparePasswords(user.Password, payload.Password); err != nil {
 		s.handleFailedLoginAttempt(ctx, user.ID)
 		return nil, apperrors.ErrInvalidCredentials
@@ -233,7 +235,10 @@ func (s *AuthService) ResetPasswordWithEmail(ctx context.Context, payload dto.Re
 		return apperrors.ErrInvalidResetToken
 	}
 
-	s.cacheRepo.Del(ctx, cacheKey)
+	if err = s.cacheRepo.Del(ctx, cacheKey); err != nil {
+		logger.Error("Ошибка удаления токена сброса из кеша", zap.Error(err))
+		return apperrors.ErrInternalServer
+	}
 
 	userID, err := strconv.ParseUint(userIDStr, 10, 64)
 	if err != nil {

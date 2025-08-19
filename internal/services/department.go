@@ -22,7 +22,7 @@ func NewDepartmentService(departmentRepository repositories.DepartmentRepository
 	}
 }
 
-// GetDepartments теперь возвращает список, общее количество для пагинации и ошибку.
+
 func (s *DepartmentService) GetDepartments(ctx context.Context, filter types.Filter) ([]dto.DepartmentDTO, uint64, error) {
 	departments, err := s.departmentRepository.GetDepartments(ctx, filter)
 	if err != nil {

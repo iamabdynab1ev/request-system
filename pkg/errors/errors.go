@@ -25,6 +25,13 @@ func NewHttpError(code int, message string, err error) *HttpError {
 		Err:     err,
 	}
 }
+func NewBadRequestError(message string) *HttpError {
+	// Если сообщение пустое, возвращаем стандартную ошибку.
+	if message == "" {
+		return ErrBadRequest
+	}
+	return NewHttpError(http.StatusBadRequest, message, nil)
+}
 
 // Предопределенные ошибки
 var (

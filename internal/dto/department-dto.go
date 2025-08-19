@@ -6,9 +6,8 @@ type CreateDepartmentDTO struct {
 }
 
 type UpdateDepartmentDTO struct {
-	ID       uint64 `json:"id" validate:"required"`
-	Name     string `json:"name" validate:"omitempty"`
-	StatusID uint64 `json:"status_id" validate:"omitempty"`
+	Name     *string `json:"name" validate:"omitempty,min=1"`
+	StatusID *uint64 `json:"status_id" validate:"omitempty,gt=0"`
 }
 
 type DepartmentDTO struct {

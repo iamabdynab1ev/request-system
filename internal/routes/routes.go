@@ -1,11 +1,14 @@
+// routes/main_router.go
+
 package routes
 
 import (
+	// Убедись, что есть импорт
+
+	"request-system/internal/services"
 	"request-system/pkg/filestorage"
 	"request-system/pkg/middleware"
 	"request-system/pkg/service"
-
-	"request-system/internal/services"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,33 +22,40 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	api := e.Group("/api")
 
 	authMW := middleware.NewAuthMiddleware(jwtSvc, authPermissionService, logger)
-	runAuthRouter(api, dbConn, redisClient, jwtSvc, logger, authMW)
-	runStatusRouter(api, dbConn, logger)
 
+	// Публичные роуты (логин, регистрация и т.д.)
+	runAuthRouter(api, dbConn, redisClient, jwtSvc, logger, authMW)
+
+	// Создаем группу, которая ТРЕБУЕТ ТОКЕН для всех роутов внутри нее
 	secureGroup := api.Group("", authMW.Auth)
+
+	// --- ПЕРЕМЕЩАЕМ ВСЕ ЗАЩИЩЕННЫЕ РОУТЕРЫ СЮДА ---
 
 	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
 	if err != nil {
 		logger.Fatal("не удалось создать файловое хранилище", zap.Error(err))
 	}
+
+	runStatusRouter(secureGroup, dbConn, logger, authMW) // <-- ВЫЗЫВАЕМ ЗДЕСЬ
+
 	runUploadRouter(secureGroup, fileStorage, logger)
-	RunProretyRouter(secureGroup, dbConn, logger)
+	RunPriorityRouter(secureGroup, dbConn, logger, authMW)
 	runDepartmentRouter(secureGroup, dbConn, logger)
 	runOtdelRouter(secureGroup, dbConn, logger)
 	runEquipmentTypeRouter(secureGroup, dbConn, logger)
-	runBranchRouter(secureGroup, dbConn, logger)
-	runOfficeRouter(secureGroup, dbConn, logger)
+	runBranchRouter(secureGroup, dbConn, logger, authMW)
+	runOfficeRouter(secureGroup, dbConn, logger, authMW)
 
-	//runPermissionRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
+	runPermissionRouter(secureGroup, dbConn, logger, authMW)
 	runRoleRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
-	runRolePermissionRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
-	runUserRouter(secureGroup, dbConn, logger, authMW, authPermissionService, fileStorage)
-	runOrderRouter(secureGroup, dbConn, logger, authMW, authPermissionService)
-	runEquipmentRouter(secureGroup, dbConn, logger)
 
+	runUserRouter(secureGroup, dbConn, logger, authMW, fileStorage)
+	runOrderRouter(secureGroup, dbConn, logger, authMW)
+
+	runEquipmentRouter(secureGroup, dbConn, logger)
 	RunOrderDocumentRouter(secureGroup, dbConn, logger)
 	runPositionRouter(secureGroup, dbConn, logger)
-	runOrderHistoryRouter(secureGroup, dbConn, logger)
+	runOrderHistoryRouter(secureGroup, dbConn, logger, authMW)
 	runAttachmentRouter(secureGroup, dbConn, fileStorage, logger)
 
 	logger.Info("INIT_ROUTER: Создание маршрутов завершено")

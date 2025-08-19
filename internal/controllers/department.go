@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"request-system/internal/dto"
 	"request-system/internal/services"
+	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 	"strconv"
 
@@ -85,29 +86,26 @@ func (c *DepartmentController) CreateDepartment(ctx echo.Context) error {
 
 func (c *DepartmentController) UpdateDepartment(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Invalid ID format"))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID", err))
 	}
 
 	var dto dto.UpdateDepartmentDTO
-	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Invalid request body"))
+	if err = ctx.Bind(&dto); err != nil {
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат запроса", err))
 	}
-
 	if err := ctx.Validate(&dto); err != nil {
-		c.logger.Error("Ошибка при валидации данных департамента", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	// Сервис теперь возвращает обновленный объект
 	res, err := c.departmentService.UpdateDepartment(reqCtx, id, dto)
 	if err != nil {
+		c.logger.Error("Ошибка при обновлении департамента", zap.Uint64("id", id), zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	return utils.SuccessResponse(ctx, res, "Successfully updated department", http.StatusOK)
+	return utils.SuccessResponse(ctx, res, "Департамент успешно обновлен", http.StatusOK)
 }
 
 func (c *DepartmentController) DeleteDepartment(ctx echo.Context) error {
