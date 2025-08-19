@@ -1,25 +1,32 @@
-// Package routes содержит настройку маршрутов HTTP для различных сущностей приложения.
-// Здесь определяются группы маршрутов, связываются контроллеры с HTTP-эндпоинтами и инициализи
 package routes
 
 import (
+	"request-system/internal/authz"
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
+	"request-system/pkg/middleware"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
-func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) {
-	departmentRepository := repositories.NewDepartmentRepository(dbConn)
-	departmentService := services.NewDepartmentService(departmentRepository, logger)
+func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
+
+	departmentRepo := repositories.NewDepartmentRepository(dbConn)
+	userRepo := repositories.NewUserRepository(dbConn, logger)
+
+	departmentService := services.NewDepartmentService(departmentRepo, userRepo, logger)
 	departmentCtrl := controllers.NewDepartmentController(departmentService, logger)
 
-	secureGroup.GET("/department", departmentCtrl.GetDepartments)
-	secureGroup.GET("/department/:id", departmentCtrl.FindDepartment)
-	secureGroup.POST("/department", departmentCtrl.CreateDepartment)
-	secureGroup.PUT("/department/:id", departmentCtrl.UpdateDepartment)
-	secureGroup.DELETE("/department/:id", departmentCtrl.DeleteDepartment)
+	secureGroup.GET("/main", departmentCtrl.GetDepartmentStats, authMW.AuthorizeAny(authz.DepartmentsView))
+
+	departmentsGroup := secureGroup.Group("/department")
+
+	departmentsGroup.GET("", departmentCtrl.GetDepartments, authMW.AuthorizeAny(authz.DepartmentsView))
+	departmentsGroup.GET("/:id", departmentCtrl.FindDepartment, authMW.AuthorizeAny(authz.DepartmentsView))
+	departmentsGroup.POST("", departmentCtrl.CreateDepartment, authMW.AuthorizeAny(authz.DepartmentsCreate))
+	departmentsGroup.PUT("/:id", departmentCtrl.UpdateDepartment, authMW.AuthorizeAny(authz.DepartmentsUpdate))
+	departmentsGroup.DELETE("/:id", departmentCtrl.DeleteDepartment, authMW.AuthorizeAny(authz.DepartmentsDelete))
 }

@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"request-system/internal/dto"
 	"request-system/internal/services"
-	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 	"strconv"
 
@@ -17,110 +16,85 @@ type DepartmentController struct {
 	logger            *zap.Logger
 }
 
-func NewDepartmentController(
-	departmentService *services.DepartmentService,
-	logger *zap.Logger,
-) *DepartmentController {
-	return &DepartmentController{
-		departmentService: departmentService,
-		logger:            logger,
-	}
+func NewDepartmentController(service *services.DepartmentService, logger *zap.Logger) *DepartmentController {
+	return &DepartmentController{departmentService: service, logger: logger}
 }
 
-// GetDepartments теперь поддерживает пагинацию, фильтры и поиск
-func (c *DepartmentController) GetDepartments(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
-	// Парсим параметры запроса (limit, page, sort, filter, search)
+// Новый контроллер для статистики
+func (c *DepartmentController) GetDepartmentStats(ctx echo.Context) error {
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
-
-	// Вызываем сервис с параметрами
-	departments, total, err := c.departmentService.GetDepartments(reqCtx, filter)
+	stats, total, err := c.departmentService.GetDepartmentStats(ctx.Request().Context(), filter)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	// Возвращаем успешный ответ с пагинацией
-	return utils.SuccessResponse(ctx, departments, "Successfully fetched departments", http.StatusOK, total)
+	return utils.SuccessResponse(ctx, stats, "Статистика по департаментам успешно получена", http.StatusOK, total)
 }
+
+// Существующий контроллер, теперь вызывает обновленный сервис
+func (c *DepartmentController) GetDepartments(ctx echo.Context) error {
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
+	departments, total, err := c.departmentService.GetDepartments(ctx.Request().Context(), filter)
+	if err != nil {
+		return utils.ErrorResponse(ctx, err)
+	}
+	return utils.SuccessResponse(ctx, departments, "Департаменты успешно получены", http.StatusOK, total)
+}
+
+// ----- Остальные методы контроллера -----
 
 func (c *DepartmentController) FindDepartment(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Invalid ID format"))
+		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Неверный формат ID"))
 	}
-
-	res, err := c.departmentService.FindDepartment(reqCtx, id)
+	res, err := c.departmentService.FindDepartment(ctx.Request().Context(), id)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	return utils.SuccessResponse(ctx, res, "Successfully found department", http.StatusOK)
+	return utils.SuccessResponse(ctx, res, "Департамент успешно найден", http.StatusOK)
 }
 
 func (c *DepartmentController) CreateDepartment(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	var dto dto.CreateDepartmentDTO
 	if err := ctx.Bind(&dto); err != nil {
-		c.logger.Error("неправильный запрос", zap.Error(err))
-		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Invalid request body"))
+		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Неверное тело запроса"))
 	}
-
 	if err := ctx.Validate(&dto); err != nil {
-		c.logger.Error("Ошибка при валидации данных департамента", zap.Error(err))
-		return utils.ErrorResponse(ctx, err) // Валидатор echo уже вернет HTTPError
-	}
-
-	// Сервис теперь возвращает созданный объект, который мы передаем в ответ
-	res, err := c.departmentService.CreateDepartment(reqCtx, dto)
-	if err != nil {
-		c.logger.Error("Ошибка при создании департамента", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	return utils.SuccessResponse(ctx, res, "Successfully created department", http.StatusCreated)
+	res, err := c.departmentService.CreateDepartment(ctx.Request().Context(), dto)
+	if err != nil {
+		return utils.ErrorResponse(ctx, err)
+	}
+	return utils.SuccessResponse(ctx, res, "Департамент успешно создан", http.StatusCreated)
 }
 
 func (c *DepartmentController) UpdateDepartment(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID", err))
+		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Неверный формат ID"))
 	}
-
 	var dto dto.UpdateDepartmentDTO
-	if err = ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат запроса", err))
+	if err := ctx.Bind(&dto); err != nil {
+		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Неверное тело запроса"))
 	}
 	if err := ctx.Validate(&dto); err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	res, err := c.departmentService.UpdateDepartment(reqCtx, id, dto)
+	res, err := c.departmentService.UpdateDepartment(ctx.Request().Context(), id, dto)
 	if err != nil {
-		c.logger.Error("Ошибка при обновлении департамента", zap.Uint64("id", id), zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
-
 	return utils.SuccessResponse(ctx, res, "Департамент успешно обновлен", http.StatusOK)
 }
 
 func (c *DepartmentController) DeleteDepartment(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Invalid ID format"))
+		return utils.ErrorResponse(ctx, echo.NewHTTPError(http.StatusBadRequest, "Неверный формат ID"))
 	}
-
-	err = c.departmentService.DeleteDepartment(reqCtx, id)
-	if err != nil {
+	if err := c.departmentService.DeleteDepartment(ctx.Request().Context(), id); err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	// Используем nil вместо struct{}{}, SuccessResponse обработает это корректно
-	return utils.SuccessResponse(ctx, nil, "Successfully deleted department", http.StatusOK)
+	return utils.SuccessResponse(ctx, nil, "Департамент успешно удален", http.StatusOK)
 }

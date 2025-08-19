@@ -27,7 +27,7 @@ var orderAllowedFilterFields = map[string]bool{
 	"user_id": true, "executor_id": true, "branch_id": true, "office_id": true,
 }
 var orderAllowedSortFields = map[string]bool{
-	"id": true, "created_at": true, "updated_at": true, "priority_id": true,
+	"id": true, "created_at": true, "updated_at": true, "priority_id": true, 
 }
 
 type OrderRepositoryInterface interface {

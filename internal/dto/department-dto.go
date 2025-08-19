@@ -17,7 +17,12 @@ type DepartmentDTO struct {
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
-
+type DepartmentStatsDTO struct {
+	ID                uint64 `json:"id"`
+	Name              string `json:"name"`
+	OpenOrdersCount   int64  `json:"open"`  
+	ClosedOrdersCount int64  `json:"closed"` 
+}
 type ShortDepartmentDTO struct {
 	ID   uint64 `json:"id"`
 	Name string `json:"name"`

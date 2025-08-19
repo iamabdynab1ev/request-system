@@ -37,11 +37,17 @@ func ParseFilterFromQuery(values url.Values) types.Filter {
 	filterReq.Search = values.Get("search")
 
 	for key, vals := range values {
-		if strings.HasPrefix(key, "sort[") && strings.HasSuffix(key, "]") && len(vals) > 0 {
-			field := key[5 : len(key)-1]
-			direction := strings.ToLower(vals[0])
-			if direction == "asc" || direction == "desc" {
-				filterReq.Sort[field] = direction
+		if strings.HasPrefix(key, "filter[") && strings.HasSuffix(key, "]") && len(vals) > 0 {
+			field := key[7 : len(key)-1]
+			value := vals[0]
+
+			// Проверяем, есть ли в строке запятые
+			if strings.Contains(value, ",") {
+				// Если есть - делим строку по запятой на срез (slice) строк
+				filterReq.Filter[field] = strings.Split(value, ",")
+			} else {
+				// Если нет - оставляем как было
+				filterReq.Filter[field] = value
 			}
 		}
 	}
@@ -95,14 +101,21 @@ func SuccessResponse(ctx echo.Context, body interface{}, message string, code in
 	if withPagination && len(total) > 0 {
 		filter := ParseFilterFromQuery(ctx.Request().URL.Query())
 
+		var totalPages int
+		if filter.Limit > 0 { // Защита от деления на ноль
+			totalPages = int(total[0]) / filter.Limit
+			if int(total[0])%filter.Limit != 0 {
+				totalPages++
+			}
+		}
+
 		response.Body = map[string]interface{}{
 			"list": body,
 			"pagination": types.Pagination{
 				TotalCount: total[0],
 				Page:       filter.Page,
 				Limit:      filter.Limit,
-
-				TotalPages: int(total[0]/uint64(filter.Limit)) + 1,
+				TotalPages: totalPages,
 			},
 		}
 	} else {
@@ -154,5 +167,5 @@ func ErrorResponse(c echo.Context, err error) error {
 		"status":  false,
 		"message": "Внутренняя ошибка сервера",
 	})
-	
+
 }

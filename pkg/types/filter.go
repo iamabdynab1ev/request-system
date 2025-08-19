@@ -19,7 +19,7 @@ type Pagination struct {
 	TotalPages int    `json:"total_pages"`
 }
 
-// http://localhost:8080/clients?search=Khujand&sort[created_at]=desc&filter[status_id]=1&filter[branch_id]=1&limit=10&offset=0&withPagination=true
+// http://localhost:8080/clients?search=Khujand&sort[created_at]=desc&filter[status_id]=1&filter[branch_id]=1,2,4&limit=10&offset=0&withPagination=true
 
 // var allowedFields = []string{
 // 	"status_id",

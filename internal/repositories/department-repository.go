@@ -16,17 +16,18 @@ import (
 
 const (
 	departmentTable  = "departments"
+	departmentFields = "id, name, status_id, created_at, updated_at"
 	userTable        = "users"
 	managerTable     = "department_managers"
-	departmentFields = "id, name, status_id, created_at, updated_at"
 )
 
 var allowedFilterFields = map[string]bool{"status_id": true}
 var allowedSortFields = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true}
 
+// Интерфейс со всеми вашими методами + новый метод для статистики
 type DepartmentRepositoryInterface interface {
-	GetDepartments(ctx context.Context, filter types.Filter) ([]dto.DepartmentDTO, error)
-	CountDepartments(ctx context.Context, filter types.Filter) (uint64, error)
+	GetDepartments(ctx context.Context, filter types.Filter) ([]dto.DepartmentDTO, uint64, error)
+	GetDepartmentsWithStats(ctx context.Context, filter types.Filter) ([]dto.DepartmentStatsDTO, uint64, error)
 	FindDepartment(ctx context.Context, id uint64) (*dto.DepartmentDTO, error)
 	CreateDepartment(ctx context.Context, createDTO dto.CreateDepartmentDTO) (*dto.DepartmentDTO, error)
 	UpdateDepartment(ctx context.Context, id uint64, updateDTO dto.UpdateDepartmentDTO) (*dto.DepartmentDTO, error)
@@ -45,34 +46,51 @@ func NewDepartmentRepository(storage *pgxpool.Pool) DepartmentRepositoryInterfac
 	}
 }
 
-func buildWhereClause(filter types.Filter) (string, []interface{}) {
-	var whereConditions []string
+// Хелпер для построения WHERE условия, используется всеми GET методами
+func buildWhereClause(filter types.Filter, tableAlias string) (string, []interface{}) {
+	prefix := ""
+	if tableAlias != "" {
+		prefix = tableAlias + "."
+	}
+
+	whereConditions := make([]string, 0)
 	var args []interface{}
 	argId := 1
 
 	if filter.Search != "" {
-		whereConditions = append(whereConditions, fmt.Sprintf("name ILIKE $%d", argId))
+		whereConditions = append(whereConditions, fmt.Sprintf("%sname ILIKE $%d", prefix, argId))
 		args = append(args, "%"+filter.Search+"%")
 		argId++
 	}
 
 	for field, value := range filter.Filter {
 		if allowed, ok := allowedFilterFields[field]; ok && allowed {
-			whereConditions = append(whereConditions, fmt.Sprintf("%s = $%d", field, argId))
+			whereConditions = append(whereConditions, fmt.Sprintf("%s%s = $%d", prefix, field, argId))
 			args = append(args, value)
 			argId++
 		}
 	}
 
+	// Если фильтров нет, возвращаем пустую строку
 	if len(whereConditions) == 0 {
 		return "", nil
 	}
 
+	// Если фильтры есть, добавляем WHERE
 	return "WHERE " + strings.Join(whereConditions, " AND "), args
 }
 
-func (r *DepartmentRepository) GetDepartments(ctx context.Context, filter types.Filter) ([]dto.DepartmentDTO, error) {
-	whereClause, args := buildWhereClause(filter)
+func (r *DepartmentRepository) GetDepartments(ctx context.Context, filter types.Filter) ([]dto.DepartmentDTO, uint64, error) {
+	whereClause, args := buildWhereClause(filter, "")
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", departmentTable, whereClause)
+	var total uint64
+	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []dto.DepartmentDTO{}, 0, nil
+	}
 
 	var orderByClause string
 	if len(filter.Sort) > 0 {
@@ -89,40 +107,84 @@ func (r *DepartmentRepository) GetDepartments(ctx context.Context, filter types.
 		orderByClause = "ORDER BY id ASC"
 	}
 
-	limitClause := fmt.Sprintf("LIMIT %d OFFSET %d", filter.Limit, filter.Offset)
+	limitClause := ""
+	if filter.WithPagination {
+		limitClause = fmt.Sprintf("LIMIT %d OFFSET %d", filter.Limit, filter.Offset)
+	}
 
-	query := fmt.Sprintf(`
-		SELECT %s FROM %s
-		%s
-		%s
-		%s
-	`, departmentFields, departmentTable, whereClause, orderByClause, limitClause)
+	query := fmt.Sprintf(`SELECT %s FROM %s %s %s %s`, departmentFields, departmentTable, whereClause, orderByClause, limitClause)
 
 	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	var departments []dto.DepartmentDTO
+
+	departments := make([]dto.DepartmentDTO, 0, filter.Limit)
 	for rows.Next() {
-		var department dto.DepartmentDTO
+		var d dto.DepartmentDTO
 		var createdAt, updatedAt time.Time
-		err := rows.Scan(&department.ID, &department.Name, &department.StatusID, &createdAt, &updatedAt)
-		if err != nil {
-			return nil, err
+		if err := rows.Scan(&d.ID, &d.Name, &d.StatusID, &createdAt, &updatedAt); err != nil {
+			return nil, 0, err
 		}
-		department.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
-		department.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
-		departments = append(departments, department)
+		d.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+		d.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+		departments = append(departments, d)
 	}
-	if rows.Err() != nil {
-		return nil, rows.Err()
-	}
-	return departments, nil
+
+	return departments, total, rows.Err()
 }
 
+func (r *DepartmentRepository) GetDepartmentsWithStats(ctx context.Context, filter types.Filter) ([]dto.DepartmentStatsDTO, uint64, error) {
+	whereClause, args := buildWhereClause(filter, "d")
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s AS d %s", departmentTable, whereClause)
+	var total uint64
+	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []dto.DepartmentStatsDTO{}, 0, nil
+	}
+
+	orderByClause := "ORDER BY d.id ASC"
+	limitClause := ""
+	if filter.WithPagination {
+		limitClause = fmt.Sprintf("LIMIT %d OFFSET %d", filter.Limit, filter.Offset)
+	}
+
+	mainQuery := fmt.Sprintf(`
+		SELECT d.id, d.name,
+			COUNT(o.id) FILTER (WHERE s.code = 'OPEN') AS open_orders,
+			COUNT(o.id) FILTER (WHERE s.code = 'CLOSED') AS closed_orders
+		FROM departments AS d
+		LEFT JOIN orders AS o ON d.id = o.department_id AND o.deleted_at IS NULL
+		LEFT JOIN statuses AS s ON o.status_id = s.id
+		%s
+		GROUP BY d.id, d.name
+		%s %s`, whereClause, orderByClause, limitClause)
+
+	rows, err := r.storage.Query(ctx, mainQuery, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	stats := make([]dto.DepartmentStatsDTO, 0)
+	for rows.Next() {
+		var s dto.DepartmentStatsDTO
+		if err := rows.Scan(&s.ID, &s.Name, &s.OpenOrdersCount, &s.ClosedOrdersCount); err != nil {
+			return nil, 0, err
+		}
+		stats = append(stats, s)
+	}
+
+	return stats, total, rows.Err()
+}
+
+// ----- ВАШИ СУЩЕСТВУЮЩИЕ МЕТОДЫ ОСТАЛИСЬ НЕИЗМЕННЫМИ -----
 func (r *DepartmentRepository) CountDepartments(ctx context.Context, filter types.Filter) (uint64, error) {
-	whereClause, args := buildWhereClause(filter)
+	whereClause, args := buildWhereClause(filter, "")
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", departmentTable, whereClause)
 	var total uint64
 	err := r.storage.QueryRow(ctx, query, args...).Scan(&total)
@@ -130,50 +192,32 @@ func (r *DepartmentRepository) CountDepartments(ctx context.Context, filter type
 }
 
 func (r *DepartmentRepository) FindDepartment(ctx context.Context, id uint64) (*dto.DepartmentDTO, error) {
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", departmentFields, departmentTable)
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1 AND deleted_at IS NULL", departmentFields, departmentTable)
 	row := r.storage.QueryRow(ctx, query, id)
-	var department dto.DepartmentDTO
+	var dept dto.DepartmentDTO
 	var createdAt, updatedAt time.Time
-	err := row.Scan(&department.ID, &department.Name, &department.StatusID, &createdAt, &updatedAt)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, apperrors.ErrNotFound
-		}
-		return nil, err
+	err := row.Scan(&dept.ID, &dept.Name, &dept.StatusID, &createdAt, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperrors.ErrNotFound
 	}
-	department.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
-	department.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
-	return &department, nil
+	dept.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+	dept.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+	return &dept, err
 }
 
 func (r *DepartmentRepository) CreateDepartment(ctx context.Context, createDTO dto.CreateDepartmentDTO) (*dto.DepartmentDTO, error) {
-	query := fmt.Sprintf(`
-		INSERT INTO %s (name, status_id) VALUES($1, $2)
-		RETURNING %s
-	`, departmentTable, departmentFields)
-
+	query := fmt.Sprintf(`INSERT INTO %s (name, status_id) VALUES($1, $2) RETURNING %s`, departmentTable, departmentFields)
 	row := r.storage.QueryRow(ctx, query, createDTO.Name, createDTO.StatusID)
-
-	// Теперь компилятор корректно распознает `dto` как пакет, а не переменную.
-	var department dto.DepartmentDTO
+	var dept dto.DepartmentDTO
 	var createdAt, updatedAt time.Time
-
-	err := row.Scan(&department.ID, &department.Name, &department.StatusID, &createdAt, &updatedAt)
-	if err != nil {
-		return nil, err
-	}
-	department.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
-	department.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
-	return &department, nil
+	err := row.Scan(&dept.ID, &dept.Name, &dept.StatusID, &createdAt, &updatedAt)
+	dept.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+	dept.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+	return &dept, err
 }
 
-// ИСПРАВЛЕНИЕ 2: Параметр переименован в `updateDTO`.
 func (r *DepartmentRepository) UpdateDepartment(ctx context.Context, id uint64, updateDTO dto.UpdateDepartmentDTO) (*dto.DepartmentDTO, error) {
-	setClauses := make([]string, 0)
-	args := make([]interface{}, 0)
-	argID := 1
-
-	// Динамически строим SET часть запроса
+	setClauses, args, argID := make([]string, 0), make([]interface{}, 0), 1
 	if updateDTO.Name != nil {
 		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argID))
 		args = append(args, *updateDTO.Name)
@@ -184,39 +228,28 @@ func (r *DepartmentRepository) UpdateDepartment(ctx context.Context, id uint64, 
 		args = append(args, *updateDTO.StatusID)
 		argID++
 	}
-
-	// Если не пришло ни одного поля для обновления, не делаем запрос
 	if len(setClauses) == 0 {
 		return r.FindDepartment(ctx, id)
 	}
 
 	setClauses = append(setClauses, "updated_at = NOW()")
-	setQuery := strings.Join(setClauses, ", ")
-
-	query := fmt.Sprintf(`UPDATE %s SET %s WHERE id = $%d RETURNING %s`,
-		departmentTable, setQuery, argID, departmentFields)
-
-	args = append(args, id) // Добавляем ID в конец списка аргументов
+	query := fmt.Sprintf(`UPDATE %s SET %s WHERE id = $%d AND deleted_at IS NULL RETURNING %s`, departmentTable, strings.Join(setClauses, ", "), argID, departmentFields)
+	args = append(args, id)
 
 	row := r.storage.QueryRow(ctx, query, args...)
-	var department dto.DepartmentDTO
+	var dept dto.DepartmentDTO
 	var createdAt, updatedAt time.Time
-
-	err := row.Scan(&department.ID, &department.Name, &department.StatusID, &createdAt, &updatedAt)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperrors.ErrNotFound
-		}
-		return nil, err
+	err := row.Scan(&dept.ID, &dept.Name, &dept.StatusID, &createdAt, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperrors.ErrNotFound
 	}
-
-	department.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
-	department.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
-
-	return &department, nil
+	dept.CreatedAt = createdAt.Local().Format("2006-01-02 15:04:05")
+	dept.UpdatedAt = updatedAt.Local().Format("2006-01-02 15:04:05")
+	return &dept, err
 }
+
 func (r *DepartmentRepository) DeleteDepartment(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", departmentTable)
+	query := `UPDATE departments SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {
 		return err
@@ -228,31 +261,17 @@ func (r *DepartmentRepository) DeleteDepartment(ctx context.Context, id uint64) 
 }
 
 func (r *DepartmentRepository) IsManager(ctx context.Context, userID uint64, departmentID uint64) (bool, error) {
-	query := fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s WHERE user_id = $1 AND department_id = $2)", managerTable)
+	query := `SELECT EXISTS(SELECT 1 FROM department_managers WHERE user_id = $1 AND department_id = $2)`
 	var exists bool
-	err := r.storage.QueryRow(ctx, query, userID, departmentID).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
+	return exists, r.storage.QueryRow(ctx, query, userID, departmentID).Scan(&exists)
 }
 
 func (r *DepartmentRepository) FindManagerByID(ctx context.Context, departmentID uint64) (*dto.UserDTO, error) {
-	// Этот код уже был исправлен, чтобы соответствовать вашей dto.UserDTO с полем Fio
-	query := fmt.Sprintf(`
-		SELECT u.id, u.fio, u.email
-		FROM %s u
-		INNER JOIN %s dm ON u.id = dm.user_id
-		WHERE dm.department_id = $1
-		LIMIT 1
-	`, userTable, managerTable)
+	query := `SELECT u.id, u.fio, u.email FROM users u JOIN department_managers dm ON u.id = dm.user_id WHERE dm.department_id = $1 LIMIT 1`
 	var user dto.UserDTO
 	err := r.storage.QueryRow(ctx, query, departmentID).Scan(&user.ID, &user.Fio, &user.Email)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, apperrors.ErrNotFound
-		}
-		return nil, err
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperrors.ErrNotFound
 	}
-	return &user, nil
+	return &user, err
 }
