@@ -1,11 +1,18 @@
 package entities
 
-import "request-system/pkg/types"
+import (
+	"database/sql"
+	"time"
+)
 
 type Department struct {
-	ID           int    `json:"id"`
-	Name         string `json:"name"`
-	StatusID     int    `json:"status_id"`
+	ID        uint64       `db:"id"`
+	Name      string       `db:"name"`
+	StatusID  uint64       `db:"status_id"`
+	CreatedAt time.Time    `db:"created_at"`
+	UpdatedAt time.Time    `db:"updated_at"`
+	DeletedAt sql.NullTime `db:"deleted_at"`
 
-	types.BaseEntity
+	// Поле для данных из JOIN'а
+	Status *Status `db:"-"`
 }

@@ -207,7 +207,7 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 	isCreator := actor.ID == orderToUpdate.CreatorID
 	isExecutor := actor.ID == orderToUpdate.ExecutorID
 	isDepartmentHead := actor.DepartmentID == orderToUpdate.DepartmentID && (actor.RoleName == "User")
-	isGlobalAdmin := authContext.Permissions[authz.ScopeAll]
+	isGlobalAdmin := authContext.Permissions[authz.ScopeAll] || authContext.Permissions[authz.Superuser]
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		hasChanges := false
@@ -238,10 +238,29 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 		}
 
 		if updateDTO.ExecutorID != nil && (isDepartmentHead || isGlobalAdmin) && *updateDTO.ExecutorID != orderToUpdate.ExecutorID {
-			newExec, _ := s.userRepo.FindUserByID(ctx, *updateDTO.ExecutorID)
+
+			newExecutorID := *updateDTO.ExecutorID
+
+			// ===== НАЧАЛО НОВОГО БЛОКА ПРОВЕРКИ БЕЗОПАСНОСТИ =====
+			if !isGlobalAdmin {
+				// 1. Руководитель всегда может назначить заявку на СЕБЯ
+				if newExecutorID != actor.ID {
+					// 2. Если назначают на ДРУГОГО, проверяем его
+					newExecutor, err := s.userRepo.FindUserByID(ctx, newExecutorID)
+					if err != nil {
+						// Если пользователь с таким ID вообще не найден
+						return apperrors.NewHttpError(http.StatusNotFound, "Выбранный для делегирования пользователь не найден", err)
+					}
+					// 3. Главная проверка: новый исполнитель должен быть из того же департамента
+					if newExecutor.DepartmentID != actor.DepartmentID {
+						return apperrors.NewHttpError(http.StatusForbidden, "Ошибка: исполнитель должен быть из вашего департамента.", nil)
+					}
+				}
+			}
+			newExec, _ := s.userRepo.FindUserByID(ctx, newExecutorID) // Здесь можно быть уверенным, что он существует
 			execComment := fmt.Sprintf("Назначен новый ответственный: %s", newExec.Fio)
 			s.historyRepo.CreateInTx(ctx, tx, &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "DELEGATION", NewValue: &newExec.Fio, Comment: &execComment}, nil)
-			orderToUpdate.ExecutorID, hasChanges = *updateDTO.ExecutorID, true
+			orderToUpdate.ExecutorID, hasChanges = newExecutorID, true
 		}
 
 		if currentStatus.Code == "OPEN" && isCreator {

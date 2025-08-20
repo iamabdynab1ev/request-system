@@ -7,6 +7,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -23,8 +24,8 @@ type CustomValidator struct {
 	validator *validator.Validate
 }
 
-func NewValidator() *CustomValidator {
-	return &CustomValidator{validator: validator.New()}
+func NewValidator(v *validator.Validate) *CustomValidator {
+	return &CustomValidator{validator: v}
 }
 
 func (cv *CustomValidator) Validate(i interface{}) error {

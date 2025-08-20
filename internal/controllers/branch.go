@@ -32,9 +32,10 @@ func NewBranchController(
 
 func (c *BranchController) GetBranches(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-	filter := utils.ParseFilterFromQuery(ctx.QueryParams())
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 
-	branches, total, err := c.branchService.GetBranches(reqCtx, uint64(filter.Limit), uint64(filter.Offset))
+	// ИЗМЕНЕНИЕ: Сервис теперь сам разберется с filter.
+	branches, total, err := c.branchService.GetBranches(reqCtx, filter)
 	if err != nil {
 		c.logger.Error("Ошибка при получении списка филиалов", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)

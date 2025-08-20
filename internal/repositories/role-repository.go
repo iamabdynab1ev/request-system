@@ -4,19 +4,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"request-system/internal/dto"
+	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
+	"request-system/pkg/types"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
+const roleTable = "roles"
+
+var roleAllowedFilterFields = map[string]string{
+	"status_id": "r.status_id",
+}
+var roleAllowedSortFields = map[string]string{
+	"id":         "r.id",
+	"name":       "r.name",
+	"created_at": "r.created_at",
+}
+
 type RoleRepositoryInterface interface {
-	GetRoles(ctx context.Context, limit uint64, offset uint64) ([]dto.RoleDTO, uint64, error)
-	FindByID(ctx context.Context, id uint64) (*dto.RoleDTO, error)
-	CreateRoleInTx(ctx context.Context, tx pgx.Tx, dto dto.CreateRoleDTO) (uint64, error)
-	UpdateRoleInTx(ctx context.Context, tx pgx.Tx, id uint64, dto dto.UpdateRoleDTO) error
+	GetRoles(ctx context.Context, filter types.Filter) ([]entities.Role, error)
+	CountRoles(ctx context.Context, filter types.Filter) (uint64, error)
+	FindRoleByID(ctx context.Context, id uint64) (*entities.Role, []uint64, error)
+	CreateRoleInTx(ctx context.Context, tx pgx.Tx, role entities.Role) (uint64, error)
+	UpdateRoleInTx(ctx context.Context, tx pgx.Tx, role entities.Role) error
 	LinkPermissionsToRoleInTx(ctx context.Context, tx pgx.Tx, roleID uint64, permissionIDs []uint64) error
 	UnlinkAllPermissionsFromRoleInTx(ctx context.Context, tx pgx.Tx, roleID uint64) error
 	DeleteRole(ctx context.Context, id uint64) error
@@ -25,119 +40,174 @@ type RoleRepositoryInterface interface {
 
 type RoleRepository struct {
 	storage *pgxpool.Pool
+	logger  *zap.Logger
 }
 
-func NewRoleRepository(storage *pgxpool.Pool) RoleRepositoryInterface {
-	return &RoleRepository{storage: storage}
+func NewRoleRepository(storage *pgxpool.Pool, logger *zap.Logger) RoleRepositoryInterface {
+	return &RoleRepository{storage: storage, logger: logger}
 }
 
 func (r *RoleRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 	return r.storage.Begin(ctx)
 }
 
-func (r *RoleRepository) GetRoles(ctx context.Context, limit uint64, offset uint64) ([]dto.RoleDTO, uint64, error) {
-	var total uint64
-	if err := r.storage.QueryRow(ctx, "SELECT COUNT(*) FROM public.roles").Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("ошибка подсчета ролей: %w", err)
+func (r *RoleRepository) buildFilterQuery(filter types.Filter) (string, []interface{}) {
+	args := make([]interface{}, 0)
+	conditions := []string{} // >>> ИСПРАВЛЕНИЕ: Начинаем с пустого среза <<<
+	argCounter := 1
+
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		conditions = append(conditions, fmt.Sprintf("(r.name ILIKE $%d OR r.description ILIKE $%d)", argCounter, argCounter))
+		args = append(args, searchPattern)
+		argCounter++
 	}
 
-	if total == 0 {
-		return []dto.RoleDTO{}, 0, nil
+	for key, value := range filter.Filter {
+		if dbColumn, ok := roleAllowedFilterFields[key]; ok {
+			//... (стандартная логика IN и =)
+			if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
+				items := strings.Split(strVal, ",")
+				placeholders := make([]string, len(items))
+				for i, item := range items {
+					placeholders[i] = fmt.Sprintf("$%d", argCounter)
+					args = append(args, item)
+					argCounter++
+				}
+				conditions = append(conditions, fmt.Sprintf("%s IN (%s)", dbColumn, strings.Join(placeholders, ",")))
+			} else {
+				conditions = append(conditions, fmt.Sprintf("%s = $%d", dbColumn, argCounter))
+				args = append(args, value)
+				argCounter++
+			}
+		}
 	}
 
-	query := `
-		SELECT
-			r.id,
-			r.name,
-			r.description,
-			r.status_id,
-			r.created_at,
-			r.updated_at,
-			COALESCE(ARRAY_AGG(rp.permission_id) FILTER (WHERE rp.permission_id IS NOT NULL), '{}') AS permissions
-		FROM
-			public.roles r
-		LEFT JOIN
-			public.role_permissions rp ON r.id = rp.role_id
-		GROUP BY
-			r.id
-		ORDER BY
-			r.id
-		LIMIT $1 OFFSET $2;
-	`
-	rows, err := r.storage.Query(ctx, query, limit, offset)
+	var whereClause string
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+	return whereClause, args
+}
+
+func (r *RoleRepository) GetRoles(ctx context.Context, filter types.Filter) ([]entities.Role, error) {
+	whereClause, args := r.buildFilterQuery(filter)
+
+	orderByClause := "ORDER BY r.id DESC"
+	if len(filter.Sort) > 0 {
+		var sortParts []string
+		for field, direction := range filter.Sort {
+			if dbColumn, ok := roleAllowedSortFields[field]; ok {
+				safeDirection := "ASC"
+				if strings.ToLower(direction) == "desc" {
+					safeDirection = "DESC"
+				}
+				sortParts = append(sortParts, fmt.Sprintf("%s %s", dbColumn, safeDirection))
+			}
+		}
+		if len(sortParts) > 0 {
+			orderByClause = "ORDER BY " + strings.Join(sortParts, ", ")
+		}
+	}
+
+	limitClause := ""
+	argCounter := len(args) + 1
+	if filter.WithPagination {
+		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", argCounter, argCounter+1)
+		args = append(args, filter.Limit, filter.Offset)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT r.id, r.name, r.description, r.status_id, r.created_at, r.updated_at
+		FROM %s r
+		%s %s %s
+	`, roleTable, whereClause, orderByClause, limitClause)
+
+	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка получения списка ролей: %w", err)
+		r.logger.Error("ошибка получения списка ролей", zap.Error(err), zap.String("query", query))
+		return nil, err
 	}
 	defer rows.Close()
 
-	roles := make([]dto.RoleDTO, 0)
+	roles := make([]entities.Role, 0)
 	for rows.Next() {
-		var role dto.RoleDTO
-		if err := rows.Scan(
-			&role.ID,
-			&role.Name,
-			&role.Description,
-			&role.StatusID,
-			&role.CreatedAt,
-			&role.UpdatedAt,
-			&role.Permissions, // Теперь это []uint64, и ошибки не будет
-		); err != nil {
-			return nil, 0, fmt.Errorf("ошибка сканирования строки роли: %w", err)
+		var role entities.Role
+		var createdAt, updatedAt time.Time
+		err := rows.Scan(&role.ID, &role.Name, &role.Description, &role.StatusID, &createdAt, &updatedAt)
+		if err != nil {
+			r.logger.Error("ошибка сканирования строки роли", zap.Error(err))
+			return nil, err
 		}
-
-		// Эта проверка нужна и полезна здесь
-		if len(role.Permissions) == 1 && role.Permissions[0] == 0 {
-			role.Permissions = []uint64{}
-		}
+		role.CreatedAt = &createdAt
+		role.UpdatedAt = &updatedAt
 		roles = append(roles, role)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("ошибка после итерации по ролям: %w", err)
+	if err = rows.Err(); err != nil {
+		r.logger.Error("ошибка после итерации по ролям", zap.Error(err))
+		return nil, err
 	}
-	return roles, total, nil
+	return roles, nil
 }
 
-func (r *RoleRepository) FindByID(ctx context.Context, id uint64) (*dto.RoleDTO, error) {
-	role := &dto.RoleDTO{}
-	// Сначала получаем саму роль
-	queryRole := `SELECT id, name, description, status_id, created_at, updated_at FROM roles WHERE id = $1`
-	err := r.storage.QueryRow(ctx, queryRole, id).Scan(&role.ID, &role.Name, &role.Description, &role.StatusID, &role.CreatedAt, &role.UpdatedAt)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperrors.ErrNotFound
-		}
-		return nil, fmt.Errorf("ошибка поиска роли: %w", err)
+func (r *RoleRepository) CountRoles(ctx context.Context, filter types.Filter) (uint64, error) {
+	whereClause, args := r.buildFilterQuery(filter)
+	countQuery := fmt.Sprintf("SELECT COUNT(r.id) FROM %s r %s", roleTable, whereClause)
+	var total uint64
+	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		r.logger.Error("ошибка подсчета ролей", zap.Error(err), zap.String("query", countQuery))
+		return 0, err
 	}
+	return total, nil
+}
 
-	// Теперь получаем только ID разрешений
-	queryPerms := `SELECT permission_id FROM public.role_permissions WHERE role_id = $1 ORDER BY permission_id`
+func (r *RoleRepository) FindRoleByID(ctx context.Context, id uint64) (*entities.Role, []uint64, error) {
+	var role entities.Role
+	var createdAt, updatedAt time.Time
+
+	queryRole := `SELECT id, name, description, status_id, created_at, updated_at FROM roles WHERE id = $1`
+	err := r.storage.QueryRow(ctx, queryRole, id).Scan(&role.ID, &role.Name, &role.Description, &role.StatusID, &createdAt, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, apperrors.ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	role.CreatedAt, role.UpdatedAt = &createdAt, &updatedAt
+
+	queryPerms := `SELECT permission_id FROM role_permissions WHERE role_id = $1`
 	rows, err := r.storage.Query(ctx, queryPerms, id)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка получения ID прав для роли: %w", err)
+		return nil, nil, err
 	}
 	defer rows.Close()
 
-	permissionIDs := make([]uint64, 0)
-	for rows.Next() {
-		var permID uint64
-		if err := rows.Scan(&permID); err != nil {
-			return nil, fmt.Errorf("ошибка сканирования ID права: %w", err)
-		}
-		permissionIDs = append(permissionIDs, permID)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("ошибка после итерации по ID прав: %w", err)
+	permissionIDs, err := pgx.CollectRows(rows, pgx.RowTo[uint64])
+	if err != nil {
+		return nil, nil, err
 	}
 
-	// Присваиваем слайс чисел полю, которое тоже является слайсом чисел. Все работает.
-	role.Permissions = permissionIDs
-	return role, nil
+	return &role, permissionIDs, nil
 }
-func (r *RoleRepository) CreateRoleInTx(ctx context.Context, tx pgx.Tx, dto dto.CreateRoleDTO) (uint64, error) {
-	var newID uint64
+
+func (r *RoleRepository) CreateRoleInTx(ctx context.Context, tx pgx.Tx, role entities.Role) (uint64, error) {
 	query := `INSERT INTO roles (name, description, status_id) VALUES ($1, $2, $3) RETURNING id`
-	err := tx.QueryRow(ctx, query, dto.Name, dto.Description, dto.StatusID).Scan(&newID)
+	var newID uint64
+	err := tx.QueryRow(ctx, query, role.Name, role.Description, role.StatusID).Scan(&newID)
 	return newID, err
+}
+
+func (r *RoleRepository) UpdateRoleInTx(ctx context.Context, tx pgx.Tx, role entities.Role) error {
+	// >>> ИСПРАВЛЕНИЕ: Убрали `deleted_at` <<<
+	query := `UPDATE roles SET name = $1, description = $2, status_id = $3, updated_at = NOW() WHERE id = $4`
+	result, err := tx.Exec(ctx, query, role.Name, role.Description, role.StatusID, role.ID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }
 
 func (r *RoleRepository) LinkPermissionsToRoleInTx(ctx context.Context, tx pgx.Tx, roleID uint64, permissionIDs []uint64) error {
@@ -148,7 +218,7 @@ func (r *RoleRepository) LinkPermissionsToRoleInTx(ctx context.Context, tx pgx.T
 	for i, permID := range permissionIDs {
 		rows[i] = []interface{}{roleID, permID}
 	}
-	_, err := tx.CopyFrom(ctx, pgx.Identifier{"public", "role_permissions"}, []string{"role_id", "permission_id"}, pgx.CopyFromRows(rows))
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"role_permissions"}, []string{"role_id", "permission_id"}, pgx.CopyFromRows(rows))
 	return err
 }
 
@@ -157,43 +227,9 @@ func (r *RoleRepository) UnlinkAllPermissionsFromRoleInTx(ctx context.Context, t
 	return err
 }
 
-func (r *RoleRepository) UpdateRoleInTx(ctx context.Context, tx pgx.Tx, id uint64, dto dto.UpdateRoleDTO) error {
-	var queryBuilder strings.Builder
-	args := pgx.NamedArgs{"id": id}
-	queryBuilder.WriteString("UPDATE roles SET updated_at = NOW()")
-
-	if dto.Name != "" {
-		queryBuilder.WriteString(", name = @name")
-		args["name"] = dto.Name
-	}
-	if dto.Description != "" {
-		queryBuilder.WriteString(", description = @description")
-		args["description"] = dto.Description
-	}
-	if dto.StatusID != 0 {
-		queryBuilder.WriteString(", status_id = @status_id")
-		args["status_id"] = dto.StatusID
-	}
-
-	if len(args) == 1 {
-		return nil
-	}
-
-	queryBuilder.WriteString(" WHERE id = @id")
-
-	result, err := tx.Exec(ctx, queryBuilder.String(), args)
-	if err != nil {
-		return err
-	}
-	if result.RowsAffected() == 0 {
-		return apperrors.ErrNotFound
-	}
-
-	return nil
-}
-
 func (r *RoleRepository) DeleteRole(ctx context.Context, id uint64) error {
-	result, err := r.storage.Exec(ctx, "DELETE FROM roles WHERE id = $1", id)
+	query := `DELETE FROM roles WHERE id = $1`
+	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}

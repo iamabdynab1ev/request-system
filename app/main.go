@@ -9,7 +9,9 @@ import (
 	"regexp"
 	"request-system/internal/routes"
 	"request-system/pkg/database/postgresql"
+	apperrors "request-system/pkg/errors"
 	applogger "request-system/pkg/logger"
+	"request-system/pkg/utils"
 
 	"request-system/pkg/service"
 	"strings"
@@ -25,17 +27,6 @@ import (
 	"request-system/internal/repositories"
 	"request-system/internal/services"
 )
-
-type CustomValidator struct {
-	validator *validator.Validate
-}
-
-func (cv *CustomValidator) Validate(i interface{}) error {
-	if err := cv.validator.Struct(i); err != nil {
-		return err
-	}
-	return nil
-}
 
 func isTajikPhoneNumber(fl validator.FieldLevel) bool {
 	re := regexp.MustCompile(`^\+992\d{9}$`)
@@ -56,17 +47,23 @@ func main() {
 	e := echo.New()
 	logger := applogger.NewLogger()
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
-		StackSize: 1 << 10, // 1 KB
+		DisableStackAll: true,    // Немного чище стектрейс
+		StackSize:       1 << 10, // 1 KB
 		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
-			// Используем твой zap.Logger для логирования паники
-			logger.Error("!!! ОБНАРУЖЕНА ПАНИКА В ЗАПРОСЕ !!!",
+			// 1. ЛОГИРУЕМ ВСЮ ИНФОРМАЦИЮ О ПАНИКЕ С ПОМОЩЬЮ ZAP
+			logger.Error("!!! ОБНАРУЖЕНА ПАНИКА (PANIC) !!!",
+				zap.String("method", c.Request().Method),
 				zap.String("uri", c.Request().RequestURI),
-				zap.Error(err),
-				zap.String("stacktrace", string(stack)),
+				zap.Any("error", err), // zap.Any для большей гибкости
+				zap.String("stack", string(stack)),
 			)
-			// Мы не возвращаем ошибку, чтобы Echo сам отправил стандартный 500 Internal Server Error
-			// Если вернуть err, он может залогировать его второй раз.
-			return nil
+			if !c.Response().Committed {
+				httpErr := apperrors.NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", err)
+
+				utils.ErrorResponse(c, httpErr)
+			}
+
+			return err
 		},
 	}))
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -79,8 +76,8 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{
 			"http://localhost:5173",
-			"https://a33c6f25b0e9.ngrok-free.app",
-			"https://3904fb24dc9d.ngrok-free.app",
+			"https://6cbea72d26ee.ngrok-free.app",
+			"https://b89bb009937d.ngrok-free.app",
 		},
 		AllowMethods: []string{
 			http.MethodGet, http.MethodPost, http.MethodPut,
@@ -118,7 +115,7 @@ func main() {
 		logger.Fatal("Ошибка регистрации валидации duration_format", zap.Error(err))
 	}
 
-	e.Validator = &CustomValidator{validator: v}
+	e.Validator = utils.NewValidator(v)
 
 	dbConn := postgresql.ConnectDB()
 	defer dbConn.Close()

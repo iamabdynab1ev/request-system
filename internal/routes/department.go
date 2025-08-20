@@ -13,17 +13,16 @@ import (
 )
 
 func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
-
-	departmentRepo := repositories.NewDepartmentRepository(dbConn)
+	// ВАЖНО: Передаем logger в репозиторий
+	departmentRepo := repositories.NewDepartmentRepository(dbConn, logger)
 	userRepo := repositories.NewUserRepository(dbConn, logger)
 
 	departmentService := services.NewDepartmentService(departmentRepo, userRepo, logger)
 	departmentCtrl := controllers.NewDepartmentController(departmentService, logger)
 
+	// Роуты
 	secureGroup.GET("/main", departmentCtrl.GetDepartmentStats, authMW.AuthorizeAny(authz.DepartmentsView))
-
 	departmentsGroup := secureGroup.Group("/department")
-
 	departmentsGroup.GET("", departmentCtrl.GetDepartments, authMW.AuthorizeAny(authz.DepartmentsView))
 	departmentsGroup.GET("/:id", departmentCtrl.FindDepartment, authMW.AuthorizeAny(authz.DepartmentsView))
 	departmentsGroup.POST("", departmentCtrl.CreateDepartment, authMW.AuthorizeAny(authz.DepartmentsCreate))

@@ -2,158 +2,94 @@ package controllers
 
 import (
 	"net/http"
-	"strconv"
-
 	"request-system/internal/dto"
 	"request-system/internal/services"
+	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
 type EquipmentTypeController struct {
-	equipmentTypeService *services.EquipmentTypeService
+	equipmentTypeService services.EquipmentTypeServiceInterface
 	logger               *zap.Logger
 }
 
-func NewEquipmentTypeController(
-	equipmentTypeService *services.EquipmentTypeService,
-	logger *zap.Logger,
-) *EquipmentTypeController {
-	return &EquipmentTypeController{
-		equipmentTypeService: equipmentTypeService,
-		logger:               logger,
-	}
+func NewEquipmentTypeController(service services.EquipmentTypeServiceInterface, logger *zap.Logger) *EquipmentTypeController {
+	return &EquipmentTypeController{equipmentTypeService: service, logger: logger}
 }
 
 func (c *EquipmentTypeController) GetEquipmentTypes(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
-	res, err := c.equipmentTypeService.GetEquipmentTypes(reqCtx)
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
+	res, total, err := c.equipmentTypeService.GetEquipmentTypes(ctx.Request().Context(), filter)
 	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
+		c.logger.Error("Ошибка получения списка типов оборудования", zap.Error(err))
+		return utils.ErrorResponse(ctx, err)
 	}
-
-	return utils.SuccessResponse(
-		ctx,
-		res,
-		"Successfully",
-		http.StatusOK,
-	)
+	return utils.SuccessResponse(ctx, res, "Успешно", http.StatusOK, total)
 }
 
 func (c *EquipmentTypeController) FindEquipmentType(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
+		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID"))
+	}
+	res, err := c.equipmentTypeService.FindEquipmentType(ctx.Request().Context(), id)
+	if err != nil {
+		c.logger.Error("Ошибка поиска типа оборудования", zap.Uint64("id", id), zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	res, err := c.equipmentTypeService.FindEquipmentType(reqCtx, id)
-	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
-	}
-
-	return utils.SuccessResponse(
-		ctx,
-		res,
-		"Successfully",
-		http.StatusOK,
-	)
+	return utils.SuccessResponse(ctx, res, "Успешно", http.StatusOK)
 }
 
 func (c *EquipmentTypeController) CreateEquipmentType(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	var dto dto.CreateEquipmentTypeDTO
 	if err := ctx.Bind(&dto); err != nil {
-		c.logger.Error("неверный запрос", zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат данных"))
 	}
-
 	if err := ctx.Validate(&dto); err != nil {
-		c.logger.Error("Ощибка при валидации данных оборудования: ", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	res, err := c.equipmentTypeService.CreateEquipmentType(reqCtx, dto)
+	res, err := c.equipmentTypeService.CreateEquipmentType(ctx.Request().Context(), dto)
 	if err != nil {
-		c.logger.Error("Ощибка при создание оборудования: ", zap.Error(err))
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
+		c.logger.Error("Ошибка создания типа оборудования", zap.Error(err))
+		return utils.ErrorResponse(ctx, err)
 	}
-
-	return utils.SuccessResponse(
-		ctx,
-		res,
-		"Successfully",
-		http.StatusOK,
-	)
+	return utils.SuccessResponse(ctx, res, "Успешно создан", http.StatusCreated)
 }
 
 func (c *EquipmentTypeController) UpdateEquipmentType(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, err)
+		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID"))
 	}
-
 	var dto dto.UpdateEquipmentTypeDTO
 	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, err)
+		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат данных"))
 	}
-
 	if err := ctx.Validate(&dto); err != nil {
 		return utils.ErrorResponse(ctx, err)
 	}
 
-	res, err := c.equipmentTypeService.UpdateEquipmentType(reqCtx, id, dto)
+	res, err := c.equipmentTypeService.UpdateEquipmentType(ctx.Request().Context(), id, dto)
 	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
+		c.logger.Error("Ошибка обновления типа оборудования", zap.Uint64("id", id), zap.Error(err))
+		return utils.ErrorResponse(ctx, err)
 	}
-
-	return utils.SuccessResponse(
-		ctx,
-		res,
-		"Successfully",
-		http.StatusOK,
-	)
+	return utils.SuccessResponse(ctx, res, "Успешно обновлен", http.StatusOK)
 }
 
 func (c *EquipmentTypeController) DeleteEquipmentType(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
+		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID"))
+	}
+	if err := c.equipmentTypeService.DeleteEquipmentType(ctx.Request().Context(), id); err != nil {
+		c.logger.Error("Ошибка удаления типа оборудования", zap.Uint64("id", id), zap.Error(err))
 		return utils.ErrorResponse(ctx, err)
 	}
-
-	err = c.equipmentTypeService.DeleteEquipmentType(reqCtx, id)
-	if err != nil {
-		return utils.ErrorResponse(
-			ctx,
-			err,
-		)
-	}
-
-	return utils.SuccessResponse(
-		ctx,
-		struct{}{},
-		"Successfully",
-		http.StatusOK,
-	)
+	return utils.SuccessResponse(ctx, nil, "Успешно удален", http.StatusOK)
 }

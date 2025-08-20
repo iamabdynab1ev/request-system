@@ -1,18 +1,23 @@
 package entities
 
-import "request-system/pkg/types"
-import "time"
+import (
+	"database/sql"
+	"time"
+)
 
 type Branch struct {
-	ID           int        `json:"id"`
-	Name         string     `json:"name"`
-	ShortName    string     `json:"short_name"`
-	Address      string     `json:"address"`
-	PhoneNumber  string     `json:"phone_number"`
-	Email        string     `json:"email"`
-	EmailIndex   string     `json:"email_index"`
-	OpenDate     time.Time  `json:"open_date"`
-	StatusID     int        `json:"status_id"`
+	ID          uint64       `db:"id"`
+	Name        string       `db:"name"`
+	ShortName   string       `db:"short_name"`
+	Address     string       `db:"address"`
+	PhoneNumber string       `db:"phone_number"`
+	Email       string       `db:"email"`
+	EmailIndex  string       `db:"email_index"`
+	OpenDate    time.Time    `db:"open_date"`
+	StatusID    uint64       `db:"status_id"`
+	CreatedAt   time.Time    `db:"created_at"`
+	UpdatedAt   time.Time    `db:"updated_at"`
+	DeletedAt   sql.NullTime `db:"deleted_at"`
 
-	types.BaseEntity
+	Status *Status `db:"-"`
 }

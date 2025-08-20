@@ -66,71 +66,107 @@ func scanUser(row pgx.Row) (*entities.User, error) {
 }
 
 func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.User, uint64, error) {
-	allArgs := make([]interface{}, 0)
-	conditions := []string{"u.deleted_at IS NULL"}
+	// Эталонная реализация, как в OrderRepository
 
+	allArgs := make([]interface{}, 0)
+	conditions := []string{"u.deleted_at IS NULL"} // Используем алиас 'u' для таблицы users
+	placeholderNum := 1
+
+	// Шаг 1: Применяем фильтр безопасности, если он есть
 	if securityFilter != "" {
 		conditions = append(conditions, securityFilter)
 		allArgs = append(allArgs, securityArgs...)
+		placeholderNum += len(securityArgs)
 	}
 
+	// Шаг 2: Применяем текстовый поиск
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		// Правильный поиск по нескольким полям
+		searchCondition := fmt.Sprintf("(u.fio ILIKE $%d OR u.email ILIKE $%d OR u.phone_number ILIKE $%d)",
+			placeholderNum, placeholderNum+1, placeholderNum+2)
+		conditions = append(conditions, searchCondition)
+		allArgs = append(allArgs, searchPattern, searchPattern, searchPattern) // Передаем значение 3 раза для 3-х плейсхолдеров
+		placeholderNum += 3
+	}
+
+	// Шаг 3: Применяем фильтры по конкретным полям
 	for key, value := range filter.Filter {
-		placeholder := fmt.Sprintf("$%d", len(allArgs)+1)
 		if !userAllowedFilterFields[key] {
-			continue
+			continue // Пропускаем поля, которых нет в "белом списке"
 		}
 
 		if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
-			conditions = append(conditions, fmt.Sprintf("u.%s IN (SELECT unnest(string_to_array(%s, ','))::bigint)", key, placeholder))
-			allArgs = append(allArgs, value)
+			// Обработка нескольких значений (например, filter[role_id]=1,2)
+			items := strings.Split(strVal, ",")
+			placeholders := make([]string, len(items))
+			for i, item := range items {
+				placeholders[i] = fmt.Sprintf("$%d", placeholderNum)
+				allArgs = append(allArgs, item)
+				placeholderNum++
+			}
+			conditions = append(conditions, fmt.Sprintf("u.%s IN (%s)", key, strings.Join(placeholders, ",")))
 		} else {
-			conditions = append(conditions, fmt.Sprintf("u.%s = %s", key, placeholder))
+			// Обработка одного значения
+			conditions = append(conditions, fmt.Sprintf("u.%s = $%d", key, placeholderNum))
 			allArgs = append(allArgs, value)
+			placeholderNum++
 		}
-	}
-
-	if filter.Search != "" {
-		searchPlaceholder := fmt.Sprintf("$%d", len(allArgs)+1)
-		conditions = append(conditions, fmt.Sprintf("(u.fio ILIKE %s OR u.email ILIKE %s OR u.phone_number ILIKE %s)", searchPlaceholder, searchPlaceholder, searchPlaceholder))
-		allArgs = append(allArgs, "%"+filter.Search+"%")
 	}
 
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 
+	// Шаг 4: Считаем общее количество записей с учетом всех фильтров
 	countQuery := fmt.Sprintf("SELECT COUNT(u.id) FROM %s %s", userJoinClauseRepo, whereClause)
-	r.logger.Debug("Выполнение SQL-запроса на подсчет пользователей", zap.String("query", countQuery), zap.Any("args", allArgs))
-
 	var totalCount uint64
 	if err := r.storage.QueryRow(ctx, countQuery, allArgs...).Scan(&totalCount); err != nil {
-		return nil, 0, fmt.Errorf("ошибка подсчета пользователей: %w", err)
+		r.logger.Error("ошибка подсчета пользователей", zap.Error(err), zap.String("query", countQuery))
+		return nil, 0, err
 	}
+
 	if totalCount == 0 {
 		return []entities.User{}, 0, nil
 	}
 
-	orderByClause := "ORDER BY u.id DESC"
-	// ... (здесь будет код для сортировки, он простой)
+	// Шаг 5: Добавляем сортировку
+	orderByClause := "ORDER BY u.id DESC" // Сортировка по умолчанию
+	if len(filter.Sort) > 0 {
+		var sortParts []string
+		for field, direction := range filter.Sort {
+			if userAllowedSortFields[field] {
+				// Убеждаемся, что direction - это "asc" или "desc", чтобы избежать SQL-инъекций
+				safeDirection := "ASC"
+				if strings.ToLower(direction) == "desc" {
+					safeDirection = "DESC"
+				}
+				sortParts = append(sortParts, fmt.Sprintf("u.%s %s", field, safeDirection))
+			}
+		}
+		if len(sortParts) > 0 {
+			orderByClause = "ORDER BY " + strings.Join(sortParts, ", ")
+		}
+	}
 
+	// Шаг 6: Добавляем пагинацию, если она включена
 	limitClause := ""
 	if filter.WithPagination {
-		limitPlaceholder := fmt.Sprintf("$%d", len(allArgs)+1)
-		offsetPlaceholder := fmt.Sprintf("$%d", len(allArgs)+2)
-		limitClause = fmt.Sprintf("LIMIT %s OFFSET %s", limitPlaceholder, offsetPlaceholder)
+		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", placeholderNum, placeholderNum+1)
 		allArgs = append(allArgs, filter.Limit, filter.Offset)
 	}
 
+	// Шаг 7: Собираем и выполняем основной запрос
 	mainQuery := fmt.Sprintf("SELECT %s FROM %s %s %s %s", userSelectFieldsForEntityRepo, userJoinClauseRepo, whereClause, orderByClause, limitClause)
-	r.logger.Debug("Выполнение основного SQL-запроса", zap.String("query", mainQuery), zap.Any("args", allArgs))
 
 	rows, err := r.storage.Query(ctx, mainQuery, allArgs...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка получения пользователей: %w", err)
+		r.logger.Error("ошибка получения пользователей", zap.Error(err), zap.String("query", mainQuery))
+		return nil, 0, err
 	}
 	defer rows.Close()
 
 	users := make([]entities.User, 0)
 	for rows.Next() {
-		user, err := scanUser(rows)
+		user, err := scanUser(rows) // scanUser у вас уже есть и он правильный
 		if err != nil {
 			return nil, 0, err
 		}

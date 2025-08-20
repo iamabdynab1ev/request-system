@@ -5,18 +5,18 @@ type CreateEquipmentTypeDTO struct {
 }
 
 type UpdateEquipmentTypeDTO struct {
-	ID   int    `json:"id" validate:"required"`
+	ID   uint64 `json:"id" validate:"required"`
 	Name string `json:"name" validate:"omitempty"`
 }
 
 type EquipmentTypeDTO struct {
-	ID        int    `json:"id"`
+	ID        uint64 `json:"id"`
 	Name      string `json:"name"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
 
 type ShortEquipmentTypeDTO struct {
-	ID   int    `json:"id"`
+	ID   uint64 `json:"id"`
 	Name string `json:"name"`
 }

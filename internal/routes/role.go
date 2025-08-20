@@ -1,7 +1,7 @@
 package routes
 
 import (
-	"request-system/internal/authz" // <-- Импорт констант
+	"request-system/internal/authz"
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
@@ -19,8 +19,9 @@ func runRoleRouter(
 	authMW *middleware.AuthMiddleware,
 	authPermissionService services.AuthPermissionServiceInterface,
 ) {
-	roleRepository := repositories.NewRoleRepository(dbConn)
+	roleRepository := repositories.NewRoleRepository(dbConn, logger)
 	userRepository := repositories.NewUserRepository(dbConn, logger)
+
 	roleService := services.NewRoleService(roleRepository, userRepository, authPermissionService, logger)
 	roleCtrl := controllers.NewRoleController(roleService, logger)
 

@@ -12,8 +12,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Название функции лучше сделать с маленькой буквы, если она не экспортируется
-// Я оставил как у тебя - RunPriorityRouter, но правильно было бы runPriorityRouter
 func RunPriorityRouter(
 	secureGroup *echo.Group,
 	dbConn *pgxpool.Pool,

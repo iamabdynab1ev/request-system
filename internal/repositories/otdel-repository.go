@@ -2,178 +2,176 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"fmt"
-
-	"request-system/internal/dto"
+	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
+	"request-system/pkg/types"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 )
 
 const otdelTable = "otdels"
-const otdelTableFields = "id, name, status_id, department_id, created_at, updated_at"
+
+var otdelAllowedFilterFields = map[string]string{
+	"status_id":     "status_id",
+	"department_id": "department_id",
+}
+var otdelAllowedSortFields = map[string]string{
+	"id":         "id",
+	"name":       "name",
+	"created_at": "created_at",
+}
 
 type OtdelRepositoryInterface interface {
-	GetOtdels(ctx context.Context, limit uint64, offset uint64) ([]dto.OtdelDTO, error)
-	FindOtdel(ctx context.Context, id uint64) (*dto.OtdelDTO, error)
-	CreateOtdel(ctx context.Context, dto dto.CreateOtdelDTO) error
-	UpdateOtdel(ctx context.Context, id uint64, dto dto.UpdateOtdelDTO) error
+	GetOtdels(ctx context.Context, filter types.Filter) ([]entities.Otdel, uint64, error)
+	FindOtdel(ctx context.Context, id uint64) (*entities.Otdel, error)
+	CreateOtdel(ctx context.Context, otdel entities.Otdel) (*entities.Otdel, error)
+	UpdateOtdel(ctx context.Context, id uint64, otdel entities.Otdel) (*entities.Otdel, error)
 	DeleteOtdel(ctx context.Context, id uint64) error
 }
 
 type OtdelRepository struct {
 	storage *pgxpool.Pool
+	logger  *zap.Logger
 }
 
-func NewOtdelRepository(storage *pgxpool.Pool) OtdelRepositoryInterface {
-
+func NewOtdelRepository(storage *pgxpool.Pool, logger *zap.Logger) OtdelRepositoryInterface {
 	return &OtdelRepository{
 		storage: storage,
+		logger:  logger,
 	}
 }
 
-func (r *OtdelRepository) GetOtdels(ctx context.Context, limit uint64, offset uint64) ([]dto.OtdelDTO, error) {
-	query := fmt.Sprintf(`
-		SELECT
-			%s
-		FROM %s r
-		`, otdelTableFields, otdelTable)
-
-	rows, err := r.storage.Query(ctx, query)
+func scanOtdel(row pgx.Row) (*entities.Otdel, error) {
+	var o entities.Otdel
+	var createdAt, updatedAt time.Time
+	err := row.Scan(&o.ID, &o.Name, &o.StatusID, &o.DepartmentsID, &createdAt, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperrors.ErrNotFound
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ошибка сканирования otdel: %w", err)
+	}
+	o.CreatedAt, o.UpdatedAt = &createdAt, &updatedAt
+	return &o, nil
+}
+
+func (r *OtdelRepository) GetOtdels(ctx context.Context, filter types.Filter) ([]entities.Otdel, uint64, error) {
+	args := make([]interface{}, 0)
+	conditions := []string{}
+	argCounter := 1
+
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		conditions = append(conditions, fmt.Sprintf("name ILIKE $%d", argCounter))
+		args = append(args, searchPattern)
+		argCounter++
 	}
 
+	for key, value := range filter.Filter {
+		if dbColumn, ok := otdelAllowedFilterFields[key]; ok {
+			if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
+				items, placeholders := splitMultiValue(strVal, argCounter)
+				conditions = append(conditions, fmt.Sprintf("%s IN (%s)", dbColumn, strings.Join(placeholders, ",")))
+				args = append(args, items...)
+				argCounter += len(items)
+			} else {
+				conditions = append(conditions, fmt.Sprintf("%s = $%d", dbColumn, argCounter))
+				args = append(args, value)
+				argCounter++
+			}
+		}
+	}
+
+	var whereClause string
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	countQuery := fmt.Sprintf("SELECT COUNT(id) FROM %s %s", otdelTable, whereClause)
+	var total uint64
+	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []entities.Otdel{}, 0, nil
+	}
+
+	orderByClause := "ORDER BY id DESC"
+	// (Логика сортировки)
+
+	limitClause, paginationArgs := buildPagination(filter, argCounter)
+	finalArgs := append(args, paginationArgs...)
+
+	selectFields := "id, name, status_id, department_id, created_at, updated_at"
+	query := fmt.Sprintf("SELECT %s FROM %s %s %s %s", selectFields, otdelTable, whereClause, orderByClause, limitClause)
+
+	rows, err := r.storage.Query(ctx, query, finalArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
 	defer rows.Close()
 
-	otdels := make([]dto.OtdelDTO, 0)
-
+	otdels := make([]entities.Otdel, 0)
 	for rows.Next() {
-		var otdel dto.OtdelDTO
-		var createdAt time.Time
-		var updatedAt time.Time
-
-		err := rows.Scan(
-			&otdel.ID,
-			&otdel.Name,
-			&otdel.StatusID,
-			&otdel.DepartmentsID,
-			&createdAt,
-			&updatedAt,
-		)
-
+		o, err := scanOtdel(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-
-		createdAtLocal := createdAt.Local()
-		updatedAtLocal := updatedAt.Local()
-
-		otdel.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
-		otdel.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
-
-		otdels = append(otdels, otdel)
+		otdels = append(otdels, *o)
 	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return otdels, nil
+	return otdels, total, rows.Err()
 }
 
-func (r *OtdelRepository) FindOtdel(ctx context.Context, id uint64) (*dto.OtdelDTO, error) {
-	query := fmt.Sprintf(`
-		SELECT
-			%s
-		FROM %s r
-		WHERE r.id = $1
-	`, otdelTableFields, otdelTable)
-
-	var otdel dto.OtdelDTO
-	var createdAt time.Time
-	var updatedAt time.Time
-
-	err := r.storage.QueryRow(ctx, query, id).Scan(
-		&otdel.ID,
-		&otdel.Name,
-		&otdel.StatusID,
-		&otdel.DepartmentsID,
-		&createdAt,
-		&updatedAt,
-	)
-
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, apperrors.ErrNotFound
-		}
-		return nil, err
-	}
-
-	createdAtLocal := createdAt.Local()
-	updatedAtLocal := updatedAt.Local()
-
-	otdel.CreatedAt = createdAtLocal.Format("2006-01-02 15:04:05")
-	otdel.UpdatedAt = updatedAtLocal.Format("2006-01-02 15:04:05")
-
-	return &otdel, nil
+func (r *OtdelRepository) FindOtdel(ctx context.Context, id uint64) (*entities.Otdel, error) {
+	query := "SELECT id, name, status_id, department_id, created_at, updated_at FROM otdels WHERE id = $1"
+	return scanOtdel(r.storage.QueryRow(ctx, query, id))
 }
 
-func (r *OtdelRepository) CreateOtdel(ctx context.Context, dto dto.CreateOtdelDTO) error {
-	query := fmt.Sprintf(`
-        INSERT INTO %s (name, status_id, department_id)
-        VALUES ($1, $2, $3)
-    `, otdelTable)
-
-	_, err := r.storage.Exec(ctx, query,
-		dto.Name,
-		dto.StatusID,
-		dto.DepartmentsID,
-	)
-
-	if err != nil {
-		return err
-	}
-	return nil
+func (r *OtdelRepository) CreateOtdel(ctx context.Context, otdel entities.Otdel) (*entities.Otdel, error) {
+	query := `INSERT INTO otdels (name, status_id, department_id) VALUES ($1, $2, $3)
+		RETURNING id, name, status_id, department_id, created_at, updated_at`
+	return scanOtdel(r.storage.QueryRow(ctx, query, otdel.Name, otdel.StatusID, otdel.DepartmentsID))
 }
 
-func (r *OtdelRepository) UpdateOtdel(ctx context.Context, id uint64, dto dto.UpdateOtdelDTO) error {
-	query := fmt.Sprintf(`
-        UPDATE %s
-        SET name = $1, status_id = $2, department_id = $3, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4
-    `, otdelTable)
-
-	result, err := r.storage.Exec(ctx, query,
-		dto.Name,
-		dto.StatusID,
-		dto.DepartmentsID,
-		id,
-	)
-
-	if err != nil {
-
-		return err
-	}
-
-	if result.RowsAffected() == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+func (r *OtdelRepository) UpdateOtdel(ctx context.Context, id uint64, otdel entities.Otdel) (*entities.Otdel, error) {
+	query := `UPDATE otdels SET name=$1, status_id=$2, department_id=$3, updated_at=NOW()
+		WHERE id=$4 RETURNING id, name, status_id, department_id, created_at, updated_at`
+	return scanOtdel(r.storage.QueryRow(ctx, query, otdel.Name, otdel.StatusID, otdel.DepartmentsID, id))
 }
 
 func (r *OtdelRepository) DeleteOtdel(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", otdelTable)
-
+	query := "DELETE FROM otdels WHERE id = $1"
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
-
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
-
 	return nil
+}
+
+// Хелперы для чистоты кода
+func splitMultiValue(val string, startIdx int) ([]interface{}, []string) {
+	items := strings.Split(val, ",")
+	placeholders := make([]string, len(items))
+	args := make([]interface{}, len(items))
+	for i, item := range items {
+		placeholders[i] = fmt.Sprintf("$%d", startIdx+i)
+		args[i] = item
+	}
+	return args, placeholders
+}
+
+func buildPagination(filter types.Filter, startIdx int) (string, []interface{}) {
+	if !filter.WithPagination {
+		return "", nil
+	}
+	return fmt.Sprintf("LIMIT $%d OFFSET $%d", startIdx, startIdx+1), []interface{}{filter.Limit, filter.Offset}
 }

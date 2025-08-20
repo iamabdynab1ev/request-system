@@ -3,10 +3,10 @@ package entities
 import "request-system/pkg/types"
 
 type Otdel struct {
-	ID            int    `json:"id"`
+	ID            uint64 `json:"id"`
 	Name          string `json:"name"`
-	StatusID      int    `json:"status_id"`
-	DepartmentsID int    `json:"department_id"`
+	StatusID      uint64 `json:"status_id"`
+	DepartmentsID uint64 `json:"department_id"`
 
 	types.BaseEntity
 }

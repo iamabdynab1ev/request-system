@@ -2,20 +2,20 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"request-system/internal/authz"
 	"request-system/internal/dto"
+	"request-system/internal/entities"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
+	"request-system/pkg/types"
 	"request-system/pkg/utils"
+	"time"
 
-	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
 type RoleServiceInterface interface {
-	GetRoles(ctx context.Context, limit, offset uint64) (*dto.PaginatedResponse[dto.RoleDTO], error)
+	GetRoles(ctx context.Context, filter types.Filter) ([]dto.RoleDTO, uint64, error)
 	FindRole(ctx context.Context, id uint64) (*dto.RoleDTO, error)
 	CreateRole(ctx context.Context, dto dto.CreateRoleDTO) (*dto.RoleDTO, error)
 	UpdateRole(ctx context.Context, id uint64, dto dto.UpdateRoleDTO) (*dto.RoleDTO, error)
@@ -25,156 +25,180 @@ type RoleServiceInterface interface {
 type RoleService struct {
 	repo                  repositories.RoleRepositoryInterface
 	userRepo              repositories.UserRepositoryInterface
-	authPermissionService AuthPermissionServiceInterface // <-- ВОТ ГДЕ ОШИБКА
+	authPermissionService AuthPermissionServiceInterface
 	logger                *zap.Logger
 }
 
-func NewRoleService(
-	repo repositories.RoleRepositoryInterface,
-	userRepo repositories.UserRepositoryInterface,
-	authPermissionService AuthPermissionServiceInterface,
-	logger *zap.Logger,
-) RoleServiceInterface {
-	return &RoleService{repo: repo, userRepo: userRepo, authPermissionService: authPermissionService, logger: logger}
+func NewRoleService(repo repositories.RoleRepositoryInterface, userRepo repositories.UserRepositoryInterface, authService AuthPermissionServiceInterface, logger *zap.Logger) RoleServiceInterface {
+	return &RoleService{repo: repo, userRepo: userRepo, authPermissionService: authService, logger: logger}
 }
 
-// buildAuthzContext - приватный хелпер для сборки контекста авторизации
 func (s *RoleService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
-	userID, err := utils.GetUserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	actor, err := s.userRepo.FindUserByID(ctx, userID)
-	if err != nil {
-		return nil, apperrors.ErrUserNotFound
-	}
-	return &authz.Context{Actor: actor, Permissions: permissionsMap, Target: nil}, nil
+	userID, _ := utils.GetUserIDFromCtx(ctx)
+	permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
+	actor, _ := s.userRepo.FindUserByID(ctx, userID)
+	return &authz.Context{Actor: actor, Permissions: permissionsMap}, nil
 }
 
-func (s *RoleService) GetRoles(ctx context.Context, limit uint64, offset uint64) (*dto.PaginatedResponse[dto.RoleDTO], error) {
-	authContext, err := s.buildAuthzContext(ctx)
+func roleEntityToDTO(entity *entities.Role, permissions []uint64) *dto.RoleDTO {
+	if entity == nil {
+		return nil
+	}
+	return &dto.RoleDTO{
+		ID:          entity.ID,
+		Name:        entity.Name,
+		Description: entity.Description,
+		StatusID:    entity.StatusID,
+		Permissions: permissions,
+		CreatedAt:   *entity.CreatedAt,
+		UpdatedAt:   *entity.UpdatedAt,
+	}
+}
+
+func (s *RoleService) GetRoles(ctx context.Context, filter types.Filter) ([]dto.RoleDTO, uint64, error) {
+	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if !authz.CanDo(authz.RolesView, *authContext) {
-		return nil, apperrors.ErrForbidden
+	if !authz.CanDo(authz.RolesView, *authCtx) {
+		return nil, 0, apperrors.ErrForbidden
 	}
 
-	roles, total, err := s.repo.GetRoles(ctx, limit, offset)
+	total, err := s.repo.CountRoles(ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []dto.RoleDTO{}, 0, nil
 	}
 
-	var currentPage uint64 = 1
-	if limit > 0 {
-		currentPage = (offset / limit) + 1
+	entities, err := s.repo.GetRoles(ctx, filter)
+	if err != nil {
+		return nil, 0, err
 	}
 
-	return &dto.PaginatedResponse[dto.RoleDTO]{
-		List:       roles,
-		Pagination: dto.PaginationObject{TotalCount: total, Page: currentPage, Limit: limit},
-	}, nil
+	dtos := make([]dto.RoleDTO, 0, len(entities))
+	for _, role := range entities {
+		dtos = append(dtos, *roleEntityToDTO(&role, []uint64{}))
+	}
+	return dtos, total, nil
 }
 
 func (s *RoleService) FindRole(ctx context.Context, id uint64) (*dto.RoleDTO, error) {
-	authContext, err := s.buildAuthzContext(ctx)
+	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	if !authz.CanDo(authz.RolesView, *authContext) {
+	if !authz.CanDo(authz.RolesView, *authCtx) {
 		return nil, apperrors.ErrForbidden
 	}
-	return s.repo.FindByID(ctx, id)
+
+	entity, permissions, err := s.repo.FindRoleByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return roleEntityToDTO(entity, permissions), nil
 }
 
 func (s *RoleService) CreateRole(ctx context.Context, dto dto.CreateRoleDTO) (*dto.RoleDTO, error) {
-	authContext, err := s.buildAuthzContext(ctx)
+	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	if !authz.CanDo(authz.RolesCreate, *authContext) {
+	if !authz.CanDo(authz.RolesCreate, *authCtx) {
 		return nil, apperrors.ErrForbidden
 	}
 
 	tx, err := s.repo.BeginTx(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка создания роли: %w", err)
+		return nil, err
 	}
-	defer func() {
-		if err := tx.Rollback(ctx); err != nil && err != pgx.ErrTxClosed {
-			log.Println("Ошибка при rollback:", err)
-		}
-	}()
+	defer tx.Rollback(ctx)
 
-	newRoleID, err := s.repo.CreateRoleInTx(ctx, tx, dto)
+	now := time.Now()
+	entity := entities.Role{
+		Name:        dto.Name,
+		Description: dto.Description,
+		StatusID:    dto.StatusID,
+		BaseEntity:  types.BaseEntity{CreatedAt: &now, UpdatedAt: &now},
+	}
+
+	newRoleID, err := s.repo.CreateRoleInTx(ctx, tx, entity)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка создания роли: %w", err)
+		return nil, err
 	}
 
 	if len(dto.PermissionIDs) > 0 {
 		if err := s.repo.LinkPermissionsToRoleInTx(ctx, tx, newRoleID, dto.PermissionIDs); err != nil {
-			return nil, fmt.Errorf("ошибка привязки прав: %w", err)
+			return nil, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("ошибка создания роли: %w", err)
-	}
-	s.authPermissionService.InvalidateRolePermissionsCache(ctx, newRoleID)
-	return s.repo.FindByID(ctx, newRoleID)
-}
 
-func (s *RoleService) UpdateRole(ctx context.Context, id uint64, dto dto.UpdateRoleDTO) (*dto.RoleDTO, error) {
-	authContext, err := s.buildAuthzContext(ctx)
-	if err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 
-	if !authz.CanDo(authz.RolesUpdate, *authContext) {
+	s.authPermissionService.InvalidateRolePermissionsCache(ctx, newRoleID)
+	return s.FindRole(ctx, newRoleID)
+}
+
+func (s *RoleService) UpdateRole(ctx context.Context, id uint64, dto dto.UpdateRoleDTO) (*dto.RoleDTO, error) {
+	authCtx, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !authz.CanDo(authz.RolesUpdate, *authCtx) {
 		return nil, apperrors.ErrForbidden
 	}
 
 	tx, err := s.repo.BeginTx(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка обновления роли: %w", err)
+		return nil, err
 	}
-	defer func() {
-		if err := tx.Rollback(ctx); err != nil && err != pgx.ErrTxClosed {
-			log.Println("Ошибка при rollback:", err)
-		}
-	}()
+	defer tx.Rollback(ctx)
 
-	if err := s.repo.UpdateRoleInTx(ctx, tx, id, dto); err != nil {
-		return nil, fmt.Errorf("ошибка обновления роли: %w", err)
+	existingEntity, _, err := s.repo.FindRoleByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if dto.Name != "" {
+		existingEntity.Name = dto.Name
+	}
+	if dto.Description != nil {
+		existingEntity.Description = *dto.Description
+	}
+	if dto.StatusID != 0 {
+		existingEntity.StatusID = dto.StatusID
+	}
+
+	if err := s.repo.UpdateRoleInTx(ctx, tx, *existingEntity); err != nil {
+		return nil, err
 	}
 
 	if dto.PermissionIDs != nil {
 		if err := s.repo.UnlinkAllPermissionsFromRoleInTx(ctx, tx, id); err != nil {
-			return nil, fmt.Errorf("ошибка отвязки прав: %w", err)
+			return nil, err
 		}
 		if err := s.repo.LinkPermissionsToRoleInTx(ctx, tx, id, *dto.PermissionIDs); err != nil {
-			return nil, fmt.Errorf("ошибка привязки прав: %w", err)
+			return nil, err
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("ошибка обновления роли: %w", err)
+		return nil, err
 	}
+
 	s.authPermissionService.InvalidateRolePermissionsCache(ctx, id)
-	return s.repo.FindByID(ctx, id)
+	return s.FindRole(ctx, id)
 }
 
 func (s *RoleService) DeleteRole(ctx context.Context, id uint64) error {
-	authContext, err := s.buildAuthzContext(ctx)
+	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return err
 	}
-	if !authz.CanDo(authz.RolesDelete, *authContext) {
+	if !authz.CanDo(authz.RolesDelete, *authCtx) {
 		return apperrors.ErrForbidden
 	}
 	s.authPermissionService.InvalidateRolePermissionsCache(ctx, id)

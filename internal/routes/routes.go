@@ -29,8 +29,7 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	// Создаем группу, которая ТРЕБУЕТ ТОКЕН для всех роутов внутри нее
 	secureGroup := api.Group("", authMW.Auth)
 
-	// --- ПЕРЕМЕЩАЕМ ВСЕ ЗАЩИЩЕННЫЕ РОУТЕРЫ СЮДА ---
-
+	
 	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
 	if err != nil {
 		logger.Fatal("не удалось создать файловое хранилище", zap.Error(err))
@@ -41,8 +40,8 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	runUploadRouter(secureGroup, fileStorage, logger)
 	RunPriorityRouter(secureGroup, dbConn, logger, authMW)
 	runDepartmentRouter(secureGroup, dbConn, logger, authMW)
-	runOtdelRouter(secureGroup, dbConn, logger)
-	runEquipmentTypeRouter(secureGroup, dbConn, logger)
+	runOtdelRouter(secureGroup, dbConn, logger, authMW)
+	runEquipmentTypeRouter(secureGroup, dbConn, logger, authMW)
 	runBranchRouter(secureGroup, dbConn, logger, authMW)
 	runOfficeRouter(secureGroup, dbConn, logger, authMW)
 
@@ -52,7 +51,7 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	runUserRouter(secureGroup, dbConn, logger, authMW, fileStorage)
 	runOrderRouter(secureGroup, dbConn, logger, authMW)
 
-	runEquipmentRouter(secureGroup, dbConn, logger)
+	runEquipmentRouter(secureGroup, dbConn, logger, authMW)
 	RunOrderDocumentRouter(secureGroup, dbConn, logger)
 	runPositionRouter(secureGroup, dbConn, logger)
 	runOrderHistoryRouter(secureGroup, dbConn, logger, authMW)
