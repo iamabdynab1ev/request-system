@@ -25,6 +25,7 @@ func NewHttpError(code int, message string, err error) *HttpError {
 		Err:     err,
 	}
 }
+
 func NewBadRequestError(message string) *HttpError {
 	// Если сообщение пустое, возвращаем стандартную ошибку.
 	if message == "" {
@@ -40,7 +41,7 @@ var (
 	ErrValidation               = NewHttpError(http.StatusBadRequest, "Ошибка валидации данных", nil)
 	ErrHeadOfDepartmentNotFound = NewHttpError(http.StatusBadRequest, "Руководитель отдела не найден", nil)
 	ErrConflict                 = NewHttpError(http.StatusConflict, "Запрашиваемый ресурс уже существует", nil)
-
+	ErrNotImplemented           = NewHttpError(http.StatusNotImplemented, "Функционал не реализован", nil)
 	// Ошибки аутентификации
 	ErrUnauthorized       = NewHttpError(http.StatusUnauthorized, "Необходима авторизация", nil)
 	ErrEmptyAuthHeader    = NewHttpError(http.StatusUnauthorized, "Заголовок авторизации отсутствует", nil)
@@ -65,9 +66,11 @@ var (
 	ErrUserNotFound   = NewHttpError(http.StatusNotFound, "Пользователь не найден", nil)
 	ErrStatusNotFound = NewHttpError(http.StatusNotFound, "Статус не найден", nil)
 	ErrStatusInUse    = NewHttpError(http.StatusBadRequest, "Статус не может быть удален, так как он используется", nil)
+	ErrPriorityInUse  = NewHttpError(http.StatusBadRequest, "Невозможно удалить приоритет, так как он используется в заявках", nil)
 
 	// Внутренние ошибки
 	ErrInternalServer          = NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", nil)
+	ErrFileProcessing          = NewHttpError(http.StatusInternalServerError, "Ошибка сервера при обработке файла", nil)
 	ErrUserIDNotFoundInContext = NewHttpError(http.StatusInternalServerError, "UserID не найден в контексте запроса", nil)
 	ErrInvalidSigningMethod    = NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера: неверный метод подписи токена", nil)
 	ErrInvalidUserID           = NewHttpError(http.StatusInternalServerError, "UserID в контексте имеет неверный тип или равен нулю", nil)

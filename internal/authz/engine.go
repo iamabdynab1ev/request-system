@@ -1,8 +1,9 @@
 package authz
 
 import (
-	"request-system/internal/entities"
 	"strings"
+
+	"request-system/internal/entities"
 )
 
 // Context содержит все данные, необходимые для принятия решения о доступе.

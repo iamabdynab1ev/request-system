@@ -1,3 +1,4 @@
+// Файл: internal/dto/auth.go
 package dto
 
 type LoginDTO struct {
@@ -5,44 +6,29 @@ type LoginDTO struct {
 	Password string `json:"password" validate:"required,min=6"`
 }
 
-type SendCodeDTO struct {
-	Email string `json:"email" validate:"omitempty,email"`
-	Phone string `json:"phone_number" validate:"omitempty,e164_TJ"`
+// Шаг 1: Запрос на сброс
+type ResetPasswordRequestDTO struct {
+	Login string `json:"login" validate:"required"`
 }
 
-type VerifyCodeDTO struct {
-	Email string `json:"email" validate:"omitempty,email"`
-	Phone string `json:"phone_number" validate:"omitempty,e164_TJ"`
-	Code  string `json:"code" validate:"required,len=4,numeric"`
+// Шаг 2 (только телефон): Проверка кода
+type VerifyCodeDTO struct { // <<< ПРАВИЛЬНОЕ ИМЯ
+	Login string `json:"login" validate:"required"`
+	Code  string `json:"code"  validate:"required,len=4,numeric"`
 }
 
-type ForgotPasswordInitDTO struct {
-	Email string `json:"email" validate:"required,email"`
+type VerifyCodeResponseDTO struct { // <<< ПРАВИЛЬНОЕ ИМЯ
+	VerificationToken string `json:"verification_token"`
 }
 
-type ForgotPasswordOptionsDTO struct {
-	Options []string `json:"options"`
-}
-
-type ForgotPasswordSendDTO struct {
-	Email  string `json:"email"  validate:"required,email"`
-	Method string `json:"method" validate:"required,oneof=email phone_number"`
-}
-
-type ResetPasswordEmailDTO struct {
+// Шаг 3: Установка нового пароля
+type ResetPasswordDTO struct {
 	Token       string `json:"token"        validate:"required"`
-	NewPassword string `json:"newPassword"  validate:"required,min=6"`
+	NewPassword string `json:"new_password" validate:"required,min=6"`
 }
-
-type ResetPasswordPhoneDTO struct {
-	Email       string `json:"email"        validate:"required,email"`
-	Code        string `json:"code"         validate:"required,len=4,numeric"`
-	NewPassword string `json:"newPassword"  validate:"required,min=6"`
-}
-
 type AuthResponseDTO struct {
-	AccessToken string        `json:"accessToken"`
-	User        UserPublicDTO `json:"user"`
+	AccessToken string   `json:"accessToken"`
+	Permissions []string `json:"permissions"`
 }
 
 type UserPublicDTO struct {

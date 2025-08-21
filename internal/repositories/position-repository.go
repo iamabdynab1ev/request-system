@@ -3,16 +3,19 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const positionTable = "positions"
-const positionFields = "id, name, created_at, updated_at"
+const (
+	positionTable  = "positions"
+	positionFields = "id, name, created_at, updated_at"
+)
 
 type PositionRepositoryInterface interface {
 	GetPositions(ctx context.Context, limit uint64, offset uint64) (interface{}, uint64, error)
@@ -27,7 +30,6 @@ type PositionRepository struct {
 }
 
 func NewPositionRepository(storage *pgxpool.Pool) PositionRepositoryInterface {
-
 	return &PositionRepository{
 		storage: storage,
 	}
@@ -65,7 +67,6 @@ func (r *PositionRepository) FindPosition(ctx context.Context, id uint64) (*dto.
 		&createdAt,
 		&updatedAt,
 	)
-
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, apperrors.ErrNotFound
@@ -84,7 +85,6 @@ func (r *PositionRepository) FindPosition(ctx context.Context, id uint64) (*dto.
 }
 
 func (r *PositionRepository) CreatePosition(ctx context.Context, dto dto.CreatePositionDTO) error {
-
 	query := fmt.Sprintf(`
         INSERT INTO %s (name)
 		VALUES ($1)
@@ -93,7 +93,6 @@ func (r *PositionRepository) CreatePosition(ctx context.Context, dto dto.CreateP
 	_, err := r.storage.Exec(ctx, query,
 		dto.Name,
 	)
-
 	if err != nil {
 		return err
 	}
@@ -121,7 +120,6 @@ func (r *PositionRepository) UpdatePosition(ctx context.Context, id uint64, dto 
 }
 
 func (r *PositionRepository) DeletePosition(ctx context.Context, id uint64) error {
-
 	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", positionTable)
 
 	result, err := r.storage.Exec(ctx, query, id)

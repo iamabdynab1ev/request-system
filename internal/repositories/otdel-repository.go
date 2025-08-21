@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,6 +22,7 @@ var otdelAllowedFilterFields = map[string]string{
 	"status_id":     "status_id",
 	"department_id": "department_id",
 }
+
 var otdelAllowedSortFields = map[string]string{
 	"id":         "id",
 	"name":       "name",

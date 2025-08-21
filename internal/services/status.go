@@ -1,9 +1,11 @@
+// Файл: internal/services/status_service.go
 package services
 
 import (
 	"context"
 	"mime/multipart"
 	"net/http"
+
 	"request-system/config"
 	"request-system/internal/authz"
 	"request-system/internal/dto"
@@ -92,7 +94,6 @@ func (s *StatusService) FindStatus(ctx context.Context, id uint64) (*dto.StatusD
 }
 
 func (s *StatusService) FindByCode(ctx context.Context, code string) (*dto.StatusDTO, error) {
-	// Эта функция обычно для внутреннего использования, но защитим ее на всякий случай
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -103,17 +104,12 @@ func (s *StatusService) FindByCode(ctx context.Context, code string) (*dto.Statu
 	return s.repo.FindByCode(ctx, code)
 }
 
-// internal/services/status_service.go
-
-// internal/services/status_service.go
-
 func (s *StatusService) CreateStatus(
 	ctx context.Context,
 	createDTO dto.CreateStatusDTO,
 	iconSmallHeader *multipart.FileHeader,
 	iconBigHeader *multipart.FileHeader,
 ) (*dto.StatusDTO, error) {
-
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -126,7 +122,6 @@ func (s *StatusService) CreateStatus(
 	var smallIconPath, bigIconPath string
 	const urlPrefix = "/uploads/"
 
-	// Обрабатываем маленькую иконку, ТОЛЬКО ЕСЛИ она была передана
 	if iconSmallHeader != nil {
 		file, err := iconSmallHeader.Open()
 		if err != nil {
@@ -135,11 +130,13 @@ func (s *StatusService) CreateStatus(
 		}
 		defer file.Close()
 
-		if err = utils.ValidateFile(iconSmallHeader, file, "status_icon_small"); err != nil {
+		// ИЗМЕНЕНИЕ ЗДЕСЬ
+		if err = utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
 			return nil, apperrors.NewHttpError(http.StatusBadRequest, "Маленькая иконка: "+err.Error(), err)
 		}
 
-		rules, _ := config.UploadContexts["status_icon_small"]
+		// И ИЗМЕНЕНИЕ ЗДЕСЬ
+		rules, _ := config.UploadContexts["icon_small"]
 		path, err := s.fileStorage.Save(file, iconSmallHeader.Filename, rules.PathPrefix)
 		if err != nil {
 			s.logger.Error("Не удалось сохранить small icon", zap.Error(err))
@@ -148,7 +145,6 @@ func (s *StatusService) CreateStatus(
 		smallIconPath = urlPrefix + path
 	}
 
-	// Аналогично обрабатываем большую иконку
 	if iconBigHeader != nil {
 		file, err := iconBigHeader.Open()
 		if err != nil {
@@ -157,11 +153,13 @@ func (s *StatusService) CreateStatus(
 		}
 		defer file.Close()
 
-		if err := utils.ValidateFile(iconBigHeader, file, "status_icon_big"); err != nil {
+		// ИЗМЕНЕНИЕ ЗДЕСЬ
+		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
 			return nil, apperrors.NewHttpError(http.StatusBadRequest, "Большая иконка: "+err.Error(), err)
 		}
 
-		rules, _ := config.UploadContexts["status_icon_big"]
+		// И ИЗМЕНЕНИЕ ЗДЕСЬ
+		rules, _ := config.UploadContexts["icon_big"]
 		path, err := s.fileStorage.Save(file, iconBigHeader.Filename, rules.PathPrefix)
 		if err != nil {
 			s.logger.Error("Не удалось сохранить big icon", zap.Error(err))
@@ -172,6 +170,7 @@ func (s *StatusService) CreateStatus(
 
 	return s.repo.CreateStatus(ctx, createDTO, smallIconPath, bigIconPath)
 }
+
 func (s *StatusService) UpdateStatus(ctx context.Context, id uint64, updateDTO dto.UpdateStatusDTO, iconSmallHeader, iconBigHeader *multipart.FileHeader) (*dto.StatusDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -187,10 +186,12 @@ func (s *StatusService) UpdateStatus(ctx context.Context, id uint64, updateDTO d
 	if iconSmallHeader != nil {
 		file, _ := iconSmallHeader.Open()
 		defer file.Close()
-		if err := utils.ValidateFile(iconSmallHeader, file, "status_icon_small"); err != nil {
+		// ИЗМЕНЕНИЕ ЗДЕСЬ
+		if err := utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
 			return nil, err
 		}
-		rules, _ := config.UploadContexts["status_icon_small"]
+		// И ИЗМЕНЕНИЕ ЗДЕСЬ
+		rules, _ := config.UploadContexts["icon_small"]
 		path, err := s.fileStorage.Save(file, iconSmallHeader.Filename, rules.PathPrefix)
 		if err != nil {
 			return nil, err
@@ -202,10 +203,12 @@ func (s *StatusService) UpdateStatus(ctx context.Context, id uint64, updateDTO d
 	if iconBigHeader != nil {
 		file, _ := iconBigHeader.Open()
 		defer file.Close()
-		if err := utils.ValidateFile(iconBigHeader, file, "status_icon_big"); err != nil {
+		// ИЗМЕНЕНИЕ ЗДЕСЬ
+		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
 			return nil, err
 		}
-		rules, _ := config.UploadContexts["status_icon_big"]
+		// И ИЗМЕНЕНИЕ ЗДЕСЬ
+		rules, _ := config.UploadContexts["icon_big"]
 		path, err := s.fileStorage.Save(file, iconBigHeader.Filename, rules.PathPrefix)
 		if err != nil {
 			return nil, err

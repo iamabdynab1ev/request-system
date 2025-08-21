@@ -2,11 +2,12 @@ package controllers
 
 import (
 	"net/http"
+	"strconv"
+
 	"request-system/internal/dto"
 	"request-system/internal/services"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
-	"strconv"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
@@ -32,7 +33,6 @@ func NewEquipmentController(
 func (c *EquipmentController) GetEquipments(ctx echo.Context) error {
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 	res, total, err := c.equipmentService.GetEquipments(ctx.Request().Context(), filter)
-
 	if err != nil {
 		c.logger.Error("Ошибка при получении списка оборудования", zap.Error(err))
 		return utils.ErrorResponse(ctx, err)

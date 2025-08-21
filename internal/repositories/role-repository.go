@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,6 +21,7 @@ const roleTable = "roles"
 var roleAllowedFilterFields = map[string]string{
 	"status_id": "r.status_id",
 }
+
 var roleAllowedSortFields = map[string]string{
 	"id":         "r.id",
 	"name":       "r.name",

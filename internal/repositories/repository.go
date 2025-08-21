@@ -105,14 +105,11 @@ func getColumnsForSelect(
 		var selectAlias string
 		if groupRelatedFieldsByPrefix {
 			if isBaseTable {
-
 				selectAlias = fmt.Sprintf("%s_%s", prefixForColumnAlias, colName)
 			} else {
-
 				selectAlias = fmt.Sprintf("%s_%s", prefixForColumnAlias, colName)
 			}
 		} else {
-
 			selectAlias = fmt.Sprintf("%s_%s", prefixForColumnAlias, colName)
 		}
 		cols = append(cols, fmt.Sprintf("%s.%s AS %s", tableIdentifierInQuery, colName, selectAlias))
@@ -194,17 +191,13 @@ func groupRowDataSmartly(
 			fieldNameWithoutPrefix := parts[1]
 
 			if _, isRelation := relationAliases[prefixCandidate]; isRelation {
-
 				relationSubMaps[prefixCandidate][fieldNameWithoutPrefix] = val
 			} else if prefixCandidate == baseTableAlias {
-
 				result[fieldNameWithoutPrefix] = val
 			} else {
-
 				result[sqlColName] = val
 			}
 		} else {
-
 			result[sqlColName] = val
 		}
 	}

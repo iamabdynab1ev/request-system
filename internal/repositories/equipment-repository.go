@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -166,6 +167,7 @@ func (r *EquipmentRepository) GetEquipments(ctx context.Context, filter types.Fi
 	}
 	return equipments, total, rows.Err()
 }
+
 func (r *EquipmentRepository) FindEquipment(ctx context.Context, id uint64) (*entities.Equipment, error) {
 	joinClause := fmt.Sprintf(`%s e
 		LEFT JOIN branches b ON e.branch_id = b.id

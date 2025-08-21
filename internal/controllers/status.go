@@ -3,11 +3,12 @@ package controllers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+
 	"request-system/internal/dto"
 	"request-system/internal/services"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
-	"strconv"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
@@ -114,6 +115,7 @@ func (c *StatusController) CreateStatus(ctx echo.Context) error {
 	c.logger.Info("CreateStatus: Статус успешно создан", zap.Any("result", createdStatus))
 	return utils.SuccessResponse(ctx, createdStatus, "Статус успешно создан", http.StatusCreated)
 }
+
 func (c *StatusController) UpdateStatus(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {

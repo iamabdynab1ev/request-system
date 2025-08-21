@@ -4,10 +4,8 @@ import (
 	"request-system/pkg/types"
 )
 
-
-
 type Priority struct {
-	ID        int    `json:"id"`
+	ID        uint64 `json:"id"`
 	Icon      string `json:"icon"`
 	Name      string `json:"name"`
 	Rate      int    `json:"rate"`

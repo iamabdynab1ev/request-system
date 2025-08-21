@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
 	"request-system/pkg/utils"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,8 +27,9 @@ var orderAllowedFilterFields = map[string]bool{
 	"department_id": true, "status_id": true, "priority_id": true,
 	"user_id": true, "executor_id": true, "branch_id": true, "office_id": true,
 }
+
 var orderAllowedSortFields = map[string]bool{
-	"id": true, "created_at": true, "updated_at": true, "priority_id": true, 
+	"id": true, "created_at": true, "updated_at": true, "priority_id": true,
 }
 
 type OrderRepositoryInterface interface {

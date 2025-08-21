@@ -3,7 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
-	"net/http"                      // Добавлено для http.StatusBadRequest в ErrorResponse, используется в контроллере
+	"net/http"
+	"strconv"
+	"strings"
+
+	// Добавлено для http.StatusBadRequest в ErrorResponse, используется в контроллере
 	"request-system/internal/authz" // Наш движок авторизации
 	"request-system/internal/dto"
 	"request-system/internal/entities"
@@ -11,7 +15,8 @@ import (
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
 	"request-system/pkg/utils" // Хелперы: GetUserIDFromCtx, GetPermissionsMapFromCtx
-	"strings"                  // Добавлен для strings.Contains
+
+	// Добавлен для strings.Contains
 
 	"github.com/jackc/pgx/v5/pgconn" // Для ошибок PostgreSQL (e.g. UniqueConstraintViolation)
 	"go.uber.org/zap"                // Для логирования
@@ -206,7 +211,21 @@ func (s *UserService) CreateUser(ctx context.Context, payload dto.CreateUserDTO)
 		)
 		return nil, apperrors.ErrForbidden
 	}
+	var normalizedPhone string
+	phone := payload.PhoneNumber
 
+	if strings.HasPrefix(phone, "+992") && len(phone) == 13 {
+		normalizedPhone = strings.TrimPrefix(phone, "+992")
+	} else if !strings.HasPrefix(phone, "+") && len(phone) == 9 {
+		if _, err := strconv.Atoi(phone); err == nil {
+			normalizedPhone = phone
+		}
+	}
+	if normalizedPhone == "" {
+		s.logger.Warn("CreateUser: Неверный формат номера телефона", zap.String("phone", phone))
+		// Можно создать специальную ошибку или использовать существующую
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат номера телефона. Ожидается +992xxxxxxxxx или xxxxxxxxx.", nil)
+	}
 	hashedPassword, err := utils.HashPassword(payload.Password)
 	if err != nil {
 		s.logger.Error("CreateUser: Не удалось хешировать пароль", zap.Error(err))
@@ -214,7 +233,7 @@ func (s *UserService) CreateUser(ctx context.Context, payload dto.CreateUserDTO)
 	}
 
 	userEntity := &entities.User{
-		Fio: payload.Fio, Email: payload.Email, PhoneNumber: payload.PhoneNumber, Password: hashedPassword,
+		Fio: payload.Fio, Email: payload.Email, PhoneNumber: normalizedPhone, Password: hashedPassword,
 		Position: payload.Position, StatusID: payload.StatusID, RoleID: payload.RoleID,
 		BranchID: payload.BranchID, DepartmentID: payload.DepartmentID, OfficeID: payload.OfficeID,
 		OtdelID: payload.OtdelID, PhotoURL: payload.PhotoURL,
@@ -247,7 +266,7 @@ func (s *UserService) CreateUser(ctx context.Context, payload dto.CreateUserDTO)
 				zap.Error(err),
 			)
 		}
-		return nil, apperrors.ErrInternalServer // Общая ошибка для пользователя
+		return nil, apperrors.ErrInternalServer
 	}
 
 	statusDTO, err := s.statusRepository.FindStatus(ctx, uint64(createdEntity.StatusID))

@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,12 +18,14 @@ import (
 
 const equipmentTypeTable = "equipment_types"
 
-var etAllowedFilterFields = map[string]bool{} // Пока нет полей для фильтрации
-var etAllowedSortFields = map[string]bool{
-	"id":         true,
-	"name":       true,
-	"created_at": true,
-}
+var (
+	etAllowedFilterFields = map[string]bool{} // Пока нет полей для фильтрации
+	etAllowedSortFields   = map[string]bool{
+		"id":         true,
+		"name":       true,
+		"created_at": true,
+	}
+)
 
 type EquipmentTypeRepositoryInterface interface {
 	GetEquipmentTypes(ctx context.Context, filter types.Filter) ([]entities.EquipmentType, uint64, error)

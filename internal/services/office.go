@@ -1,31 +1,36 @@
+// Файл: internal/services/office.go
+// СКОПИРУЙТЕ И ПОЛНОСТЬЮ ЗАМЕНИТЕ СОДЕРЖИМОЕ
+
 package services
 
 import (
 	"context"
+
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
+	"request-system/pkg/types" // <-- ДОБАВЛЕН ИМПОРТ
 
 	"go.uber.org/zap"
 )
 
-const timeFormat = "2006-01-02 15:04:05"
-const dateFormat = "2006-01-02"
+const (
+	timeFormat = "2006-01-02 15:04:05"
+	dateFormat = "2006-01-02"
+)
 
 type OfficeService struct {
 	officeRepository repositories.OfficeRepositoryInterface
 	logger           *zap.Logger
 }
 
-func NewOfficeService(officeRepository repositories.OfficeRepositoryInterface,
-	logger *zap.Logger,
-) *OfficeService {
+func NewOfficeService(officeRepository repositories.OfficeRepositoryInterface, logger *zap.Logger) *OfficeService {
 	return &OfficeService{
 		officeRepository: officeRepository,
 		logger:           logger,
 	}
 }
 
-// toOfficeResponseDTO - это приватная вспомогательная функция для преобразования данных.
+// "Переводчик" в DTO для ответа
 func toOfficeResponseDTO(office *dto.OfficeDTO) *dto.OfficeResponseDTO {
 	if office == nil {
 		return nil
@@ -38,22 +43,18 @@ func toOfficeResponseDTO(office *dto.OfficeDTO) *dto.OfficeResponseDTO {
 		CreatedAt: office.CreatedAt.Format(timeFormat),
 		UpdatedAt: office.UpdatedAt.Format(timeFormat),
 	}
-
-	// <--- ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ
-	// Извлекаем ID из объекта филиала
 	if office.Branch != nil {
 		response.BranchID = office.Branch.ID
 	}
-	// Извлекаем ID из объекта статуса
 	if office.Status != nil {
 		response.StatusID = office.Status.ID
 	}
-
 	return response
 }
 
-func (s *OfficeService) GetOffices(ctx context.Context, limit uint64, offset uint64) ([]dto.OfficeResponseDTO, uint64, error) {
-	officesFromRepo, total, err := s.officeRepository.GetOffices(ctx, limit, offset)
+// ИЗМЕНЕНО: теперь принимает types.Filter
+func (s *OfficeService) GetOffices(ctx context.Context, filter types.Filter) ([]dto.OfficeResponseDTO, uint64, error) {
+	officesFromRepo, total, err := s.officeRepository.GetOffices(ctx, filter)
 	if err != nil {
 		s.logger.Error("Ошибка при получении офисов", zap.Error(err))
 		return nil, 0, err

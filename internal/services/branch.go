@@ -3,40 +3,71 @@ package services
 import (
 	"context"
 	"fmt"
-	"request-system/internal/dto"
-	"request-system/internal/entities" // <-- Важно: импортируем entities
-	"request-system/internal/repositories"
-	"request-system/pkg/types" // <-- Важно: импортируем types для filter
 	"time"
+
+	"request-system/internal/authz"
+	"request-system/internal/dto"
+	"request-system/internal/entities"
+	"request-system/internal/repositories"
+	apperrors "request-system/pkg/errors"
+	"request-system/pkg/types"
+	"request-system/pkg/utils"
 
 	"go.uber.org/zap"
 )
 
+const (
+	timeLayout     = "2006-01-02"
+	dateTimeLayout = "2006-01-02 15:04:05"
+)
+
+type BranchServiceInterface interface {
+	GetBranches(ctx context.Context, filter types.Filter) ([]dto.BranchListResponseDTO, uint64, error)
+	FindBranch(ctx context.Context, id uint64) (*dto.BranchDTO, error)
+	CreateBranch(ctx context.Context, payload dto.CreateBranchDTO) (*dto.BranchDTO, error)
+	UpdateBranch(ctx context.Context, id uint64, payload dto.UpdateBranchDTO) (*dto.BranchDTO, error)
+	DeleteBranch(ctx context.Context, id uint64) error
+}
+
 type BranchService struct {
 	branchRepository repositories.BranchRepositoryInterface
+	userRepository   repositories.UserRepositoryInterface
 	logger           *zap.Logger
 }
 
-func NewBranchService(
-	branchRepository repositories.BranchRepositoryInterface,
-	logger *zap.Logger,
-) *BranchService {
-	return &BranchService{
-		branchRepository: branchRepository,
-		logger:           logger,
-	}
+func NewBranchService(branchRepo repositories.BranchRepositoryInterface, userRepo repositories.UserRepositoryInterface, logger *zap.Logger) BranchServiceInterface {
+	return &BranchService{branchRepository: branchRepo, userRepository: userRepo, logger: logger}
 }
 
-// НОВЫЙ ХЕЛПЕР для конвертации одной Entity в детальную DTO
+// Приватный хелпер для проверки прав, чтобы не дублировать код
+func (s *BranchService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
+	userID, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	actor, err := s.userRepository.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, apperrors.ErrUserNotFound
+	}
+	return &authz.Context{Actor: actor, Permissions: permissionsMap}, nil
+}
+
+// "Переводчик" из Entity в детальный DTO
 func branchEntityToDTO(entity *entities.Branch) *dto.BranchDTO {
 	if entity == nil {
 		return nil
 	}
 
-	dtoStatus := &dto.ShortStatusDTO{}
+	var dtoStatus *dto.ShortStatusDTO
 	if entity.Status != nil {
-		dtoStatus.ID = uint64(entity.Status.ID) // >>> ИЗМЕНЕНИЕ: Просто добавляем uint64() <<<
-		dtoStatus.Name = entity.Status.Name
+		dtoStatus = &dto.ShortStatusDTO{
+			ID:   uint64(entity.Status.ID), // Приведение типа, если ID в entities.Status - int
+			Name: entity.Status.Name,
+		}
 	}
 
 	return &dto.BranchDTO{
@@ -47,63 +78,78 @@ func branchEntityToDTO(entity *entities.Branch) *dto.BranchDTO {
 		PhoneNumber: entity.PhoneNumber,
 		Email:       entity.Email,
 		EmailIndex:  entity.EmailIndex,
-		OpenDate:    entity.OpenDate.Format("2006-01-02"),
+		OpenDate:    entity.OpenDate.Format(timeLayout),
 		Status:      dtoStatus,
-		CreatedAt:   entity.CreatedAt.Format("2006-01-02 15:04:05"),
-		UpdatedAt:   entity.UpdatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt:   entity.CreatedAt.Format(dateTimeLayout),
+		UpdatedAt:   entity.UpdatedAt.Format(dateTimeLayout),
 	}
 }
 
-// GetBranches теперь принимает filter и возвращает DTO для списка
+// Метод для получения списка с фильтрацией - С ИЗМЕНЕНИЯМИ
 func (s *BranchService) GetBranches(ctx context.Context, filter types.Filter) ([]dto.BranchListResponseDTO, uint64, error) {
-	branchesFromRepo, total, err := s.branchRepository.GetBranches(ctx, filter)
+	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
-		s.logger.Error("Ошибка в сервисе при получении филиалов", zap.Error(err))
+		return nil, 0, err
+	}
+	if !authz.CanDo(authz.BranchesView, *authCtx) {
+		return nil, 0, apperrors.ErrForbidden
+	}
+
+	entities, total, err := s.branchRepository.GetBranches(ctx, filter)
+	if err != nil {
 		return nil, 0, err
 	}
 
-	responseDTOs := make([]dto.BranchListResponseDTO, 0, len(branchesFromRepo))
-	for _, branch := range branchesFromRepo {
-		response := dto.BranchListResponseDTO{
-			ID:          branch.ID,
-			Name:        branch.Name,
-			ShortName:   branch.ShortName,
-			Address:     branch.Address,
-			PhoneNumber: branch.PhoneNumber,
-			Email:       branch.Email,
-			EmailIndex:  branch.EmailIndex,
-			OpenDate:    branch.OpenDate.Format("2006-01-02"),
-			CreatedAt:   branch.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:   branch.UpdatedAt.Format("2006-01-02 15:04:05"),
-		}
-		if branch.Status != nil {
-			response.StatusID = uint64(branch.Status.ID) // >>> ИЗДМЕНЕНИЕ: И здесь тоже <<<
-		}
-		responseDTOs = append(responseDTOs, response)
+	dtos := make([]dto.BranchListResponseDTO, 0, len(entities))
+	for _, b := range entities {
+		dtos = append(dtos, dto.BranchListResponseDTO{
+			ID:          b.ID,
+			Name:        b.Name,
+			ShortName:   b.ShortName,
+			Address:     b.Address,
+			PhoneNumber: b.PhoneNumber,
+			Email:       b.Email,
+			EmailIndex:  b.EmailIndex,
+			OpenDate:    b.OpenDate.Format(timeLayout),
+			StatusID:    b.StatusID,
+			CreatedAt:   b.CreatedAt.Format(dateTimeLayout),
+		})
 	}
-
-	return responseDTOs, total, nil
+	return dtos, total, nil
 }
 
-// FindBranch теперь конвертирует entity в DTO
+// Метод для поиска одной записи
 func (s *BranchService) FindBranch(ctx context.Context, id uint64) (*dto.BranchDTO, error) {
-	res, err := s.branchRepository.FindBranch(ctx, id)
+	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
-		s.logger.Error("ошибка при поиске филиала", zap.Uint64("id", id), zap.Error(err))
 		return nil, err
 	}
-	// >>> ИЗМЕНЕНИЕ: Конвертируем entity в DTO перед возвратом <<<
-	return branchEntityToDTO(res), nil
+	if !authz.CanDo(authz.BranchesView, *authCtx) {
+		return nil, apperrors.ErrForbidden
+	}
+	entity, err := s.branchRepository.FindBranch(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return branchEntityToDTO(entity), nil
 }
 
-// CreateBranch конвертирует DTO в entity
+// Метод для создания записи
 func (s *BranchService) CreateBranch(ctx context.Context, payload dto.CreateBranchDTO) (*dto.BranchDTO, error) {
-	openDate, err := time.Parse("2006-01-02", payload.OpenDate)
+	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("неверный формат даты: %w", err)
+		return nil, err
+	}
+	if !authz.CanDo(authz.BranchesCreate, *authCtx) {
+		return nil, apperrors.ErrForbidden
 	}
 
-	branchEntity := entities.Branch{
+	openDate, err := time.Parse(timeLayout, payload.OpenDate)
+	if err != nil {
+		return nil, apperrors.NewBadRequestError(fmt.Sprintf("Неверный формат даты: %s", payload.OpenDate))
+	}
+
+	entity := entities.Branch{
 		Name:        payload.Name,
 		ShortName:   payload.ShortName,
 		Address:     payload.Address,
@@ -114,54 +160,72 @@ func (s *BranchService) CreateBranch(ctx context.Context, payload dto.CreateBran
 		StatusID:    payload.StatusID,
 	}
 
-	createdID, err := s.branchRepository.CreateBranch(ctx, branchEntity)
+	createdEntity, err := s.branchRepository.CreateBranch(ctx, entity)
 	if err != nil {
 		return nil, err
 	}
-
-	// Возвращаем свежесозданный объект, уже сконвертированный в DTO
-	return s.FindBranch(ctx, createdID)
+	return branchEntityToDTO(createdEntity), nil
 }
 
-// UpdateBranch ищет entity, обновляет её из DTO и сохраняет
+// Метод для обновления записи
 func (s *BranchService) UpdateBranch(ctx context.Context, id uint64, payload dto.UpdateBranchDTO) (*dto.BranchDTO, error) {
-	existingBranch, err := s.branchRepository.FindBranch(ctx, id)
+	authCtx, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !authz.CanDo(authz.BranchesUpdate, *authCtx) {
+		return nil, apperrors.ErrForbidden
+	}
+
+	existingEntity, err := s.branchRepository.FindBranch(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// Обновляем только те поля, что пришли в DTO
-	if payload.Name != "" {
-		existingBranch.Name = payload.Name
+	if payload.Name != nil {
+		existingEntity.Name = *payload.Name
 	}
-	if payload.ShortName != "" {
-		existingBranch.ShortName = payload.ShortName
+	if payload.ShortName != nil {
+		existingEntity.ShortName = *payload.ShortName
 	}
-	// ... и так далее для всех полей ...
-	if payload.StatusID != 0 {
-		existingBranch.StatusID = payload.StatusID
+	if payload.Address != nil {
+		existingEntity.Address = *payload.Address
 	}
-	if payload.OpenDate != "" {
-		openDate, err := time.Parse("2006-01-02", payload.OpenDate)
+	if payload.PhoneNumber != nil {
+		existingEntity.PhoneNumber = *payload.PhoneNumber
+	}
+	if payload.Email != nil {
+		existingEntity.Email = *payload.Email
+	}
+	if payload.EmailIndex != nil {
+		existingEntity.EmailIndex = *payload.EmailIndex
+	}
+	if payload.StatusID != nil {
+		existingEntity.StatusID = *payload.StatusID
+	}
+	if payload.OpenDate != nil {
+		openDate, err := time.Parse(timeLayout, *payload.OpenDate)
 		if err != nil {
-			return nil, err
+			return nil, apperrors.NewBadRequestError(fmt.Sprintf("Неверный формат даты: %s", *payload.OpenDate))
 		}
-		existingBranch.OpenDate = openDate
+		existingEntity.OpenDate = openDate
 	}
 
-	err = s.branchRepository.UpdateBranch(ctx, id, *existingBranch)
+	updatedEntity, err := s.branchRepository.UpdateBranch(ctx, id, *existingEntity)
 	if err != nil {
 		return nil, err
 	}
-	return s.FindBranch(ctx, id)
+	return branchEntityToDTO(updatedEntity), nil
 }
 
-// DeleteBranch остается без изменений
+// Метод для удаления записи
 func (s *BranchService) DeleteBranch(ctx context.Context, id uint64) error {
-	err := s.branchRepository.DeleteBranch(ctx, id)
+	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
-		s.logger.Error("ошибка при удалении филиала", zap.Uint64("id", id), zap.Error(err))
 		return err
 	}
-	return nil
+	if !authz.CanDo(authz.BranchesDelete, *authCtx) {
+		return apperrors.ErrForbidden
+	}
+	return s.branchRepository.DeleteBranch(ctx, id)
 }

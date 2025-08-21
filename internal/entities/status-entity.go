@@ -11,7 +11,6 @@ type Status struct {
 	IconBig   *string `json:"icon_big"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
-	
 
 	types.BaseEntity
 }

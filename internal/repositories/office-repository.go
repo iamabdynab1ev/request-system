@@ -7,10 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"request-system/internal/dto"
-	apperrors "request-system/pkg/errors"
+	"strconv"
 	"strings"
 	"time"
+
+	"request-system/internal/dto"
+	apperrors "request-system/pkg/errors"
+	"request-system/pkg/types"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,8 +21,20 @@ import (
 
 const officeTable = "offices"
 
+// Белый список полей для фильтрации и сортировки для безопасности
+var officeAllowedFilterFields = map[string]string{
+	"status_id": "o.status_id",
+	"branch_id": "o.branch_id",
+}
+
+var officeAllowedSortFields = map[string]string{
+	"id":        "o.id",
+	"name":      "o.name",
+	"open_date": "o.open_date",
+}
+
 type OfficeRepositoryInterface interface {
-	GetOffices(ctx context.Context, limit uint64, offset uint64) ([]dto.OfficeDTO, uint64, error)
+	GetOffices(ctx context.Context, filter types.Filter) ([]dto.OfficeDTO, uint64, error)
 	FindOffice(ctx context.Context, id uint64) (*dto.OfficeDTO, error)
 	CreateOffice(ctx context.Context, dto dto.CreateOfficeDTO) (uint64, error)
 	UpdateOffice(ctx context.Context, id uint64, dto dto.UpdateOfficeDTO) error
@@ -31,15 +46,87 @@ type OfficeRepository struct {
 }
 
 func NewOfficeRepository(storage *pgxpool.Pool) OfficeRepositoryInterface {
-	return &OfficeRepository{
-		storage: storage,
-	}
+	return &OfficeRepository{storage: storage}
 }
 
-func (r *OfficeRepository) GetOffices(ctx context.Context, limit uint64, offset uint64) ([]dto.OfficeDTO, uint64, error) {
+func (r *OfficeRepository) buildSortQuery(filter types.Filter) string {
+	if filter.Sort != nil {
+		for field, direction := range filter.Sort {
+			dbColumn, isAllowed := officeAllowedSortFields[field]
+			if !isAllowed {
+				continue // Пропускаем неразрешенные поля
+			}
+			// Приводим направление к верхнему регистру и проверяем
+			dir := strings.ToUpper(direction)
+			if dir != "ASC" && dir != "DESC" {
+				dir = "ASC" // По умолчанию
+			}
+			return fmt.Sprintf("ORDER BY %s %s", dbColumn, dir)
+		}
+	}
+	// Сортировка по умолчанию
+	return "ORDER BY o.id DESC"
+}
+
+func (r *OfficeRepository) buildFilterQuery(filter types.Filter) (string, []interface{}) {
+	args := make([]interface{}, 0)
+	conditions := []string{}
+	argCounter := 1
+
+	if filter.Search != "" {
+		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
+		conditions = append(conditions, fmt.Sprintf("(LOWER(o.name) LIKE $%d OR LOWER(o.address) LIKE $%d)", argCounter, argCounter))
+		args = append(args, searchPattern)
+		argCounter++
+	}
+
+	for key, value := range filter.Filter {
+		dbColumn, isAllowed := officeAllowedFilterFields[key]
+		if !isAllowed {
+			continue
+		}
+		if itemStr, ok := value.(string); ok && itemStr != "" {
+			if strings.Contains(itemStr, ",") {
+				items := strings.Split(itemStr, ",")
+				placeholders := []string{}
+				for _, item := range items {
+					val, err := strconv.Atoi(strings.TrimSpace(item))
+					if err != nil {
+						continue
+					}
+					placeholders = append(placeholders, fmt.Sprintf("$%d", argCounter))
+					args = append(args, val)
+					argCounter++
+				}
+				if len(placeholders) > 0 {
+					conditions = append(conditions, fmt.Sprintf("%s IN (%s)", dbColumn, strings.Join(placeholders, ",")))
+				}
+			} else {
+				val, err := strconv.Atoi(strings.TrimSpace(itemStr))
+				if err != nil {
+					continue
+				}
+				conditions = append(conditions, fmt.Sprintf("%s = $%d", dbColumn, argCounter))
+				args = append(args, val)
+				argCounter++
+			}
+		}
+	}
+
+	var whereClause string
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+	return whereClause, args
+}
+
+func (r *OfficeRepository) GetOffices(ctx context.Context, filter types.Filter) ([]dto.OfficeDTO, uint64, error) {
+	whereClause, args := r.buildFilterQuery(filter)
+	sortClause := r.buildSortQuery(filter)
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s o %s", officeTable, whereClause)
 	var total uint64
-	err := r.storage.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", officeTable)).Scan(&total)
-	if err != nil {
+	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("ошибка подсчета офисов: %w", err)
 	}
 
@@ -47,18 +134,25 @@ func (r *OfficeRepository) GetOffices(ctx context.Context, limit uint64, offset 
 		return []dto.OfficeDTO{}, 0, nil
 	}
 
+	limitClause := ""
+	if filter.WithPagination {
+		argCounter := len(args) + 1
+		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", argCounter, argCounter+1)
+		args = append(args, filter.Limit, filter.Offset)
+	}
+
 	query := fmt.Sprintf(`
 		SELECT
 			o.id, o.name, o.address, o.open_date, o.created_at, o.updated_at,
-			b.id, b.name, b.short_name,
-            s.id, s.name
+			COALESCE(b.id, 0), COALESCE(b.name, ''), COALESCE(b.short_name, ''),
+			COALESCE(s.id, 0), COALESCE(s.name, '')
 		FROM %s o
 		LEFT JOIN %s b ON o.branch_id = b.id
-        LEFT JOIN %s s ON o.status_id = s.id
-		ORDER BY o.id DESC LIMIT $1 OFFSET $2
-		`, officeTable, branchTable, statusTable)
+		LEFT JOIN %s s ON o.status_id = s.id
+		%s %s %s
+		`, officeTable, branchTable, statusTable, whereClause, sortClause, limitClause)
 
-	rows, err := r.storage.Query(ctx, query, limit, offset)
+	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -76,8 +170,12 @@ func (r *OfficeRepository) GetOffices(ctx context.Context, limit uint64, offset 
 		); err != nil {
 			return nil, 0, err
 		}
-		office.Branch = &branch
-		office.Status = &status
+		if branch.ID > 0 {
+			office.Branch = &branch
+		}
+		if status.ID > 0 {
+			office.Status = &status
+		}
 		offices = append(offices, office)
 	}
 	return offices, total, nil
@@ -87,8 +185,8 @@ func (r *OfficeRepository) FindOffice(ctx context.Context, id uint64) (*dto.Offi
 	query := fmt.Sprintf(`
 		SELECT
 			o.id, o.name, o.address, o.open_date, o.created_at, o.updated_at,
-			b.id, b.name, b.short_name,
-			s.id, s.name
+			COALESCE(b.id, 0), COALESCE(b.name, ''), COALESCE(b.short_name, ''),
+			COALESCE(s.id, 0), COALESCE(s.name, '')
 		FROM %s o
 		LEFT JOIN %s b ON o.branch_id = b.id
 		LEFT JOIN %s s ON o.status_id = s.id
@@ -109,8 +207,12 @@ func (r *OfficeRepository) FindOffice(ctx context.Context, id uint64) (*dto.Offi
 		}
 		return nil, err
 	}
-	office.Branch = &branch
-	office.Status = &status
+	if branch.ID > 0 {
+		office.Branch = &branch
+	}
+	if status.ID > 0 {
+		office.Status = &status
+	}
 	return &office, nil
 }
 

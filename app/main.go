@@ -7,15 +7,18 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"time"
+
+	"request-system/internal/repositories"
 	"request-system/internal/routes"
+	"request-system/internal/services"
+	"request-system/pkg/config"
 	"request-system/pkg/database/postgresql"
 	apperrors "request-system/pkg/errors"
 	applogger "request-system/pkg/logger"
-	"request-system/pkg/utils"
-
 	"request-system/pkg/service"
-	"strings"
-	"time"
+	"request-system/pkg/utils"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/go-redis/redis/v8"
@@ -23,10 +26,12 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"go.uber.org/zap"
-
-	"request-system/internal/repositories"
-	"request-system/internal/services"
 )
+
+func isGoodEmailFormat(fl validator.FieldLevel) bool {
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	return emailRegex.MatchString(fl.Field().String())
+}
 
 func isTajikPhoneNumber(fl validator.FieldLevel) bool {
 	re := regexp.MustCompile(`^\+992\d{9}$`)
@@ -46,26 +51,27 @@ func main() {
 
 	e := echo.New()
 	logger := applogger.NewLogger()
+
+	cfg := config.New()
+
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
-		DisableStackAll: true,    // Немного чище стектрейс
-		StackSize:       1 << 10, // 1 KB
+		DisableStackAll: true,
+		StackSize:       1 << 10,
 		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
-			// 1. ЛОГИРУЕМ ВСЮ ИНФОРМАЦИЮ О ПАНИКЕ С ПОМОЩЬЮ ZAP
 			logger.Error("!!! ОБНАРУЖЕНА ПАНИКА (PANIC) !!!",
 				zap.String("method", c.Request().Method),
 				zap.String("uri", c.Request().RequestURI),
-				zap.Any("error", err), // zap.Any для большей гибкости
+				zap.Any("error", err),
 				zap.String("stack", string(stack)),
 			)
 			if !c.Response().Committed {
 				httpErr := apperrors.NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", err)
-
 				utils.ErrorResponse(c, httpErr)
 			}
-
 			return err
 		},
 	}))
+
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			c.Response().Header().Set("ngrok-skip-browser-warning", "true")
@@ -77,44 +83,26 @@ func main() {
 		AllowOrigins: []string{
 			"http://localhost:5173",
 			"https://6cbea72d26ee.ngrok-free.app",
-			"https://b89bb009937d.ngrok-free.app",
+			"https://5d6248dfbdff.ngrok-free.app",
 		},
-		AllowMethods: []string{
-			http.MethodGet, http.MethodPost, http.MethodPut,
-			http.MethodDelete, http.MethodOptions,
-		},
-		AllowHeaders: []string{
-			echo.HeaderOrigin,
-			echo.HeaderContentType,
-			echo.HeaderAccept,
-			echo.HeaderAuthorization, // вот эта строка критична!
-			"ngrok-skip-browser-warning",
-		},
-		AllowCredentials: true, // тоже критично
-		ExposeHeaders: []string{
-			"Content-Disposition",
-		},
+		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "ngrok-skip-browser-warning"},
+		AllowCredentials: true,
+		ExposeHeaders:    []string{"Content-Disposition"},
 	}))
 
 	absPath, err := filepath.Abs("./uploads")
 	if err != nil {
 		logger.Fatal("не удалось получить абсолютный путь к uploads", zap.Error(err))
 	}
-	logger.Info("Абсолютный путь к uploads", zap.String("path", absPath))
-
 	e.Static("/uploads", absPath)
 
-	e.GET("/testphoto", func(c echo.Context) error {
-		return c.File("./uploads/2025/08/05/2025-08-05-80286516-eaff-472e-8379-22d3e51bb236.jpg")
-	})
 	v := validator.New()
-	if err := v.RegisterValidation("e164_TJ", isTajikPhoneNumber); err != nil {
-		logger.Fatal("Ошибка регистрации валидации e164_TJ", zap.Error(err))
+	v.RegisterValidation("e164_TJ", isTajikPhoneNumber)
+	v.RegisterValidation("duration_format", isDurationValid)
+	if err := v.RegisterValidation("email", isGoodEmailFormat); err != nil {
+		logger.Fatal("Ошибка переопределения валидации 'email'", zap.Error(err))
 	}
-	if err := v.RegisterValidation("duration_format", isDurationValid); err != nil {
-		logger.Fatal("Ошибка регистрации валидации duration_format", zap.Error(err))
-	}
-
 	e.Validator = utils.NewValidator(v)
 
 	dbConn := postgresql.ConnectDB()
@@ -132,31 +120,21 @@ func main() {
 	if _, err := redisClient.Ping(context.Background()).Result(); err != nil {
 		logger.Fatal("не удалось подключиться к Redis", zap.Error(err), zap.String("address", redisAddr))
 	}
-	logger.Info("main: Успешное подключение к Redis")
 
 	jwtSecretKey := os.Getenv("JWT_SECRET_KEY")
-	if jwtSecretKey == "" {
-		logger.Warn("main: JWT_SECRET_KEY не найден в .env. Используется небезопасный запасной ключ.")
-		jwtSecretKey = "your_default_super_secret_key_for_testing"
-	}
-	if os.Getenv("ENV") == "production" && jwtSecretKey == "your_default_super_secret_key_for_testing" {
-		logger.Fatal("В продакшене необходимо задать безопасный JWT_SECRET_KEY")
-	}
 
 	accessTokenTTL := time.Hour * 24
 	refreshTokenTTL := time.Hour * 24 * 7
 	jwtSvc := service.NewJWTService(jwtSecretKey, accessTokenTTL, refreshTokenTTL, logger)
-	logger.Info("main: JWTService успешно создан")
 
 	permissionRepo := repositories.NewPermissionRepository(dbConn, logger)
-
 	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
 
 	rolePermissionsCacheTTL := time.Minute * 10
 	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, logger, rolePermissionsCacheTTL)
-	logger.Info("main: AuthPermissionService успешно создан")
 
-	routes.InitRouter(e, dbConn, redisClient, jwtSvc, logger, authPermissionService)
+	routes.InitRouter(e, dbConn, redisClient, jwtSvc, logger, authPermissionService, cfg)
+
 	logger.Info("🚀 Сервер запущен на :8080")
 	if err := e.Start(":8080"); err != nil {
 		logger.Fatal("Ошибка запуска сервера", zap.Error(err))

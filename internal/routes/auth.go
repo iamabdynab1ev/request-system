@@ -1,9 +1,13 @@
+// Файл: internal/routes/auth_router.go
 package routes
 
 import (
+	// <<< ДОБАВЛЯЕМ ИМПОРТ
+
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
+	"request-system/pkg/config"
 	"request-system/pkg/middleware"
 	"request-system/pkg/service"
 
@@ -13,22 +17,32 @@ import (
 	"go.uber.org/zap"
 )
 
-func runAuthRouter(api *echo.Group, dbConn *pgxpool.Pool, redisClient *redis.Client, jwtSvc service.JWTService, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
+func runAuthRouter(
+	api *echo.Group,
+	dbConn *pgxpool.Pool,
+	redisClient *redis.Client,
+	jwtSvc service.JWTService,
+	logger *zap.Logger,
+	authMW *middleware.AuthMiddleware,
+	authPermissionService services.AuthPermissionServiceInterface,
+	cfg *config.Config,
+) {
 	userRepository := repositories.NewUserRepository(dbConn, logger)
 	cacheRepository := repositories.NewRedisCacheRepository(redisClient)
-	authService := services.NewAuthService(userRepository, cacheRepository, logger)
-	authCtrl := controllers.NewAuthController(authService, jwtSvc, logger)
+
+	authService := services.NewAuthService(userRepository, cacheRepository, logger, &cfg.Auth)
+
+	authCtrl := controllers.NewAuthController(authService, authPermissionService, jwtSvc, logger)
 
 	authGroup := api.Group("/auth")
 	{
 		authGroup.POST("/login", authCtrl.Login)
-		authGroup.POST("/send_code", authCtrl.SendCode)
-		authGroup.POST("/verify_code", authCtrl.VerifyCode)
 		authGroup.POST("/refresh_token", authCtrl.RefreshToken)
-		authGroup.POST("/recovery_options", authCtrl.CheckRecoveryOptions)
-		authGroup.POST("/recovery_send", authCtrl.SendRecoveryInstructions)
-		authGroup.POST("/reset_password/email", authCtrl.ResetPasswordWithEmail)
-		authGroup.POST("/reset_password/phone_number", authCtrl.ResetPasswordWithPhone)
 		authGroup.GET("/me", authCtrl.Me, authMW.Auth)
+
+		passwordGroup := authGroup.Group("/password")
+		passwordGroup.POST("/request", authCtrl.RequestPasswordReset)
+		passwordGroup.POST("/verify_phone", authCtrl.VerifyCode)
+		passwordGroup.POST("/reset", authCtrl.ResetPassword)
 	}
 }

@@ -130,10 +130,8 @@ func SuccessResponse(ctx echo.Context, body interface{}, message string, code in
 }
 
 func ErrorResponse(c echo.Context, err error) error {
-
 	var httpErr *apperrors.HttpError
 	if errors.As(err, &httpErr) {
-
 		return c.JSON(httpErr.Code, map[string]interface{}{
 			"status":  false,
 			"message": httpErr.Message,
@@ -156,7 +154,6 @@ func ErrorResponse(c echo.Context, err error) error {
 	}
 	var echoHttpErr *echo.HTTPError
 	if errors.As(err, &echoHttpErr) {
-
 		return c.JSON(echoHttpErr.Code, map[string]interface{}{
 			"status":  false,
 			"message": echoHttpErr.Message,
@@ -167,5 +164,4 @@ func ErrorResponse(c echo.Context, err error) error {
 		"status":  false,
 		"message": "Внутренняя ошибка сервера",
 	})
-
 }

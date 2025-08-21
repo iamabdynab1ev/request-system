@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -16,12 +17,16 @@ import (
 	"go.uber.org/zap"
 )
 
-const userTableRepo = "users"
-const userSelectFieldsForEntityRepo = "u.id, u.fio, u.email, u.phone_number, u.password, u.position, u.status_id, u.photo_url, u.role_id, u.branch_id, u.department_id, u.office_id, u.otdel_id, r.name as role_name, u.created_at, u.updated_at, u.deleted_at"
-const userJoinClauseRepo = "users u JOIN roles r ON u.role_id = r.id"
+const (
+	userTableRepo                 = "users"
+	userSelectFieldsForEntityRepo = "u.id, u.fio, u.email, u.phone_number, u.password, u.position, u.status_id, u.photo_url, u.role_id, u.branch_id, u.department_id, u.office_id, u.otdel_id, r.name as role_name, u.created_at, u.updated_at, u.deleted_at"
+	userJoinClauseRepo            = "users u JOIN roles r ON u.role_id = r.id"
+)
 
-var userAllowedFilterFields = map[string]bool{"status_id": true, "department_id": true, "branch_id": true, "role_id": true, "position": true}
-var userAllowedSortFields = map[string]bool{"id": true, "fio": true, "created_at": true, "updated_at": true}
+var (
+	userAllowedFilterFields = map[string]bool{"status_id": true, "department_id": true, "branch_id": true, "role_id": true, "position": true}
+	userAllowedSortFields   = map[string]bool{"id": true, "fio": true, "created_at": true, "updated_at": true}
+)
 
 type UserRepositoryInterface interface {
 	GetUsers(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.User, uint64, error)
@@ -180,21 +185,25 @@ func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*entiti
 	row := r.storage.QueryRow(ctx, query, email)
 	return scanUser(row)
 }
+
 func (r *UserRepository) FindHeadByDepartment(ctx context.Context, departmentID uint64) (*entities.User, error) {
 	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.department_id = $1 AND LOWER(TRIM(r.name)) = LOWER('User') AND u.deleted_at IS NULL LIMIT 1`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	row := r.storage.QueryRow(ctx, query, departmentID)
 	return scanUser(row)
 }
+
 func (r *UserRepository) FindHeadByDepartmentInTx(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.User, error) {
 	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.department_id = $1 AND LOWER(TRIM(r.name)) = LOWER('User') AND u.deleted_at IS NULL LIMIT 1`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	row := tx.QueryRow(ctx, query, departmentID)
 	return scanUser(row)
 }
+
 func (r *UserRepository) FindUserByID(ctx context.Context, id uint64) (*entities.User, error) {
 	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.id = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	row := r.storage.QueryRow(ctx, query, id)
 	return scanUser(row)
 }
+
 func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error) {
 	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.email = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	row := r.storage.QueryRow(ctx, query, login)
@@ -207,16 +216,19 @@ func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login strin
 	}
 	return user, nil
 }
+
 func (r *UserRepository) FindUser(ctx context.Context, id uint64) (*entities.User, error) {
 	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.id = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	row := r.storage.QueryRow(ctx, query, id)
 	return scanUser(row)
 }
+
 func (r *UserRepository) FindUserByPhone(ctx context.Context, phone string) (*entities.User, error) {
 	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.phone_number = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 	row := r.storage.QueryRow(ctx, query, phone)
 	return scanUser(row)
 }
+
 func (r *UserRepository) UpdatePassword(ctx context.Context, userID uint64, newPasswordHash string) error {
 	query := `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2`
 	result, err := r.storage.Exec(ctx, query, newPasswordHash, userID)
@@ -228,6 +240,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID uint64, newP
 	}
 	return nil
 }
+
 func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) (*entities.User, error) {
 	query := fmt.Sprintf(`
         WITH ins AS (
@@ -261,6 +274,7 @@ func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) 
 	}
 	return createdEntity, nil
 }
+
 func (r *UserRepository) UpdateUser(ctx context.Context, entity *entities.User) (*entities.User, error) {
 	query := fmt.Sprintf(`
 		WITH upd AS (
@@ -279,6 +293,7 @@ func (r *UserRepository) UpdateUser(ctx context.Context, entity *entities.User) 
 
 	return scanUser(row)
 }
+
 func (r *UserRepository) DeleteUser(ctx context.Context, id uint64) error {
 	query := `UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL`
 	result, err := r.storage.Exec(ctx, query, id)

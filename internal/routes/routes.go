@@ -5,37 +5,35 @@ package routes
 import (
 	// Убедись, что есть импорт
 
-	"request-system/internal/services"
-	"request-system/pkg/filestorage"
-	"request-system/pkg/middleware"
-	"request-system/pkg/service"
-
 	"github.com/go-redis/redis/v8"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
+
+	"request-system/internal/services"
+	"request-system/pkg/config"
+	"request-system/pkg/filestorage"
+	"request-system/pkg/middleware"
+	"request-system/pkg/service"
 )
 
-func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, jwtSvc service.JWTService, logger *zap.Logger, authPermissionService services.AuthPermissionServiceInterface) {
+func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, jwtSvc service.JWTService, logger *zap.Logger, authPermissionService services.AuthPermissionServiceInterface, cfg *config.Config) {
 	logger.Info("InitRouter: Начало создания маршрутов")
 
 	api := e.Group("/api")
 
 	authMW := middleware.NewAuthMiddleware(jwtSvc, authPermissionService, logger)
 
-	// Публичные роуты (логин, регистрация и т.д.)
-	runAuthRouter(api, dbConn, redisClient, jwtSvc, logger, authMW)
+	runAuthRouter(api, dbConn, redisClient, jwtSvc, logger, authMW, authPermissionService, cfg)
 
-	// Создаем группу, которая ТРЕБУЕТ ТОКЕН для всех роутов внутри нее
 	secureGroup := api.Group("", authMW.Auth)
 
-	
 	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
 	if err != nil {
 		logger.Fatal("не удалось создать файловое хранилище", zap.Error(err))
 	}
 
-	runStatusRouter(secureGroup, dbConn, logger, authMW) // <-- ВЫЗЫВАЕМ ЗДЕСЬ
+	runStatusRouter(secureGroup, dbConn, logger, authMW)
 
 	runUploadRouter(secureGroup, fileStorage, logger)
 	RunPriorityRouter(secureGroup, dbConn, logger, authMW)

@@ -2,8 +2,9 @@ package service
 
 import (
 	"errors"
-	apperrors "request-system/pkg/errors"
 	"time"
+
+	apperrors "request-system/pkg/errors"
 
 	jwt "github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
@@ -25,7 +26,7 @@ type JWTService interface {
 }
 
 type jwtService struct {
-	SecretKey       string	// Секретный ключ для подписи токенов
+	SecretKey       string
 	AccessTokenExp  time.Duration
 	RefreshTokenExp time.Duration
 	logger          *zap.Logger
@@ -89,7 +90,6 @@ func (s *jwtService) ValidateToken(tokenString string) (*JwtCustomClaim, error) 
 		}
 		return []byte(s.SecretKey), nil
 	})
-
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			s.logger.Warn("Проверка токена: срок действия истек")

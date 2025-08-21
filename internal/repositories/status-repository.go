@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -40,8 +41,10 @@ func (db *dbStatus) ToDTO() dto.StatusDTO {
 	}
 }
 
-const statusTable = "statuses"
-const statusFields = "id, icon_small, icon_big, name, type, code, created_at, updated_at"
+const (
+	statusTable  = "statuses"
+	statusFields = "id, icon_small, icon_big, name, type, code, created_at, updated_at"
+)
 
 type StatusRepositoryInterface interface {
 	GetStatuses(ctx context.Context, limit, offset uint64, search string) ([]dto.StatusDTO, uint64, error)

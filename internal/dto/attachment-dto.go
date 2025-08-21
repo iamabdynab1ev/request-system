@@ -1,6 +1,6 @@
 package dto
 
-import "time" 
+import "time"
 
 type CreateAttachmentDTO struct {
 	OrderID  uint64 `json:"order_id" validate:"required"`

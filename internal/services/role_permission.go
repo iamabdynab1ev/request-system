@@ -113,7 +113,7 @@ func (s *RolePermissionService) DeleteRolePermission(ctx context.Context, id uin
 	s.logger.Info("DeleteRolePermission: успешно удалена связь", zap.Uint64("id", id), zap.Uint64("role_id", rpToDelete.RoleID))
 
 	// НОВОЕ: Инвалидация кеша для этой роли после удаления связи
-	if err := s.authPermissionService.InvalidateRolePermissionsCache(ctx, rpToDelete.RoleID); err != nil { 
+	if err := s.authPermissionService.InvalidateRolePermissionsCache(ctx, rpToDelete.RoleID); err != nil {
 		s.logger.Error("DeleteRolePermission: ошибка инвалидации кеша привилегий для роли", zap.Uint64("role_id", rpToDelete.RoleID), zap.Error(err))
 	}
 	return nil

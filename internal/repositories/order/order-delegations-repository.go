@@ -1,4 +1,5 @@
 package repositories
+
 /*
 import (
 	"context"
@@ -35,7 +36,7 @@ func (r *OrderDelegationRepository) GetOrderDelegations(ctx context.Context, lim
 	}
 
 	query := `
-		SELECT 
+		SELECT
 			od.id, od.created_at, od.updated_at, s.id, s.name, o.id, o.name,
 			delegator.id, delegator.fio, delegatee.id, delegatee.fio
 		FROM order_delegations od
@@ -95,7 +96,7 @@ func (r *OrderDelegationRepository) GetOrderDelegations(ctx context.Context, lim
 
 func (r *OrderDelegationRepository) FindOrderDelegation(ctx context.Context, id uint64) (*dto.OrderDelegationDTO, error) {
 	query := `
-		SELECT 
+		SELECT
 			od.id, od.created_at, od.updated_at, s.id, s.name, o.id, o.name,
 			delegator.id, delegator.fio, delegatee.id, delegatee.fio
 		FROM order_delegations od

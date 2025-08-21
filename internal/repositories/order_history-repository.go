@@ -3,12 +3,12 @@ package repositories
 import (
 	"context"
 	"database/sql"
+
 	"request-system/internal/entities"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
 
 type OrderHistoryItem struct {
 	entities.OrderHistory
@@ -39,9 +39,7 @@ func (r *OrderHistoryRepository) CreateInTx(ctx context.Context, tx pgx.Tx, hist
 	return err
 }
 
-
 func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint64) ([]OrderHistoryItem, error) {
-	
 	query := `
 		SELECT 
 			h.id, h.order_id, h.user_id, h.event_type, h.old_value, h.new_value, h.comment, h.created_at,
@@ -62,7 +60,6 @@ func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint
 		WHERE h.order_id = $1
 		ORDER BY h.created_at ASC, h.id ASC
 	`
-	
 
 	rows, err := r.storage.Query(ctx, query, orderID)
 	if err != nil {

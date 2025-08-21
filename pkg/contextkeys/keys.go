@@ -2,8 +2,10 @@ package contextkeys
 
 type contextKey string
 
-const UserIDKey contextKey = "UserID"
-const UserPermissionsKey contextKey = "UserPermissions"
-const UserRoleIDKey contextKey = "UserRoleID"
-const RoleIDKey contextKey = "RoleID"
-const UserPermissionsMapKey contextKey = "userPermissionsMap"
+const (
+	UserIDKey             contextKey = "UserID"
+	UserPermissionsKey    contextKey = "UserPermissions"
+	UserRoleIDKey         contextKey = "UserRoleID"
+	RoleIDKey             contextKey = "RoleID"
+	UserPermissionsMapKey contextKey = "userPermissionsMap"
+)

@@ -48,8 +48,6 @@ type DelegateOrderDTO struct {
 	HasFile bool `json:"has_file,omitempty"`
 }
 
-
-
 type UpdateOrderDTO struct {
 	Name         *string `json:"name,omitempty" validate:"omitempty,min=5,max=255"`
 	Address      *string `json:"address,omitempty" validate:"omitempty,min=5"`

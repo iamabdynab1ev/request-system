@@ -1,7 +1,9 @@
+// Файл: internal/services/attachment_service.go
 package services
 
 import (
 	"context"
+
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
 	"request-system/pkg/filestorage"
@@ -17,7 +19,7 @@ type AttachmentServiceInterface interface {
 
 type AttachmentService struct {
 	repo        repositories.AttachmentRepositoryInterface
-	fileStorage filestorage.FileStorageInterface // Зависимость для удаления физических файлов
+	fileStorage filestorage.FileStorageInterface
 	logger      *zap.Logger
 }
 
@@ -28,21 +30,19 @@ func NewAttachmentService(
 ) AttachmentServiceInterface {
 	return &AttachmentService{
 		repo:        repo,
-		fileStorage: fileStorage, // Используется fileStorage.basePath для удаления
+		fileStorage: fileStorage,
 		logger:      logger,
 	}
 }
 
 // GetAttachmentsByOrderID получает список всех вложений для указанной заявки.
 func (s *AttachmentService) GetAttachmentsByOrderID(ctx context.Context, orderID uint64) ([]dto.AttachmentResponseDTO, error) {
-	// Используем метод FindAllByOrderID, который мы определили ранее
-	attachments, err := s.repo.FindAllByOrderID(ctx, orderID, 10, 0)
+	attachments, err := s.repo.FindAllByOrderID(ctx, orderID, 100, 0)
 	if err != nil {
 		s.logger.Error("не удалось получить вложения для заявки", zap.Uint64("orderID", orderID), zap.Error(err))
 		return nil, err
 	}
 
-	// Преобразуем сущности в DTO для ответа клиенту
 	var attachmentsDTO []dto.AttachmentResponseDTO
 	for _, a := range attachments {
 		dto := dto.AttachmentResponseDTO{
@@ -50,7 +50,8 @@ func (s *AttachmentService) GetAttachmentsByOrderID(ctx context.Context, orderID
 			FileName: a.FileName,
 			FileSize: a.FileSize,
 			FileType: a.FileType,
-			URL:      "/static/" + a.FilePath, // Формируем URL для фронтенда
+			// Используем единообразный префикс /uploads/
+			URL: "/uploads/" + a.FilePath,
 		}
 		attachmentsDTO = append(attachmentsDTO, dto)
 	}
@@ -59,32 +60,35 @@ func (s *AttachmentService) GetAttachmentsByOrderID(ctx context.Context, orderID
 }
 
 // DeleteAttachment удаляет вложение как из базы данных, так и с физического носителя.
+// ИСПРАВЛЕННАЯ ВЕРСИЯ
 func (s *AttachmentService) DeleteAttachment(ctx context.Context, attachmentID uint64) error {
-	// Сначала нужно найти вложение в БД, чтобы получить путь к файлу
-	// Для этого в AttachmentRepositoryInterface нам нужен метод FindByID. Давайте предположим, что он есть.
-	// Если его нет, его нужно добавить по аналогии с FindAllByOrderID.
-	// AttachmentRepository.FindByID(...)
+	// 1. Находим вложение в БД, чтобы получить путь к файлу.
+	//    Предполагаем, что у вас в репозитории есть метод FindByID.
+	attachment, err := s.repo.FindByID(ctx, attachmentID)
+	if err != nil {
+		s.logger.Warn("попытка удаления несуществующего вложения", zap.Uint64("attachmentID", attachmentID), zap.Error(err))
+		return err
+	}
 
-	// Здесь должна быть логика поиска attachment по ID, чтобы получить FilePath.
-	// Для упрощения, предположим, что fileStorage может сам строить путь,
-	// но более надежно - сначала получить путь из БД.
+	// 2. Удаляем запись из базы данных, ИСПОЛЬЗУЯ ВАШ СУЩЕСТВУЮЩИЙ МЕТОД
+	err = s.repo.DeleteAttachment(ctx, attachmentID)
+	if err != nil {
+		s.logger.Error("не удалось удалить запись о вложении из бд", zap.Uint64("attachmentID", attachmentID), zap.Error(err))
+		return err
+	}
+	s.logger.Info("запись о вложении успешно удалена из бд", zap.Uint64("attachmentID", attachmentID))
 
-	// Для данного примера, мы пока пропустим физическое удаление файла,
-	// так как это потребует добавления метода FindByID в репозиторий.
-	// Фокусируемся на том, чтобы код компилировался с текущими интерфейсами.
+	// 3. После успешного удаления из БД, удаляем физический файл.
+	fileURL := "/uploads/" + attachment.FilePath
+	err = s.fileStorage.Delete(fileURL)
+	if err != nil {
+		s.logger.Warn("не удалось удалить физический файл вложения",
+			zap.Uint64("attachmentID", attachmentID),
+			zap.String("path", fileURL),
+			zap.Error(err))
+	} else {
+		s.logger.Info("физический файл вложения успешно удален", zap.String("path", fileURL))
+	}
 
-	// ВАЖНО: Эта реализация требует доработки после добавления FindByID в репозиторий.
-	// Пока что эта функция будет заглушкой, чтобы удовлетворить компилятор, если
-	// где-то в контроллере есть вызов.
-
-	// TODO: Реализовать полное удаление после добавления repo.FindByID()
-	s.logger.Warn("DeleteAttachment вызван, но физическое удаление файла не реализовано", zap.Uint64("attachmentID", attachmentID))
-
-	// err := s.repo.Delete(ctx, attachmentID)
-	// if err != nil {
-	//  s.logger.Error("не удалось удалить запись о вложении из бд", zap.Uint64("attachmentID", attachmentID), zap.Error(err))
-	// 	return err
-	// }
-
-	return nil // Возвращаем nil, чтобы не ломать существующую логику
+	return nil // Все прошло успешно
 }

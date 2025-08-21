@@ -1,36 +1,29 @@
 {
-  "editor.guides.bracketPairs": true,
-  "editor.formatOnSave": true,
-  "files.autoSave": "afterDelay",
-  "files.autoSaveDelay": 1000,
   "[go]": {
     "editor.defaultFormatter": "golang.go",
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {
-      "source.organizeImports": "explicit"
+      "source.organizeImports": "explicit",
+      "source.fixAll": "explicit"
     }
   },
-  "go.formatTool": "gofumpt",
-  "go.lintTool": "staticcheck",
-  "go.lintOnSave": "package",
-  "go.vetOnSave": "package",
   "go.useLanguageServer": true,
-  "go.toolsManagement.autoUpdate": true,
   "gopls": {
-    "ui.completion.usePlaceholders": true,
-    "ui.documentation": true,
-    "analyses": {
-      "unusedparams": true,
-      "shadow": true
-    },
-    "staticcheck": true
+    "gofumpt": true,
+    "local": "request-system"
   },
-  "editor.fontFamily": "Fira Code, Consolas, monospace",
-  "editor.fontLigatures": true,
-  "terminal.integrated.fontFamily": "Consolas, 'Courier New', monospace",
-  "workbench.colorTheme": "Gruvbox Dark Hard",
-  "breadcrumbs.enabled": true,
-  "explorer.confirmDelete": false
+  "go.toolsManagement.autoUpdate": true,
+
+  "makefile.configureOnOpen": true,
+  "workbench.panel.showLabels": false,
+  "editor.minimap.enabled": false,
+  "editor.fontFamily": "Consolas, 'Fira Code', 'JetBrains Mono', monospace",
+  "workbench.iconTheme": "vscode-icons",
+
+  "database-client.completionTriggerKey": [
+    " ",
+    "@",
+    "."
+  ],
+  "database-client.confirmWhenUpdateWithoutWhere": true
 }
-
-

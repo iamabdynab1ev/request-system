@@ -1,31 +1,39 @@
+// Файл: internal/controllers/auth_controller.go
 package controllers
 
 import (
 	"net/http"
+	"time"
+
 	"request-system/internal/dto"
-	"request-system/internal/entities"
 	"request-system/internal/services"
 	"request-system/pkg/contextkeys"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/service"
 	"request-system/pkg/utils"
-	"time"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
 type AuthController struct {
-	authService services.AuthServiceInterface
-	jwtSvc      service.JWTService
-	logger      *zap.Logger
+	authService           services.AuthServiceInterface
+	authPermissionService services.AuthPermissionServiceInterface
+	jwtSvc                service.JWTService
+	logger                *zap.Logger
 }
 
-func NewAuthController(authService services.AuthServiceInterface, jwtSvc service.JWTService, logger *zap.Logger) *AuthController {
+func NewAuthController(
+	authService services.AuthServiceInterface,
+	authPermissionService services.AuthPermissionServiceInterface,
+	jwtSvc service.JWTService,
+	logger *zap.Logger,
+) *AuthController {
 	return &AuthController{
-		authService: authService,
-		jwtSvc:      jwtSvc,
-		logger:      logger,
+		authService:           authService,
+		authPermissionService: authPermissionService,
+		jwtSvc:                jwtSvc,
+		logger:                logger,
 	}
 }
 
@@ -43,173 +51,43 @@ func (ctrl *AuthController) Login(c echo.Context) error {
 		return utils.ErrorResponse(c, err)
 	}
 
-	return ctrl.generateTokensAndRespond(c, user, "Авторизация прошла успешно")
-}
-
-func (ctrl *AuthController) SendCode(c echo.Context) error {
-	var payload dto.SendCodeDTO
-	if err := c.Bind(&payload); err != nil {
-		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
-	}
-	if err := c.Validate(&payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-	if payload.Email == "" && payload.Phone == "" {
-		return utils.ErrorResponse(c, apperrors.ErrValidation)
-	}
-
-	if err := ctrl.authService.SendVerificationCode(c.Request().Context(), payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	return utils.SuccessResponse(c, nil, "Если пользователь с указанными данными существует, код будет отправлен.", http.StatusOK)
-}
-
-func (ctrl *AuthController) VerifyCode(c echo.Context) error {
-	var payload dto.VerifyCodeDTO
-	if err := c.Bind(&payload); err != nil {
-		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
-	}
-	if err := c.Validate(&payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	user, err := ctrl.authService.LoginWithCode(c.Request().Context(), payload)
+	permissions, err := ctrl.authPermissionService.GetRolePermissionsNames(c.Request().Context(), user.RoleID)
 	if err != nil {
-		return utils.ErrorResponse(c, err)
+		ctrl.logger.Error("Не удалось получить привилегии пользователя при логине",
+			zap.Uint64("userID", user.ID),
+			zap.Error(err),
+		)
+		permissions = []string{}
 	}
 
-	return ctrl.generateTokensAndRespond(c, user, "Авторизация прошла успешно")
+	return ctrl.generateTokensAndRespond(c, user.ID, user.RoleID, permissions, "Авторизация прошла успешно")
 }
 
 func (ctrl *AuthController) RefreshToken(c echo.Context) error {
 	cookie, err := c.Cookie("refreshToken")
 	if err != nil {
-		ctrl.logger.Warn("Попытка обновления токена без cookie", zap.Error(err))
 		return utils.ErrorResponse(c, apperrors.ErrUnauthorized)
 	}
 	refreshTokenString := cookie.Value
-	if refreshTokenString == "" {
-		return utils.ErrorResponse(c, apperrors.ErrUnauthorized)
-	}
 
-	userID, err := ctrl.jwtSvc.ValidateRefreshToken(refreshTokenString)
+	claims, err := ctrl.jwtSvc.ValidateToken(refreshTokenString)
 	if err != nil {
 		return utils.ErrorResponse(c, err)
 	}
 
-	user, err := ctrl.authService.GetUserByID(c.Request().Context(), userID)
+	if !claims.IsRefreshToken {
+		return utils.ErrorResponse(c, apperrors.NewHttpError(http.StatusUnauthorized, "Для обновления должен использоваться Refresh токен", nil))
+	}
+
+	permissions, err := ctrl.authPermissionService.GetRolePermissionsNames(c.Request().Context(), claims.RoleID)
 	if err != nil {
-		return utils.ErrorResponse(c, err)
+		ctrl.logger.Error("Не удалось получить привилегии при обновлении токена", zap.Error(err))
+		permissions = []string{}
 	}
 
-	return ctrl.generateTokensAndRespond(c, user, "Токены успешно обновлены")
+	return ctrl.generateTokensAndRespond(c, claims.UserID, claims.RoleID, permissions, "Токены успешно обновлены")
 }
 
-func (ctrl *AuthController) CheckRecoveryOptions(c echo.Context) error {
-	var payload dto.ForgotPasswordInitDTO
-	if err := c.Bind(&payload); err != nil {
-		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
-	}
-	if err := c.Validate(&payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	options, err := ctrl.authService.CheckRecoveryOptions(c.Request().Context(), payload)
-	if err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	return utils.SuccessResponse(c, options, "", http.StatusOK)
-}
-
-func (ctrl *AuthController) SendRecoveryInstructions(c echo.Context) error {
-	var payload dto.ForgotPasswordSendDTO
-	if err := c.Bind(&payload); err != nil {
-		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
-	}
-	if err := c.Validate(&payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	if err := ctrl.authService.SendRecoveryInstructions(c.Request().Context(), payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	return utils.SuccessResponse(c, nil, "Если пользователь существует, инструкция будет отправлена выбранным способом.", http.StatusOK)
-}
-
-func (ctrl *AuthController) ResetPasswordWithEmail(c echo.Context) error {
-	var payload dto.ResetPasswordEmailDTO
-	if err := c.Bind(&payload); err != nil {
-		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
-	}
-	if err := c.Validate(&payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	if err := ctrl.authService.ResetPasswordWithEmail(c.Request().Context(), payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	return utils.SuccessResponse(c, nil, "Пароль успешно изменен.", http.StatusOK)
-}
-
-func (ctrl *AuthController) ResetPasswordWithPhone(c echo.Context) error {
-	var payload dto.ResetPasswordPhoneDTO
-	if err := c.Bind(&payload); err != nil {
-		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
-	}
-	if err := c.Validate(&payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	if err := ctrl.authService.ResetPasswordWithPhone(c.Request().Context(), payload); err != nil {
-		return utils.ErrorResponse(c, err)
-	}
-
-	return utils.SuccessResponse(c, nil, "Пароль успешно изменен.", http.StatusOK)
-}
-
-func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, user *entities.User, message string) error {
-	accessToken, refreshToken, err := ctrl.jwtSvc.GenerateTokens(user.ID, user.RoleID)
-	if err != nil {
-		ctrl.logger.Error("Не удалось сгенерировать токены", zap.Error(err), zap.Uint64("userID", user.ID))
-		return utils.ErrorResponse(c, apperrors.ErrInternalServer)
-	}
-
-	cookie := new(http.Cookie)
-	cookie.Name = "refreshToken"
-	cookie.Value = refreshToken
-	cookie.Expires = time.Now().Add(ctrl.jwtSvc.GetRefreshTokenTTL())
-	cookie.Path = "/"
-	cookie.HttpOnly = true
-	cookie.Secure = true
-	cookie.SameSite = http.SameSiteNoneMode
-
-	cookie.Partitioned = true
-
-	c.SetCookie(cookie)
-
-	response := dto.AuthResponseDTO{
-		AccessToken: accessToken,
-		User: dto.UserPublicDTO{
-			ID:           user.ID,
-			Email:        user.Email,
-			Phone:        user.PhoneNumber,
-			FIO:          user.Fio,
-			RoleID:       user.RoleID,
-			PhotoURL:     user.PhotoURL,
-			Position:     user.Position,
-			BranchID:     user.BranchID,
-			DepartmentID: user.DepartmentID,
-			OfficeID:     user.OfficeID,
-			OtdelID:      user.OtdelID,
-		},
-	}
-
-	return utils.SuccessResponse(c, response, message, http.StatusOK)
-}
 func (ctrl *AuthController) Me(c echo.Context) error {
 	userID, ok := c.Request().Context().Value(contextkeys.UserIDKey).(uint64)
 	if !ok || userID == 0 {
@@ -218,11 +96,8 @@ func (ctrl *AuthController) Me(c echo.Context) error {
 	}
 	permissions, ok := c.Request().Context().Value(contextkeys.UserPermissionsKey).([]string)
 	if !ok {
-		ctrl.logger.Error("Привилегии не найдены в контексте для аутентифицированного пользователя", zap.Uint64("userID", userID))
-		return utils.ErrorResponse(c, apperrors.ErrInternalServer)
+		permissions = []string{}
 	}
-
-	ctrl.logger.Info("Запрос на получение данных и привилегий пользователя", zap.Uint64("userID", userID))
 
 	user, err := ctrl.authService.GetUserByID(c.Request().Context(), userID)
 	if err != nil {
@@ -243,6 +118,81 @@ func (ctrl *AuthController) Me(c echo.Context) error {
 		OfficeID:     user.OfficeID,
 		OtdelID:      user.OtdelID,
 	}
-
 	return utils.SuccessResponse(c, response, "Профиль пользователя успешно получен", http.StatusOK)
+}
+
+func (ctrl *AuthController) RequestPasswordReset(c echo.Context) error {
+	var payload dto.ResetPasswordRequestDTO
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
+	}
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
+	}
+
+	if err := ctrl.authService.RequestPasswordReset(c.Request().Context(), payload); err != nil {
+		return utils.ErrorResponse(c, err)
+	}
+	return utils.SuccessResponse(c, nil, "Если пользователь существует, инструкция будет отправлена.", http.StatusOK)
+}
+
+// Шаг 2 (только для телефона): Проверка кода
+func (ctrl *AuthController) VerifyCode(c echo.Context) error {
+	var payload dto.VerifyCodeDTO
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
+	}
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
+	}
+
+	response, err := ctrl.authService.VerifyResetCode(c.Request().Context(), payload)
+	if err != nil {
+		return utils.ErrorResponse(c, err)
+	}
+
+	return utils.SuccessResponse(c, response, "Код подтвержден.", http.StatusOK)
+}
+
+func (ctrl *AuthController) ResetPassword(c echo.Context) error {
+	var payload dto.ResetPasswordDTO
+	if err := c.Bind(&payload); err != nil {
+		return utils.ErrorResponse(c, apperrors.ErrBadRequest)
+	}
+	if err := c.Validate(&payload); err != nil {
+		return utils.ErrorResponse(c, err)
+	}
+
+	if err := ctrl.authService.ResetPassword(c.Request().Context(), payload); err != nil {
+		return utils.ErrorResponse(c, err)
+	}
+	return utils.SuccessResponse(c, nil, "Пароль успешно изменен.", http.StatusOK)
+}
+
+func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID, roleID uint64, permissions []string, message string) error {
+	accessToken, refreshToken, err := ctrl.jwtSvc.GenerateTokens(userID, roleID)
+	if err != nil {
+		ctrl.logger.Error("Не удалось сгенерировать токены", zap.Error(err), zap.Uint64("userID", userID))
+		return utils.ErrorResponse(c, apperrors.ErrInternalServer)
+	}
+
+	cookie := new(http.Cookie)
+	cookie.Name = "refreshToken"
+	cookie.Value = refreshToken
+	cookie.Expires = time.Now().Add(ctrl.jwtSvc.GetRefreshTokenTTL())
+	cookie.Path = "/"
+	cookie.HttpOnly = true
+	cookie.Secure = true
+	cookie.SameSite = http.SameSiteNoneMode
+
+	cookie.Partitioned = true
+
+	c.SetCookie(cookie)
+
+	response := dto.AuthResponseDTO{
+		AccessToken: accessToken,
+		Permissions: permissions,
+	}
+
+	return utils.SuccessResponse(c, response, message, http.StatusOK)
 }

@@ -15,7 +15,7 @@ import (
 func runEquipmentTypeRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
 	// Добавляем зависимости
 	etRepository := repositories.NewEquipmentTypeRepository(dbConn, logger)
-	userRepo := repositories.NewUserRepository(dbConn, logger) 
+	userRepo := repositories.NewUserRepository(dbConn, logger)
 
 	etService := services.NewEquipmentTypeService(etRepository, userRepo, logger)
 	etCtrl := controllers.NewEquipmentTypeController(etService, logger)

@@ -34,8 +34,8 @@ type OfficeResponseDTO struct {
 	Name      string `json:"name"`
 	Address   string `json:"address"`
 	OpenDate  string `json:"open_date"`
-	BranchID  uint64 `json:"branch_id"` 
-	StatusID  uint64 `json:"status_id"` 
+	BranchID  uint64 `json:"branch_id"`
+	StatusID  uint64 `json:"status_id"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }

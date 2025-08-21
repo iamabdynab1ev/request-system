@@ -7,7 +7,6 @@ type CreateOtdelDTO struct {
 }
 
 type UpdateOtdelDTO struct {
-	ID            uint64 `json:"id" validate:"required"`
 	Name          string `json:"name" validate:"omitempty"`
 	StatusID      uint64 `json:"status_id" validate:"omitempty"`
 	DepartmentsID uint64 `json:"department_id" validate:"omitempty"`

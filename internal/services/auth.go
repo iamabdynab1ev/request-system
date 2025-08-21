@@ -1,146 +1,240 @@
-// Package services реализует бизнес-логику приложения.
+// Файл: internal/services/auth_service.go
 package services
 
 import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	"request-system/internal/repositories"
+	"request-system/pkg/config"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
-	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
-const (
-	maxLoginAttempts      = 5
-	lockoutDuration       = 5 * time.Minute
-	verificationCodeTTL   = 5 * time.Minute
-	resetPasswordTokenTTL = 5 * time.Minute
-	resetCodeAttemptsTTL  = 5 * time.Minute
-	maxResetCodeAttempts  = 5
-)
+var emailRegex = regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`)
 
 type AuthServiceInterface interface {
 	Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error)
-	SendVerificationCode(ctx context.Context, payload dto.SendCodeDTO) error
-	LoginWithCode(ctx context.Context, payload dto.VerifyCodeDTO) (*entities.User, error)
 	GetUserByID(ctx context.Context, userID uint64) (*entities.User, error)
-	CheckRecoveryOptions(ctx context.Context, payload dto.ForgotPasswordInitDTO) (*dto.ForgotPasswordOptionsDTO, error)
-	SendRecoveryInstructions(ctx context.Context, payload dto.ForgotPasswordSendDTO) error
-	ResetPasswordWithEmail(ctx context.Context, payload dto.ResetPasswordEmailDTO) error
-	ResetPasswordWithPhone(ctx context.Context, payload dto.ResetPasswordPhoneDTO) error
+	RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error
+	VerifyResetCode(ctx context.Context, payload dto.VerifyCodeDTO) (*dto.VerifyCodeResponseDTO, error)
+	ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error
 }
 
 type AuthService struct {
 	userRepo  repositories.UserRepositoryInterface
 	cacheRepo repositories.CacheRepositoryInterface
 	logger    *zap.Logger
+	cfg       *config.AuthConfig
 }
 
 func NewAuthService(
 	userRepo repositories.UserRepositoryInterface,
 	cacheRepo repositories.CacheRepositoryInterface,
 	logger *zap.Logger,
+	cfg *config.AuthConfig,
 ) AuthServiceInterface {
 	return &AuthService{
 		userRepo:  userRepo,
 		cacheRepo: cacheRepo,
 		logger:    logger,
+		cfg:       cfg,
 	}
 }
 
-func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error) {
-	// Используем `FindUserByEmailOrLogin` из UserRepository, который мы реализовали
-	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, payload.Login)
-	if err != nil {
-		return nil, apperrors.ErrInvalidCredentials // Общая ошибка для безопасности
+// Файл: internal/services/auth_service.go
+
+func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error {
+	logger := s.logger.With(zap.String("login", payload.Login))
+
+	// 1. ЗАЩИТА: Проверяем, не заблокирован ли пользователь за многочисленные попытки ввода кода.
+	lockoutKey := fmt.Sprintf("reset_attempts:%s", payload.Login)
+	attemptsStr, _ := s.cacheRepo.Get(ctx, lockoutKey)
+	if attempts, _ := strconv.Atoi(attemptsStr); attempts >= 5 { // 5 можно вынести в конфиг
+		logger.Warn("Попытка запросить код для заблокированного логина (слишком много попыток ввода)", zap.String("login", payload.Login))
+		return apperrors.NewHttpError(http.StatusTooManyRequests, "Слишком много неверных попыток. Пожалуйста, подождите 15 минут.", nil)
 	}
 
-	if err := s.checkLockout(ctx, user.ID); err != nil {
-		return nil, err
+	// 2. ЗАЩИТА: Проверяем, не запрашивал ли пользователь код в последнюю минуту (защита от SMS/email спама).
+	spamProtectionKey := fmt.Sprintf("reset_spam_protect:%s", payload.Login)
+	if _, err := s.cacheRepo.Get(ctx, spamProtectionKey); err == nil {
+		logger.Warn("Слишком частые запросы на сброс пароля (спам)", zap.String("login", payload.Login))
+		return apperrors.NewHttpError(http.StatusTooManyRequests, "Запрашивать код можно не чаще одного раза в минуту.", nil)
 	}
 
-	// Используем utils.ComparePasswords, как мы договорились
-	if err := utils.ComparePasswords(user.Password, payload.Password); err != nil {
-		s.handleFailedLoginAttempt(ctx, user.ID)
-		return nil, apperrors.ErrInvalidCredentials
-	}
-
-	s.resetLoginAttempts(ctx, user.ID)
-	return user, nil
-}
-
-func (s *AuthService) SendVerificationCode(ctx context.Context, payload dto.SendCodeDTO) error {
+	// 3. ИЩЕМ ПОЛЬЗОВАТЕЛЯ: Проверяем формат и ищем в базе.
 	var user *entities.User
 	var err error
-	var contact string
+	isEmail := emailRegex.MatchString(payload.Login)
+	var isPhone bool
+	var normalizedPhone string
 
-	if payload.Phone != "" {
-		contact = payload.Phone
-		user, err = s.userRepo.FindUserByPhone(ctx, payload.Phone)
+	phone := payload.Login
+	if strings.HasPrefix(phone, "+992") && len(phone) == 13 {
+		isPhone = true
+		normalizedPhone = strings.TrimPrefix(phone, "+992")
+	} else if !strings.HasPrefix(phone, "+") && len(phone) == 9 {
+		if _, err := strconv.Atoi(phone); err == nil {
+			isPhone = true
+			normalizedPhone = phone
+		}
+	}
+
+	if isEmail {
+		user, err = s.userRepo.FindUserByEmailOrLogin(ctx, payload.Login)
+	} else if isPhone {
+		user, err = s.userRepo.FindUserByPhone(ctx, normalizedPhone)
 	} else {
-		contact = payload.Email
-		user, err = s.userRepo.FindUserByEmailOrLogin(ctx, payload.Email)
+		logger.Warn("Некорректный формат email или  номера телефона")
+		return nil // Тихо выходим, не сообщая, что формат неверный
 	}
 
 	if err != nil {
-		s.logger.Warn("Попытка запроса кода для несуществующего пользователя", zap.String("contact", contact))
-		return nil
+		logger.Warn("Попытка сброса пароля для несуществующего пользователя")
+		return nil // Тихо выходим, не сообщая, что пользователь не найден
 	}
 
-	code := fmt.Sprintf("%04d", rand.Intn(10000))
-	cacheKey := fmt.Sprintf("verify_code:%d", user.ID)
-	if err := s.cacheRepo.Set(ctx, cacheKey, code, verificationCodeTTL); err != nil {
-		s.logger.Error("Не удалось сохранить код верификации в кеш", zap.Error(err))
-		return apperrors.ErrInternalServer
-	}
+	// 4. ГЕНЕРИРУЕМ И ОТПРАВЛЯЕМ КОД/ТОКЕН
+	// Ставим "метку" для защиты от спама на 1 минуту ПОСЛЕ всех проверок
+	s.cacheRepo.Set(ctx, spamProtectionKey, "active", time.Minute*1)
 
-	s.logger.Info("Код верификации сгенерирован (для теста)", zap.Uint64("userID", user.ID), zap.String("code", code))
+	if isEmail {
+		resetToken := uuid.New().String()
+		cacheKey := fmt.Sprintf("reset_email:%s", resetToken)
+		s.cacheRepo.Set(ctx, cacheKey, user.ID, s.cfg.ResetTokenTTL)
+		logger.Warn("!!! ВРЕМЕННОЕ РЕШЕНИЕ: Токен для сброса по EMAIL",
+			zap.Uint64("userID", user.ID),
+			zap.String("reset_token", resetToken),
+		)
+		// TODO: Отправить email
+	} else { // isPhone
+		resetCode := fmt.Sprintf("%04d", rand.Intn(10000))
+		cacheKeyCode := fmt.Sprintf("reset_phone_code:%s", payload.Login)
+		s.cacheRepo.Set(ctx, cacheKeyCode, resetCode, s.cfg.VerificationCodeTTL)
+		logger.Warn("!!! ВРЕМЕННОЕ РЕШЕНИЕ: Код для сброса по ТЕЛЕФОНУ",
+			zap.Uint64("userID", user.ID),
+			zap.String("verification_code", resetCode),
+		)
+		// TODO: Отправить SMS
+	}
 
 	return nil
 }
 
-func (s *AuthService) LoginWithCode(ctx context.Context, payload dto.VerifyCodeDTO) (*entities.User, error) {
-	var user *entities.User
-	var err error
+// Версия с защитой от перебора
+func (s *AuthService) VerifyResetCode(ctx context.Context, payload dto.VerifyCodeDTO) (*dto.VerifyCodeResponseDTO, error) {
+	logger := s.logger.With(zap.String("login", payload.Login))
 
-	if payload.Phone != "" {
-		user, err = s.userRepo.FindUserByPhone(ctx, payload.Phone)
-	} else {
-		user, err = s.userRepo.FindUserByEmailOrLogin(ctx, payload.Email)
+	// 1. Проверяем, не заблокирован ли пользователь по попыткам
+	attemptsKey := fmt.Sprintf("reset_attempts:%s", payload.Login)
+	attemptsStr, _ := s.cacheRepo.Get(ctx, attemptsKey)
+	attempts, _ := strconv.Atoi(attemptsStr)
+
+	if attempts >= 5 { // Эту "5" можно вынести в config.Auth
+		logger.Warn("Превышено количество попыток ввода кода сброса")
+		return nil, apperrors.NewHttpError(http.StatusTooManyRequests, "Слишком много попыток. Попробуйте запросить новый код через 15 минут.", nil)
 	}
 
+	// 2. Проверяем сам код
+	cacheKeyCode := fmt.Sprintf("reset_phone_code:%s", payload.Login)
+	storedCode, err := s.cacheRepo.Get(ctx, cacheKeyCode)
+
+	if err != nil || storedCode != payload.Code {
+		logger.Warn("Неверный или истекший код верификации телефона")
+
+		// Увеличиваем счетчик неудачных попыток и ставим TTL
+		s.cacheRepo.Incr(ctx, attemptsKey)
+		s.cacheRepo.Expire(ctx, attemptsKey, time.Minute*15)
+
+		return nil, apperrors.ErrInvalidVerificationCode
+	}
+
+	// 3. Код верный - находим пользователя
+	normalizedPhone := strings.TrimPrefix(payload.Login, "+992")
+	user, err := s.userRepo.FindUserByPhone(ctx, normalizedPhone)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
 
-	if err = s.checkLockout(ctx, user.ID); err != nil {
-		return nil, err
-	}
-
-	cacheKey := fmt.Sprintf("verify_code:%d", user.ID)
-	storedCode, err := s.cacheRepo.Get(ctx, cacheKey)
-	if err != nil || storedCode != payload.Code {
-		s.handleFailedLoginAttempt(ctx, user.ID)
-		return nil, apperrors.ErrInvalidVerificationCode
-	}
-
-	s.resetLoginAttempts(ctx, user.ID)
-	if err := s.cacheRepo.Del(ctx, cacheKey); err != nil {
-		s.logger.Error("Ошибка удаления кода верификации из кеша", zap.Error(err))
+	// 4. Генерируем токен-"пропуск"
+	verificationToken := uuid.New().String()
+	cacheKeyVerify := fmt.Sprintf("verify_token_phone:%s", verificationToken)
+	if err := s.cacheRepo.Set(ctx, cacheKeyVerify, user.ID, s.cfg.VerificationCodeTTL); err != nil {
 		return nil, apperrors.ErrInternalServer
 	}
 
+	// 5. Удаляем использованный код и счетчик попыток
+	s.cacheRepo.Del(ctx, cacheKeyCode, attemptsKey)
+
+	logger.Info("Код верификации телефона подтвержден, выдан токен-пропуск")
+	return &dto.VerifyCodeResponseDTO{VerificationToken: verificationToken}, nil
+}
+
+func (s *AuthService) ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error {
+	var userID uint64
+	var userIDStr string
+	var err error
+
+	cacheKeyEmail := fmt.Sprintf("reset_email:%s", payload.Token)
+	userIDStr, err = s.cacheRepo.Get(ctx, cacheKeyEmail)
+	if err == nil {
+		s.cacheRepo.Del(ctx, cacheKeyEmail)
+	} else {
+		cacheKeyPhone := fmt.Sprintf("verify_token_phone:%s", payload.Token)
+		userIDStr, err = s.cacheRepo.Get(ctx, cacheKeyPhone)
+		if err != nil {
+			return apperrors.ErrInvalidResetToken
+		}
+		s.cacheRepo.Del(ctx, cacheKeyPhone)
+	}
+
+	parsedID, _ := strconv.ParseUint(userIDStr, 10, 64)
+	if parsedID == 0 {
+		return apperrors.ErrInternalServer
+	}
+	userID = parsedID
+
+	hashedPassword, err := utils.HashPassword(payload.NewPassword)
+	if err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	if err := s.userRepo.UpdatePassword(ctx, userID, hashedPassword); err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	s.logger.Info("Пароль для пользователя успешно сброшен", zap.Uint64("userID", userID))
+	return nil
+}
+
+func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error) {
+	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, payload.Login)
+	if err != nil {
+		return nil, apperrors.ErrInvalidCredentials
+	}
+	if err := s.checkLockout(ctx, user.ID); err != nil {
+		return nil, err
+	}
+	if err := utils.ComparePasswords(user.Password, payload.Password); err != nil {
+		s.handleFailedLoginAttempt(ctx, user.ID)
+		return nil, apperrors.ErrInvalidCredentials
+	}
+	s.resetLoginAttempts(ctx, user.ID)
 	return user, nil
 }
-func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*entities.User, error) {
 
+func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*entities.User, error) {
 	user, err := s.userRepo.FindUserByID(ctx, userID)
 	if err != nil {
 		s.logger.Warn("GetUserByID: не удалось найти пользователя", zap.Uint64("userID", userID), zap.Error(err))
@@ -160,189 +254,16 @@ func (s *AuthService) checkLockout(ctx context.Context, userID uint64) error {
 
 func (s *AuthService) handleFailedLoginAttempt(ctx context.Context, userID uint64) {
 	attemptsKey := fmt.Sprintf("login_attempts:%d", userID)
-	attempts, err := s.cacheRepo.Incr(ctx, attemptsKey)
-	if err != nil {
-		s.logger.Error("Ошибка увеличения счетчика попыток входа", zap.Error(err))
-	}
-
-	if attempts >= maxLoginAttempts {
+	attempts, _ := s.cacheRepo.Incr(ctx, attemptsKey)
+	if attempts >= int64(s.cfg.MaxLoginAttempts) {
 		lockoutKey := fmt.Sprintf("lockout:%d", userID)
-		if err := s.cacheRepo.Set(ctx, lockoutKey, "locked", lockoutDuration); err != nil {
-			s.logger.Error("Ошибка установки блокировки в кеш", zap.Error(err))
-		}
-		if err := s.cacheRepo.Del(ctx, attemptsKey); err != nil {
-			s.logger.Error("Ошибка удаления счетчика попыток из кеша", zap.Error(err))
-		}
+		s.cacheRepo.Set(ctx, lockoutKey, "locked", s.cfg.LockoutDuration)
+		s.cacheRepo.Del(ctx, attemptsKey)
 	}
 }
 
 func (s *AuthService) resetLoginAttempts(ctx context.Context, userID uint64) {
 	attemptsKey := fmt.Sprintf("login_attempts:%d", userID)
 	lockoutKey := fmt.Sprintf("lockout:%d", userID)
-	if err := s.cacheRepo.Del(ctx, attemptsKey, lockoutKey); err != nil {
-		s.logger.Error("Ошибка удаления ключей попыток и блокировки из кеша", zap.Error(err))
-	}
-}
-func (s *AuthService) CheckRecoveryOptions(ctx context.Context, payload dto.ForgotPasswordInitDTO) (*dto.ForgotPasswordOptionsDTO, error) {
-	logger := s.logger.With(zap.String("email", payload.Email))
-	logger.Info("Проверка опций восстановления пароля")
-
-	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, payload.Email)
-	if err != nil {
-		logger.Warn("Попытка проверки опций для несуществующего пользователя")
-		return &dto.ForgotPasswordOptionsDTO{Options: []string{}}, nil
-	}
-
-	options := []string{"email"}
-	if user.PhoneNumber != "" {
-		options = append(options, "phone")
-	}
-
-	logger.Info("Опции восстановления найдены", zap.Strings("options", options))
-	return &dto.ForgotPasswordOptionsDTO{Options: options}, nil
-}
-
-func (s *AuthService) SendRecoveryInstructions(ctx context.Context, payload dto.ForgotPasswordSendDTO) error {
-	logger := s.logger.With(zap.String("email", payload.Email), zap.String("method", payload.Method))
-	logger.Info("Отправка инструкций для восстановления")
-
-	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, payload.Email)
-	if err != nil {
-		logger.Warn("Попытка отправки инструкций для несуществующего пользователя")
-		return nil // Тихо выходим
-	}
-
-	if payload.Method == "email" {
-		return s.sendEmailRecovery(ctx, user)
-	}
-
-	if payload.Method == "phone" {
-		return s.sendPhoneRecovery(ctx, user)
-	}
-
-	return apperrors.ErrBadRequest // На случай, если метод не "email" и не "phone"
-}
-
-func (s *AuthService) ResetPasswordWithEmail(ctx context.Context, payload dto.ResetPasswordEmailDTO) error {
-	logger := s.logger.With(zap.String("token_suffix", payload.Token[len(payload.Token)-4:]))
-	logger.Info("Сброс пароля по email токену")
-
-	// Получаем ID пользователя из кеша
-	cacheKey := fmt.Sprintf("reset_token:%s", payload.Token)
-	userIDStr, err := s.cacheRepo.Get(ctx, cacheKey)
-	if err != nil {
-		logger.Warn("Невалидный или истекший токен сброса")
-		return apperrors.ErrInvalidResetToken
-	}
-
-	if err = s.cacheRepo.Del(ctx, cacheKey); err != nil {
-		logger.Error("Ошибка удаления токена сброса из кеша", zap.Error(err))
-		return apperrors.ErrInternalServer
-	}
-
-	userID, err := strconv.ParseUint(userIDStr, 10, 64)
-	if err != nil {
-		logger.Error("не удалось преобразовать userID из Redis в uint64", zap.Error(err), zap.String("userIDStr", userIDStr))
-		return apperrors.ErrInternalServer
-	}
-	return s.updateUserPassword(ctx, logger, userID, payload.NewPassword)
-}
-
-func (s *AuthService) ResetPasswordWithPhone(ctx context.Context, payload dto.ResetPasswordPhoneDTO) error {
-	logger := s.logger.With(zap.String("email", payload.Email))
-	logger.Info("Сброс пароля по коду с телефона")
-
-	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, payload.Email)
-	if err != nil {
-		logger.Warn("Пользователь не найден при попытке сброса по коду")
-		return apperrors.ErrInvalidCredentials
-	}
-
-	if err = s.checkResetCodeAttempts(ctx, user.ID); err != nil {
-		return err
-	}
-
-	cacheKey := fmt.Sprintf("reset_code:%d", user.ID)
-	storedCode, err := s.cacheRepo.Get(ctx, cacheKey)
-	if err != nil || storedCode != payload.Code {
-		logger.Warn("Неверный код сброса")
-		s.handleFailedResetCodeAttempt(ctx, user.ID)
-		return apperrors.ErrInvalidVerificationCode
-	}
-
-	if err := s.cacheRepo.Del(ctx, cacheKey); err != nil {
-		logger.Error("Ошибка удаления кода сброса из кеша", zap.Error(err))
-		return apperrors.ErrInternalServer
-	}
-
-	return s.updateUserPassword(ctx, logger, user.ID, payload.NewPassword)
-}
-func (s *AuthService) sendEmailRecovery(ctx context.Context, user *entities.User) error {
-	resetToken := uuid.New().String()
-	cacheKey := fmt.Sprintf("reset_token:%s", resetToken)
-
-	if err := s.cacheRepo.Set(ctx, cacheKey, user.ID, resetPasswordTokenTTL); err != nil {
-		s.logger.Error("Не удалось сохранить токен сброса в кеш", zap.Error(err), zap.Uint64("userID", user.ID))
-		return apperrors.ErrInternalServer
-	}
-	s.logger.Info("Сгенерирован токен для сброса по email", zap.String("token", resetToken), zap.Uint64("userID", user.ID))
-	// TODO: Реальная отправка email со ссылкой, содержащей resetToken
-	return nil
-}
-
-func (s *AuthService) sendPhoneRecovery(ctx context.Context, user *entities.User) error {
-	if user.PhoneNumber == "" {
-		s.logger.Warn("Попытка восстановления по телефону для пользователя без номера", zap.Uint64("userID", user.ID))
-		return apperrors.ErrBadRequest
-	}
-	resetCode := fmt.Sprintf("%04d", rand.Intn(10000))
-	cacheKey := fmt.Sprintf("reset_code:%d", user.ID)
-
-	if err := s.cacheRepo.Set(ctx, cacheKey, resetCode, verificationCodeTTL); err != nil {
-		s.logger.Error("не удалось сохранить код сброса в кеш", zap.Error(err), zap.Uint64("userID", user.ID))
-		return apperrors.ErrInternalServer
-	}
-	s.logger.Info("Сгенерирован код для сброса по телефону", zap.String("code", resetCode), zap.Uint64("userID", user.ID))
-	// TODO: Реальная отправка SMS с кодом `resetCode` на `user.PhoneNumber`
-	return nil
-}
-
-func (s *AuthService) updateUserPassword(ctx context.Context, logger *zap.Logger, userID uint64, newPassword string) error {
-	hashedPassword, err := utils.HashPassword(newPassword)
-	if err != nil {
-		logger.Error("Не удалось хешировать новый пароль", zap.Error(err))
-		return apperrors.ErrInternalServer
-	}
-
-	if err := s.userRepo.UpdatePassword(ctx, userID, hashedPassword); err != nil {
-		logger.Error("Не удалось обновить пароль в БД", zap.Error(err))
-		return apperrors.ErrInternalServer
-	}
-
-	logger.Info("Пароль для пользователя успешно сброшен")
-	return nil
-}
-
-func (s *AuthService) checkResetCodeAttempts(ctx context.Context, userID uint64) error {
-	attemptsKey := fmt.Sprintf("reset_attempts:%d", userID)
-	attemptsStr, _ := s.cacheRepo.Get(ctx, attemptsKey)
-	attempts, _ := strconv.Atoi(attemptsStr)
-
-	if attempts >= maxResetCodeAttempts {
-		s.logger.Warn("Превышено количество попыток ввода кода  сброса", zap.Uint64("userID", userID))
-		return apperrors.NewHttpError(429, "Слишком много попыток. Попробуйте запросить новый код.", nil)
-	}
-	return nil
-}
-
-func (s *AuthService) handleFailedResetCodeAttempt(ctx context.Context, userID uint64) {
-	attemptsKey := fmt.Sprintf("reset_attempts:%d", userID)
-	if _, err := s.cacheRepo.Incr(ctx, attemptsKey); err != nil {
-		s.logger.Error("Ошибка увеличения счетчика попыток сброса", zap.Error(err))
-	}
-	if ok, err := s.cacheRepo.Expire(ctx, attemptsKey, resetCodeAttemptsTTL); err != nil {
-		s.logger.Error("Ошибка установки времени жизни счетчика попыток", zap.Error(err))
-	} else if !ok {
-		s.logger.Warn("Ключ не найден при установке времени жизни", zap.String("key", attemptsKey))
-	}
+	s.cacheRepo.Del(ctx, attemptsKey, lockoutKey)
 }

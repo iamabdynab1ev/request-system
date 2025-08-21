@@ -1,11 +1,15 @@
+// Файл: internal/routes/priority_router.go
 package routes
 
 import (
-	"request-system/internal/authz" // <-- Импорт констант
+	"log"
+
+	"request-system/internal/authz"
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
-	"request-system/pkg/middleware" // <-- Импорт мидлвара
+	"request-system/pkg/filestorage"
+	"request-system/pkg/middleware"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
@@ -18,21 +22,22 @@ func RunPriorityRouter(
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
 ) {
-	priorityRepository := repositories.NewPriorityRepository(dbConn)
+	// Инициализация файлового хранилища
+	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
+	if err != nil {
+		log.Fatalf("не удалось инициализировать хранилище файлов для Priority: %v", err)
+	}
 
-	userRepository := repositories.NewUserRepository(dbConn, logger)
+	priorityRepository := repositories.NewPriorityRepository(dbConn, logger)
+	userRepository := repositories.NewUserRepository(dbConn, logger) // Предполагаем, что он уже есть
 
-	priorityService := services.NewPriorityService(priorityRepository, userRepository, logger)
-
+	// Внедряем FileStorage в сервис
+	priorityService := services.NewPriorityService(priorityRepository, userRepository, fileStorage, logger)
 	priorityCtrl := controllers.NewPriorityController(priorityService, logger)
 
 	priorities := secureGroup.Group("/priority")
-
-	// Просмотр доступен тем, у кого есть 'catalogs:view'
 	priorities.GET("", priorityCtrl.GetPriorities, authMW.AuthorizeAny(authz.PrioritiesView))
 	priorities.GET("/:id", priorityCtrl.FindPriority, authMW.AuthorizeAny(authz.PrioritiesView))
-
-	// Управление доступно тем, у кого есть права на управление приоритет
 	priorities.POST("", priorityCtrl.CreatePriority, authMW.AuthorizeAny(authz.PrioritiesCreate))
 	priorities.PUT("/:id", priorityCtrl.UpdatePriority, authMW.AuthorizeAny(authz.PrioritiesUpdate))
 	priorities.DELETE("/:id", priorityCtrl.DeletePriority, authMW.AuthorizeAny(authz.PrioritiesDelete))

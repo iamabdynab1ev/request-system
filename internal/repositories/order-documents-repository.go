@@ -3,16 +3,19 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const orderDocumentTableRepo = "order_documents"
-const orderDocumentFieldsRepo = "id, name, path, type, order_id, created_at, updated_at"
+const (
+	orderDocumentTableRepo  = "order_documents"
+	orderDocumentFieldsRepo = "id, name, path, type, order_id, created_at, updated_at"
+)
 
 type OrderDocumentRepositoryInterface interface {
 	GetOrderDocuments(ctx context.Context, limit uint64, offset uint64) ([]dto.OrderDocumentDTO, error)
@@ -61,7 +64,6 @@ func (r *OrderDocumentRepository) GetOrderDocuments(ctx context.Context, limit u
 			&createdAt,
 			&updatedAt,
 		)
-
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +104,6 @@ func (r *OrderDocumentRepository) FindOrderDocument(ctx context.Context, id uint
 		&createdAt,
 		&updatedAt,
 	)
-
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, apperrors.ErrNotFound
@@ -131,7 +132,6 @@ func (r *OrderDocumentRepository) CreateOrderDocument(ctx context.Context, dto d
 		dto.Type,
 		dto.OrderID,
 	)
-
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,6 @@ func (r *OrderDocumentRepository) UpdateOrderDocument(ctx context.Context, id ui
 		dto.OrderID,
 		id,
 	)
-
 	if err != nil {
 		return err
 	}

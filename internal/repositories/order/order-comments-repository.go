@@ -1,4 +1,5 @@
 package repositories
+
 /*
 import (
 	"context"
@@ -38,7 +39,7 @@ func (r *OrderCommentRepository) GetOrderComments(ctx context.Context, limit uin
 	}
 
 	query := `
-		SELECT 
+		SELECT
 			c.id, c.message, c.created_at, c.updated_at,
 			s.id, s.name,
 			o.id, o.name,
@@ -99,7 +100,7 @@ func (r *OrderCommentRepository) GetOrderComments(ctx context.Context, limit uin
 
 func (r *OrderCommentRepository) FindOrderComment(ctx context.Context, id uint64) (*dto.OrderCommentDTO, error) {
 	query := `
-		SELECT 
+		SELECT
 			c.id, c.message, c.created_at, c.updated_at,
 			s.id, s.name, o.id, o.name, u.id, u.fio
 		FROM order_comments c
@@ -154,7 +155,7 @@ func (r *OrderCommentRepository) CreateOrderComment(ctx context.Context, dto dto
 		return 0, fmt.Errorf("не удалось определить автора комментария из токена")
 	}
 
-	query := `INSERT INTO order_comments (message, status_id, order_id, user_id, created_at, updated_at) 
+	query := `INSERT INTO order_comments (message, status_id, order_id, user_id, created_at, updated_at)
 	          VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id`
 
 	var newID int

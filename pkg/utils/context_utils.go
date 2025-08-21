@@ -2,10 +2,11 @@ package utils
 
 import (
 	"context"
+	"strings"
+
 	"request-system/internal/dto"
 	"request-system/pkg/contextkeys"
 	apperrors "request-system/pkg/errors"
-	"strings"
 )
 
 func GetClaimsFromContext(ctx context.Context) (*dto.UserClaims, error) {
@@ -30,17 +31,14 @@ func HasPermission(claims *dto.UserClaims, requiredPermission string) bool {
 		return true
 	}
 
-	
 	if userPerms["orders:manage:all"] && strings.HasPrefix(requiredPermission, "orders:view:") {
 		return true
 	}
 
-	
 	if userPerms[requiredPermission] {
 		return true
 	}
 
-	
 	if userPerms["Manage:All"] {
 		return true
 	}

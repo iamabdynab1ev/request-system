@@ -1,4 +1,5 @@
 package dto
+
 /*
 type CreateOrderDelegationDTO struct {
 	DelegationUserID int `json:"delegation_user_id" validate:"required"`
@@ -14,8 +15,8 @@ type UpdateOrderDelegationDTO struct {
 
 type OrderDelegationDTO struct {
 	ID        uint64         `json:"id"`
-	Delegator *ShortUserDTO   `json:"delegator"` 
-	Delegatee *ShortUserDTO   `json:"delegatee"` 
+	Delegator *ShortUserDTO   `json:"delegator"`
+	Delegatee *ShortUserDTO   `json:"delegatee"`
 	Status    ShortStatusDTO `json:"status"`
 	Order     ShortOrderDTO  `json:"order"`
 	CreatedAt string         `json:"created_at"`

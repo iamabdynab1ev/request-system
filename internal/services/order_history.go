@@ -3,13 +3,16 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
+
 	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
-	"sort"
-	"strings" // Добавляем strings
+
+	// Добавляем strings
 
 	"go.uber.org/zap"
 )

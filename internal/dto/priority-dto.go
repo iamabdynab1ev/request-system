@@ -1,13 +1,10 @@
 package dto
 
 type CreatePriorityDTO struct {
-	IconSmall string `json:"icon_small" validate:"omitempty"`
-	IconBig   string `json:"icon_big" validate:"omitempty"`
-	Code      string `json:"code" validate:"omitempty"`
-	Name      string `json:"name" validate:"required,max=50"`
-	Rate      int    `json:"rate" validate:"omitempty"`
+	Name string `json:"name" validate:"required,max=50"`
+	Code string `json:"code" validate:"omitempty,uppercase"`
+	Rate int    `json:"rate" validate:"omitempty,gte=0"`
 }
-
 type UpdatePriorityDTO struct {
 	IconSmall *string `json:"icon_small,omitempty"`
 	IconBig   *string `json:"icon_big,omitempty"`

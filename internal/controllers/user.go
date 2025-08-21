@@ -28,10 +28,8 @@ func NewUserController(
 	userService services.UserServiceInterface,
 	fileStorage filestorage.FileStorageInterface,
 	logger *zap.Logger,
-
 ) *UserController {
 	if logger == nil {
-
 		logger = zap.New(zapcore.NewNopCore())
 	}
 	return &UserController{

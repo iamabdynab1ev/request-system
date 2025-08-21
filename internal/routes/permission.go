@@ -19,13 +19,13 @@ func runPermissionRouter(
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
 ) {
-permRepo := repositories.NewPermissionRepository(dbConn, logger)
+	permRepo := repositories.NewPermissionRepository(dbConn, logger)
 	userRepo := repositories.NewUserRepository(dbConn, logger)
 	permService := services.NewPermissionService(permRepo, userRepo, logger)
 	permCtrl := controllers.NewPermissionController(permService, logger)
 
 	perms := secureGroup.Group("/permission")
-	
+
 	perms.GET("", permCtrl.GetPermissions, authMW.AuthorizeAny(authz.PermissionsView))
 	perms.GET("/:id", permCtrl.FindPermission, authMW.AuthorizeAny(authz.PermissionsView))
 	perms.POST("", permCtrl.CreatePermission)

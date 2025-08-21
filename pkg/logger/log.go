@@ -6,10 +6,10 @@ type Logger struct{}
 
 func NewLogger() *zap.Logger {
 	dualConfig := zap.Config{
-		Encoding:         "console",                            
-		Level:            zap.NewAtomicLevelAt(zap.DebugLevel), 
+		Encoding:         "console",
+		Level:            zap.NewAtomicLevelAt(zap.DebugLevel),
 		OutputPaths:      []string{"stdout", "./logs/app.log"},
-		ErrorOutputPaths: []string{"stderr"},                   
+		ErrorOutputPaths: []string{"stderr"},
 		EncoderConfig:    zap.NewProductionEncoderConfig(),
 	}
 

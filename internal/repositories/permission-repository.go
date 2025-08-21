@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
 
@@ -13,8 +14,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const PermissionTable = "permissions"
-const PermissionFields = "id, name, description, created_at, updated_at"
+const (
+	PermissionTable  = "permissions"
+	PermissionFields = "id, name, description, created_at, updated_at"
+)
 
 type PermissionRepositoryInterface interface {
 	GetPermissions(ctx context.Context, limit uint64, offset uint64, search string) ([]dto.PermissionDTO, uint64, error)
@@ -31,7 +34,10 @@ type PermissionRepository struct {
 }
 
 func NewPermissionRepository(storage *pgxpool.Pool, logger *zap.Logger) PermissionRepositoryInterface {
-	return &PermissionRepository{storage: storage, logger: logger}
+	return &PermissionRepository{
+		storage: storage,
+		logger:  logger,
+	}
 }
 
 func (r *PermissionRepository) GetPermissionsNamesByRoleID(ctx context.Context, roleID uint64) ([]string, error) {
@@ -126,9 +132,13 @@ func (r *PermissionRepository) DeletePermission(ctx context.Context, id uint64) 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if err = tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			r.logger.Error("ошибка при откате транзакции", zap.Error(err))
+		}
+	}()
 
-	if _, err := tx.Exec(ctx, "DELETE FROM public.role_permissions WHERE permission_id = $1", id); err != nil {
+	if _, err = tx.Exec(ctx, "DELETE FROM public.role_permissions WHERE permission_id = $1", id); err != nil {
 		return err
 	}
 	result, err := tx.Exec(ctx, "DELETE FROM permissions WHERE id = $1", id)

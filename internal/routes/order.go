@@ -2,7 +2,7 @@
 package routes
 
 import (
-	"request-system/internal/authz" // <-- ШАГ 1: Импортируем наши константы
+	"request-system/internal/authz"
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
@@ -15,15 +15,15 @@ import (
 )
 
 func runOrderRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
-
-	// Инициализация зависимостей (твой код здесь идеален)
 	txManager := repositories.NewTxManager(dbConn)
 	orderRepo := repositories.NewOrderRepository(dbConn, logger)
 	userRepo := repositories.NewUserRepository(dbConn, logger)
+	priorityRepo := repositories.NewPriorityRepository(dbConn, logger)
+
 	statusRepo := repositories.NewStatusRepository(dbConn)
-	priorityRepo := repositories.NewPriorityRepository(dbConn)
 	attachRepo := repositories.NewAttachmentRepository(dbConn)
 	historyRepo := repositories.NewOrderHistoryRepository(dbConn)
+
 	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
 	if err != nil {
 		logger.Fatal("не удалось создать файловое хранилище для OrderRouter", zap.Error(err))
@@ -34,8 +34,7 @@ func runOrderRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.L
 	)
 	orderController := controllers.NewOrderController(orderService, logger)
 
-	// --- ШАГ 2: Заменяем строки на константы ---
-	orders := secureGroup.Group("/order") // Группируем роуты для чистоты
+	orders := secureGroup.Group("/order")
 	orders.POST("", orderController.CreateOrder, authMW.AuthorizeAny(authz.OrdersCreate))
 	orders.GET("", orderController.GetOrders, authMW.AuthorizeAny(authz.OrdersView))
 	orders.GET("/:id", orderController.FindOrder, authMW.AuthorizeAny(authz.OrdersView))

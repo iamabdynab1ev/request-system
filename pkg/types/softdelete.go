@@ -3,5 +3,5 @@ package types
 import "time"
 
 type SoftDelete struct {
-	DeletedAt   *time.Time  `json:"deleted_at"`
+	DeletedAt *time.Time `json:"deleted_at"`
 }
