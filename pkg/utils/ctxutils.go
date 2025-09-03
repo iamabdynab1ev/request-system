@@ -40,3 +40,13 @@ func NullInt32ToInt(ni sql.NullInt32) int {
 	}
 	return int(ni.Int32)
 }
+
+func AreUint64PointersEqual(a, b *uint64) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}

@@ -31,7 +31,7 @@ func HasPermission(claims *dto.UserClaims, requiredPermission string) bool {
 		return true
 	}
 
-	if userPerms["orders:manage:all"] && strings.HasPrefix(requiredPermission, "orders:view:") {
+	if userPerms["order:manage:all"] && strings.HasPrefix(requiredPermission, "order:view:") {
 		return true
 	}
 
@@ -53,15 +53,15 @@ func HasPermission(claims *dto.UserClaims, requiredPermission string) bool {
 			return true
 		}
 		if userPerms["Manage:System"] {
-			if entityName == "Roles" || entityName == "Permissions" || entityName == "Catalogs" {
+			if entityName == "Role" || entityName == "Permission" || entityName == "Catalog" {
 				return true
 			}
 		}
 	}
-	if userPerms["View:Orders:All"] && strings.HasPrefix(requiredPermission, "View:Orders:") {
+	if userPerms["View:Order:All"] && strings.HasPrefix(requiredPermission, "View:Order:") {
 		return true
 	}
-	if requiredPermission == "View:Orders:Own" && userPerms["View:Orders:Department"] {
+	if requiredPermission == "View:Order:Own" && userPerms["View:Order:Department"] {
 		return true
 	}
 

@@ -3,8 +3,7 @@ package entities
 import "request-system/pkg/types"
 
 type EquipmentType struct {
-	ID   uint64 `json:"id"`
-	Name string `json:"name"`
-
+	ID   uint64 `db:"id"`
+	Name string `db:"name"`
 	types.BaseEntity
 }

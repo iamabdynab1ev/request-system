@@ -1,6 +1,3 @@
-// Файл: internal/services/office.go
-// СКОПИРУЙТЕ И ПОЛНОСТЬЮ ЗАМЕНИТЕ СОДЕРЖИМОЕ
-
 package services
 
 import (

@@ -9,6 +9,8 @@ type CreateOrderDTO struct {
 	OfficeID     *uint64 `json:"office_id,omitempty"`
 	EquipmentID  *uint64 `json:"equipment_id,omitempty"`
 	Comment      *string `json:"comment,omitempty" validate:"omitempty,min=3"`
+	StatusID     *uint64 `json:"status_id,omitempty" validate:"omitempty,gt=0"`
+	PriorityID   *uint64 `json:"priority_id,omitempty" validate:"omitempty,gt=0"`
 }
 
 type OrderResponseDTO struct {
@@ -18,10 +20,13 @@ type OrderResponseDTO struct {
 	Creator      ShortUserDTO            `json:"creator"`
 	Executor     ShortUserDTO            `json:"executor"`
 	DepartmentID uint64                  `json:"department_id"`
+	OtdelID      *uint64                 `json:"otdel_id,omitempty"`
+	BranchID     *uint64                 `json:"branch_id,omitempty"`
+	OfficeID     *uint64                 `json:"office_id,omitempty"`
+	EquipmentID  *uint64                 `json:"equipment_id,omitempty"`
 	StatusID     uint64                  `json:"status_id"`
 	PriorityID   uint64                  `json:"priority_id"`
 	Attachments  []AttachmentResponseDTO `json:"attachments"`
-	Comment      *string                 `json:"comment,omitempty"`
 	Duration     *string                 `json:"duration"`
 	CreatedAt    string                  `json:"created_at"`
 	UpdatedAt    string                  `json:"updated_at"`

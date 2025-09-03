@@ -1,3 +1,4 @@
+// Файл: pkg/service/jwt.go
 package service
 
 import (
@@ -18,7 +19,8 @@ type JwtCustomClaim struct {
 }
 
 type JWTService interface {
-	GenerateTokens(userID uint64, roleID uint64) (string, string, error)
+	// <<< ИЗМЕНЕНО: Функция теперь принимает время жизни токенов как аргументы
+	GenerateTokens(userID uint64, roleID uint64, accessTokenTTL, refreshTokenTTL time.Duration) (string, string, error)
 	ValidateToken(tokenString string) (*JwtCustomClaim, error)
 	ValidateRefreshToken(tokenString string) (uint64, error)
 	GetAccessTokenTTL() time.Duration
@@ -41,9 +43,10 @@ func NewJWTService(secretKey string, accessTokenExp, refreshTokenExp time.Durati
 	}
 }
 
-func (s *jwtService) GenerateTokens(userID uint64, roleID uint64) (string, string, error) {
-	accessTokenExp := time.Now().UTC().Add(s.AccessTokenExp)
-	refreshTokenExp := time.Now().UTC().Add(s.RefreshTokenExp)
+// <<< ИЗМЕНЕНО: Функция теперь использует переданные аргументы для установки времени жизни
+func (s *jwtService) GenerateTokens(userID uint64, roleID uint64, accessTokenTTL, refreshTokenTTL time.Duration) (string, string, error) {
+	accessTokenExp := time.Now().UTC().Add(accessTokenTTL)
+	refreshTokenExp := time.Now().UTC().Add(refreshTokenTTL)
 	issuedAt := time.Now().UTC()
 
 	accessTokenClaims := &JwtCustomClaim{

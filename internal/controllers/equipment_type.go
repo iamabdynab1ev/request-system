@@ -14,17 +14,17 @@ import (
 )
 
 type EquipmentTypeController struct {
-	equipmentTypeService services.EquipmentTypeServiceInterface
-	logger               *zap.Logger
+	service services.EquipmentTypeServiceInterface
+	logger  *zap.Logger
 }
 
 func NewEquipmentTypeController(service services.EquipmentTypeServiceInterface, logger *zap.Logger) *EquipmentTypeController {
-	return &EquipmentTypeController{equipmentTypeService: service, logger: logger}
+	return &EquipmentTypeController{service: service, logger: logger}
 }
 
 func (c *EquipmentTypeController) GetEquipmentTypes(ctx echo.Context) error {
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
-	res, total, err := c.equipmentTypeService.GetEquipmentTypes(ctx.Request().Context(), filter)
+	res, total, err := c.service.GetEquipmentTypes(ctx.Request().Context(), filter)
 	if err != nil {
 		c.logger.Error("Ошибка получения списка типов оборудования", zap.Error(err))
 		return utils.ErrorResponse(
@@ -57,7 +57,7 @@ func (c *EquipmentTypeController) FindEquipmentType(ctx echo.Context) error {
 		)
 	}
 
-	res, err := c.equipmentTypeService.FindEquipmentType(ctx.Request().Context(), id)
+	res, err := c.service.FindEquipmentType(ctx.Request().Context(), id)
 	if err != nil {
 		c.logger.Error("Ошибка поиска типа оборудования", zap.Uint64("id", id), zap.Error(err))
 		return utils.ErrorResponse(
@@ -95,7 +95,7 @@ func (c *EquipmentTypeController) CreateEquipmentType(ctx echo.Context) error {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
-	res, err := c.equipmentTypeService.CreateEquipmentType(ctx.Request().Context(), dto)
+	res, err := c.service.CreateEquipmentType(ctx.Request().Context(), dto)
 	if err != nil {
 		c.logger.Error("Ошибка создания типа оборудования", zap.Error(err))
 		return utils.ErrorResponse(
@@ -146,7 +146,7 @@ func (c *EquipmentTypeController) UpdateEquipmentType(ctx echo.Context) error {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
-	res, err := c.equipmentTypeService.UpdateEquipmentType(ctx.Request().Context(), id, dto)
+	res, err := c.service.UpdateEquipmentType(ctx.Request().Context(), id, dto)
 	if err != nil {
 		c.logger.Error("Ошибка обновления типа оборудования", zap.Uint64("id", id), zap.Error(err))
 		return utils.ErrorResponse(
@@ -179,7 +179,7 @@ func (c *EquipmentTypeController) DeleteEquipmentType(ctx echo.Context) error {
 		)
 	}
 
-	if err := c.equipmentTypeService.DeleteEquipmentType(ctx.Request().Context(), id); err != nil {
+	if err := c.service.DeleteEquipmentType(ctx.Request().Context(), id); err != nil {
 		c.logger.Error("Ошибка удаления типа оборудования", zap.Uint64("id", id), zap.Error(err))
 		return utils.ErrorResponse(
 			ctx,

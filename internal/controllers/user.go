@@ -8,6 +8,7 @@ import (
 	"request-system/config"
 	"request-system/internal/dto"
 	"request-system/internal/services"
+	"request-system/pkg/constants"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/filestorage"
 	"request-system/pkg/utils"
@@ -55,7 +56,6 @@ func (c *UserController) GetUsers(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, res, "Пользователи успешно получены", http.StatusOK, totalCount)
 }
 
-// --- Find single user ---
 func (c *UserController) FindUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
@@ -101,11 +101,17 @@ func (c *UserController) CreateUser(ctx echo.Context) error {
 		))
 	}
 
-	photoURL, err := c.handlePhotoUpload(ctx, "profile_photo")
+	photoURL, err := c.handlePhotoUpload(ctx, constants.UploadContextProfilePhoto.String())
 	if err != nil {
 		return c.errorResponse(ctx, err)
 	}
+
 	formData.PhotoURL = photoURL
+
+	if err := ctx.Validate(&formData); err != nil {
+		c.logger.Error("Ошибка валидации данных CreateUserDTO", zap.Error(err))
+		return c.errorResponse(ctx, err)
+	}
 
 	res, err := c.userService.CreateUser(reqCtx, formData)
 	if err != nil {
@@ -117,6 +123,7 @@ func (c *UserController) CreateUser(ctx echo.Context) error {
 
 func (c *UserController) UpdateUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
+
 	idFromURL, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID из URL для обновления", zap.Error(err))
@@ -128,12 +135,12 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 		))
 	}
 
-	dataString := ctx.FormValue("data")
 	finalDTO := dto.UpdateUserDTO{ID: idFromURL}
 
+	dataString := ctx.FormValue("data")
 	if dataString != "" {
-		var formData dto.UpdateUserDTO
-		if err = json.Unmarshal([]byte(dataString), &formData); err != nil {
+		if err = json.Unmarshal([]byte(dataString), &finalDTO); err != nil {
+
 			c.logger.Error("Ошибка десериализации 'data' при обновлении", zap.Error(err))
 			return c.errorResponse(ctx, apperrors.NewHttpError(
 				http.StatusBadRequest,
@@ -142,17 +149,6 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 				nil,
 			))
 		}
-
-		finalDTO.Fio = formData.Fio
-		finalDTO.Email = formData.Email
-		finalDTO.PhoneNumber = formData.PhoneNumber
-		finalDTO.Position = formData.Position
-		finalDTO.StatusID = formData.StatusID
-		finalDTO.RoleID = formData.RoleID
-		finalDTO.BranchID = formData.BranchID
-		finalDTO.DepartmentID = formData.DepartmentID
-		finalDTO.OfficeID = formData.OfficeID
-		finalDTO.OtdelID = formData.OtdelID
 	}
 
 	photoURL, err := c.handlePhotoUpload(ctx, "profile_photo")
@@ -160,13 +156,14 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 		return c.errorResponse(ctx, err)
 	}
 	finalDTO.PhotoURL = photoURL
-
 	if err = ctx.Validate(&finalDTO); err != nil {
+		c.logger.Error("Ошибка валидации данных UpdateUserDTO", zap.Error(err))
 		return c.errorResponse(ctx, err)
 	}
 
 	res, err := c.userService.UpdateUser(reqCtx, finalDTO)
 	if err != nil {
+		c.logger.Error("Ошибка при обновлении пользователя", zap.Error(err))
 		return c.errorResponse(ctx, err)
 	}
 
@@ -182,7 +179,7 @@ func (c *UserController) DeleteUser(ctx echo.Context) error {
 			http.StatusBadRequest,
 			"Неверный формат ID пользователя",
 			err,
-			map[string]interface{}{"id": ctx.Param("id")},
+			map[string]interface{}{"param": ctx.Param("id")},
 		))
 	}
 
@@ -201,7 +198,7 @@ func (c *UserController) handlePhotoUpload(ctx echo.Context, uploadContext strin
 	file, err := ctx.FormFile("photoFile")
 	if err != nil {
 		if err == http.ErrMissingFile {
-			return nil, nil
+			return nil, nil // Файл не был загружен, это нормально
 		}
 		return nil, apperrors.NewHttpError(
 			http.StatusBadRequest,

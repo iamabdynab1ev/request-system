@@ -1,18 +1,16 @@
+// internal/services/order_history_service.go
+
 package services
 
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
 
 	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
-
-	// Добавляем strings
 
 	"go.uber.org/zap"
 )
@@ -43,6 +41,7 @@ func NewOrderHistoryService(
 }
 
 func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID uint64) ([]dto.TimelineEventDTO, error) {
+	// --- Блок авторизации и получения данных (без изменений) ---
 	userID, err := utils.GetUserIDFromCtx(ctx)
 	if err != nil {
 		return nil, err
@@ -59,17 +58,10 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 	if err != nil {
 		return nil, err
 	}
-
 	authContext := authz.Context{Actor: actor, Permissions: permissionsMap, Target: order}
-
 	if !authz.CanDo(authz.OrdersView, authContext) {
-		s.logger.Warn("Отказано в доступе при просмотре истории заявки",
-			zap.Uint64("orderID", orderID),
-			zap.Uint64("actorID", actor.ID),
-		)
 		return nil, apperrors.ErrForbidden
 	}
-
 	rawEvents, err := s.repo.FindByOrderID(ctx, orderID)
 	if err != nil {
 		return nil, err
@@ -78,17 +70,16 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 		return []dto.TimelineEventDTO{}, nil
 	}
 
-	sort.SliceStable(rawEvents, func(i, j int) bool {
-		if rawEvents[i].CreatedAt.Equal(rawEvents[j].CreatedAt) {
-			return rawEvents[i].ID < rawEvents[j].ID
-		}
-		return rawEvents[i].CreatedAt.Before(rawEvents[j].CreatedAt)
-	})
+	// --- Конец блока без изменений ---
 
 	var timeline []dto.TimelineEventDTO
+
+	// --- ВОЗВРАЩАЕМ ЛОГИКУ ГРУППИРОВКИ, НО ПРАВИЛЬНУЮ ---
 	i := 0
 	for i < len(rawEvents) {
 		currentEvent := rawEvents[i]
+
+		// Начинаем новую "группу" событий
 		eventDTO := dto.TimelineEventDTO{
 			Actor: dto.ShortUserDTO{
 				ID:  currentEvent.UserID,
@@ -98,11 +89,7 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 			Lines:     []string{},
 		}
 
-		// Назначаем иконку по умолчанию
-		if currentEvent.EventType != "" {
-			eventDTO.Icon = strings.ToLower(currentEvent.EventType)
-		}
-
+		// Внутренний цикл для сбора всех событий, произошедших в одну секунду от одного юзера
 		j := i
 		for j < len(rawEvents) &&
 			rawEvents[j].UserID == currentEvent.UserID &&
@@ -111,73 +98,60 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 			event := rawEvents[j]
 			var line string
 
-			switch event.EventType {
-			case "CREATE":
-				eventDTO.Icon = "status_open"
-				if event.Comment != nil {
-					line = fmt.Sprintf("Создана заявка: «%s»", *event.Comment)
+			// Если тип события - КОММЕНТАРИЙ, мы его текст кладем в поле Comment группы
+			if event.EventType == "COMMENT" {
+				if event.Comment != nil && *event.Comment != "" {
+					eventDTO.Comment = event.Comment
 				}
-			case "STATUS_CHANGE":
-				eventDTO.Icon = "status_inprogress"
-				if event.NewValue != nil {
-					line = fmt.Sprintf("Статус изменен на: «%s»", *event.NewValue)
+			} else {
+				// Для всех остальных событий мы генерируем `line` и добавляем в `lines`
+				switch event.EventType {
+				case "CREATE":
+					line = fmt.Sprintf("Создана заявка: «%s»", order.Name)
+				case "STATUS_CHANGE":
+					if event.NewValue != nil {
+						line = fmt.Sprintf("Статус изменен на: «%s»", *event.NewValue)
+					}
+				case "DELEGATION":
+					if event.NewValue != nil {
+						line = fmt.Sprintf("Назначен исполнитель: %s", *event.NewValue)
+					}
+				case "ATTACHMENT_ADDED":
+					if event.NewValue != nil {
+						line = fmt.Sprintf(`Прикреплен файл: %s`, *event.NewValue)
+					}
+				//... и так далее для всех остальных типов
+				case "DEPARTMENT_CHANGE":
+					if event.Comment != nil {
+						line = *event.Comment
+					}
+				case "DURATION_CHANGE":
+					if event.NewValue != nil {
+						line = fmt.Sprintf("Срок выполнения: %s", *event.NewValue)
+					}
+				case "PRIORITY_CHANGE":
+					if event.NewValue != nil {
+						line = fmt.Sprintf("Приоритет изменен на: %s", *event.NewValue)
+					}
+				case "NAME_CHANGE":
+					if event.NewValue != nil {
+						line = fmt.Sprintf("Название заявки изменено на: «%s»", *event.NewValue)
+					}
+				case "ADDRESS_CHANGE":
+					if event.NewValue != nil {
+						line = fmt.Sprintf("Адрес заявки изменен на: «%s»", *event.NewValue)
+					}
 				}
-			case "DELEGATION":
-				eventDTO.Icon = "status_inprogress"
-				if event.NewValue != nil {
-					line = fmt.Sprintf("Назначен исполнитель: %s", *event.NewValue)
+				if line != "" {
+					eventDTO.Lines = append(eventDTO.Lines, line)
 				}
-				if event.Comment != nil && strings.Contains(*event.Comment, "после перевода заявки") {
-					line += fmt.Sprintf(" (%s)", *event.Comment)
-				}
-			case "DEPARTMENT_CHANGE":
-				eventDTO.Icon = "status_transfer"
-				if event.Comment != nil {
-					line = *event.Comment
-				}
-			case "DURATION_CHANGE":
-				eventDTO.Icon = "timer"
-				if event.NewValue != nil {
-					line = fmt.Sprintf("Срок выполнения: %s", *event.NewValue)
-				}
-			case "PRIORITY_CHANGE":
-				eventDTO.Icon = "priority"
-				if event.NewValue != nil {
-					line = fmt.Sprintf("Приоритет изменен на: %s", *event.NewValue)
-				}
-			case "NAME_CHANGE":
-				eventDTO.Icon = "title"
-				if event.NewValue != nil {
-					line = fmt.Sprintf("Название заявки изменено на: «%s»", *event.NewValue)
-				}
-			case "ADDRESS_CHANGE":
-				eventDTO.Icon = "address"
-				if event.NewValue != nil {
-					line = fmt.Sprintf("Адрес заявки изменен на: «%s»", *event.NewValue)
-				}
-
-			case "COMMENT":
-				eventDTO.Icon = "comment"
-				if event.Comment != nil {
-					line = *event.Comment
-				}
-			case "ATTACHMENT_ADDED":
-				eventDTO.Icon = "attachment"
-				if event.Comment != nil {
-					line = fmt.Sprintf(`Прикреплен файл: %s`, *event.Comment)
-				}
-			}
-
-			if line != "" {
-				eventDTO.Lines = append(eventDTO.Lines, line)
 			}
 			j++
 		}
 
-		if len(eventDTO.Lines) > 0 {
-			timeline = append(timeline, eventDTO)
-		}
-		i = j
+		// Добавляем собранную группу в итоговый список
+		timeline = append(timeline, eventDTO)
+		i = j // Передвигаем внешний счетчик на конец обработанной группы
 	}
 
 	return timeline, nil

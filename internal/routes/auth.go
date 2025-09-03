@@ -2,8 +2,6 @@
 package routes
 
 import (
-	// <<< ДОБАВЛЯЕМ ИМПОРТ
-
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
@@ -30,7 +28,19 @@ func runAuthRouter(
 	userRepository := repositories.NewUserRepository(dbConn, logger)
 	cacheRepository := repositories.NewRedisCacheRepository(redisClient)
 
-	authService := services.NewAuthService(userRepository, cacheRepository, logger, &cfg.Auth)
+	// <<<--- НАЧАЛО ИЗМЕНЕНИЙ ---
+	// 1. Создаем наш новый сервис-заглушку для уведомлений.
+	notificationService := services.NewMockNotificationService(logger)
+
+	// 2. Передаем его в конструктор AuthService при создании.
+	authService := services.NewAuthService(
+		userRepository,
+		cacheRepository,
+		logger,
+		&cfg.Auth,
+		notificationService, // <-- Наша зависимость
+	)
+	// <<<--- КОНЕЦ ИЗМЕНЕНИЙ ---
 
 	authCtrl := controllers.NewAuthController(authService, authPermissionService, jwtSvc, logger)
 
@@ -39,6 +49,7 @@ func runAuthRouter(
 		authGroup.POST("/login", authCtrl.Login)
 		authGroup.POST("/refresh_token", authCtrl.RefreshToken)
 		authGroup.GET("/me", authCtrl.Me, authMW.Auth)
+		authGroup.POST("/logout", authCtrl.Logout)
 
 		passwordGroup := authGroup.Group("/password")
 		passwordGroup.POST("/request", authCtrl.RequestPasswordReset)

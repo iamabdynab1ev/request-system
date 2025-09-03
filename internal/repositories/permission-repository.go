@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
@@ -115,9 +117,34 @@ func (r *PermissionRepository) CreatePermission(ctx context.Context, req dto.Cre
 }
 
 func (r *PermissionRepository) UpdatePermission(ctx context.Context, id uint64, req dto.UpdatePermissionDTO) (*dto.PermissionDTO, error) {
-	query := fmt.Sprintf(`UPDATE %s SET name = $1, description = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING %s`, PermissionTable, PermissionFields)
+	updates := make([]string, 0)
+	args := make([]interface{}, 0)
+	argID := 1
+
+	if req.Name != "" { // Проверяем, было ли имя предоставлено
+		updates = append(updates, fmt.Sprintf("name = $%d", argID))
+		args = append(args, req.Name)
+		argID++
+	}
+	if req.Description != "" {
+		updates = append(updates, fmt.Sprintf("description = $%d", argID))
+		args = append(args, req.Description)
+		argID++
+	}
+
+	if len(updates) == 0 {
+		return r.FindPermissionByID(ctx, id)
+	}
+
+	updates = append(updates, fmt.Sprintf("updated_at = $%d", argID))
+	args = append(args, time.Now())
+	argID++
+
+	args = append(args, id)
+	query := fmt.Sprintf(`UPDATE %s SET %s WHERE id = $%d RETURNING %s`, PermissionTable, strings.Join(updates, ", "), argID, PermissionFields)
+
 	var p dto.PermissionDTO
-	err := r.storage.QueryRow(ctx, query, req.Name, req.Description, id).Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt)
+	err := r.storage.QueryRow(ctx, query, args...).Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound

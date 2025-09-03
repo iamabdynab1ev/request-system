@@ -1,3 +1,5 @@
+// Файл: main.go
+
 package main
 
 import (
@@ -6,14 +8,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"time"
 
 	"request-system/internal/repositories"
 	"request-system/internal/routes"
 	"request-system/internal/services"
 	"request-system/pkg/config"
+	"request-system/pkg/customvalidator" // Убедитесь, что этот импорт есть
 	"request-system/pkg/database/postgresql"
 	apperrors "request-system/pkg/errors"
 	applogger "request-system/pkg/logger"
@@ -28,37 +29,26 @@ import (
 	"go.uber.org/zap"
 )
 
-func isGoodEmailFormat(fl validator.FieldLevel) bool {
-	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
-	return emailRegex.MatchString(fl.Field().String())
-}
-
-func isTajikPhoneNumber(fl validator.FieldLevel) bool {
-	re := regexp.MustCompile(`^\+992\d{9}$`)
-	return re.MatchString(fl.Field().String())
-}
-
-func isDurationValid(fl validator.FieldLevel) bool {
-	re := regexp.MustCompile(`^(\d+h)?(\d+m)?$`)
-	s := fl.Field().String()
-	return re.MatchString(s) && (strings.Contains(s, "h") || strings.Contains(s, "m"))
-}
+// !!! ВСЕ ФУНКЦИИ-ВАЛИДАТОРЫ (isGoodEmailFormat, isTajikPhoneNumber и т.д.) ОТСЮДА УДАЛЕНЫ !!!
+// Теперь они живут в pkg/customvalidator/validators.go
 
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Warning: .env file not found or could not be loaded.")
 	}
 
+	// 1. СНАЧАЛА создаем базовые экземпляры Echo и логгера
 	e := echo.New()
 	logger := applogger.NewLogger()
 
+	// 2. Инициализируем конфиг
 	cfg := config.New()
 
+	// 3. ПОСЛЕ этого настраиваем middleware, так как они используют logger и echo
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
 		DisableStackAll: true,
 		StackSize:       1 << 10,
 		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
-			// Используем новую функцию с логером
 			logger.Error("!!! ОБНАРУЖЕНА ПАНИКА (PANIC) !!!",
 				zap.String("method", c.Request().Method),
 				zap.String("uri", c.Request().RequestURI),
@@ -82,43 +72,41 @@ func main() {
 
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOriginFunc: func(origin string) (bool, error) {
-			allowedOrigin := "https://d41fdadc8416.ngrok-free.app"
-			if origin == allowedOrigin {
-				return true, nil
+			allowedOrigins := []string{
+				"https://d41fdadc8416.ngrok-free.app",
+				"http://localhost:5173",
+			}
+			for _, o := range allowedOrigins {
+				if origin == o {
+					return true, nil
+				}
 			}
 			return false, nil
 		},
-		AllowMethods: []string{
-			http.MethodGet,
-			http.MethodPost,
-			http.MethodPut,
-			http.MethodDelete,
-			http.MethodOptions,
-		},
-		AllowHeaders: []string{
-			echo.HeaderOrigin,
-			echo.HeaderContentType,
-			echo.HeaderAccept,
-			echo.HeaderAuthorization,
-			"ngrok-skip-browser-warning",
-		},
+		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "ngrok-skip-browser-warning"},
 		AllowCredentials: true,
 		ExposeHeaders:    []string{"Content-Disposition"},
 	}))
+
+	// 4. Настраиваем статические файлы
 	absPath, err := filepath.Abs("./uploads")
 	if err != nil {
 		logger.Fatal("не удалось получить абсолютный путь к uploads", zap.Error(err))
 	}
 	e.Static("/uploads", absPath)
 
+	// <<<--- 5. ЭТО ПРАВИЛЬНОЕ МЕСТО ДЛЯ ИНИЦИАЛИЗАЦИИ ВАЛИДАТОРА ---
+	// Он использует logger для вывода ошибок и `e` для присваивания.
 	v := validator.New()
-	v.RegisterValidation("e164_TJ", isTajikPhoneNumber)
-	v.RegisterValidation("duration_format", isDurationValid)
-	if err := v.RegisterValidation("email", isGoodEmailFormat); err != nil {
-		logger.Fatal("Ошибка переопределения валидации 'email'", zap.Error(err))
+	// Вызываем нашу единую функцию из нового пакета
+	if err := customvalidator.RegisterCustomValidations(v); err != nil {
+		logger.Fatal("Ошибка регистрации кастомных правил валидации", zap.Error(err))
 	}
 	e.Validator = utils.NewValidator(v)
+	// <<<--- КОНЕЦ БЛОКА ВАЛИДАТОРА ---
 
+	// 6. Подключаемся к базам данных и другим сервисам
 	dbConn := postgresql.ConnectDB()
 	defer dbConn.Close()
 
@@ -135,10 +123,10 @@ func main() {
 		logger.Fatal("не удалось подключиться к Redis", zap.Error(err), zap.String("address", redisAddr))
 	}
 
+	// 7. Инициализируем сервисы
 	jwtSecretKey := os.Getenv("JWT_SECRET_KEY")
-
 	accessTokenTTL := time.Hour * 24
-	refreshTokenTTL := time.Hour * 24 * 7
+	refreshTokenTTL := time.Hour * 24 * 7 // Примечание: в вашем коде это значение может быть переопределено из .env в config.New()
 	jwtSvc := service.NewJWTService(jwtSecretKey, accessTokenTTL, refreshTokenTTL, logger)
 
 	permissionRepo := repositories.NewPermissionRepository(dbConn, logger)
@@ -147,8 +135,10 @@ func main() {
 	rolePermissionsCacheTTL := time.Minute * 10
 	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, logger, rolePermissionsCacheTTL)
 
+	// 8. Инициализируем роуты
 	routes.InitRouter(e, dbConn, redisClient, jwtSvc, logger, authPermissionService, cfg)
 
+	// 9. Запускаем сервер
 	logger.Info("🚀 Сервер запущен на :8080")
 	if err := e.Start(":8080"); err != nil {
 		logger.Fatal("Ошибка запуска сервера", zap.Error(err))

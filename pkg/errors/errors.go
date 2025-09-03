@@ -8,9 +8,10 @@ import (
 // HttpError - структура для кастомных HTTP-ошибок.
 type HttpError struct {
 	Code    int                    `json:"-"`
-	Message string                 `json:"message"` // Сообщение для пользователя
-	Err     error                  `json:"-"`       // Внутреннее сообщение для логов
-	Context map[string]interface{} `json:"-"`       // Доп. данные
+	Message string                 `json:"message"`           // Сообщение для пользователя
+	Details interface{}            `json:"details,omitempty"` // Поле для доп. данных в JSON-ответе
+	Err     error                  `json:"-"`                 // Внутреннее сообщение для логов
+	Context map[string]interface{} `json:"-"`                 // Доп. данные для логов
 }
 
 // Error - реализация интерфейса error
@@ -28,6 +29,18 @@ func NewHttpError(code int, message string, err error, context map[string]interf
 		Message: message,
 		Err:     err,
 		Context: context,
+		// Details по умолчанию nil, устанавливается при необходимости
+	}
+}
+
+// NewHttpErrorWithDetails - новый конструктор для ошибок с деталями в ответе.
+func NewHttpErrorWithDetails(code int, message string, err error, context map[string]interface{}, details interface{}) *HttpError {
+	return &HttpError{
+		Code:    code,
+		Message: message,
+		Err:     err,
+		Context: context,
+		Details: details, // Устанавливаем details
 	}
 }
 
@@ -59,4 +72,7 @@ var (
 	ErrTokenIsNotAccess     = NewHttpError(http.StatusUnauthorized, "Токен не является access токеном", nil, nil)
 	ErrInvalidAuthHeader    = NewHttpError(http.StatusUnauthorized, "Недействительный заголовок авторизации", nil, nil)
 	ErrEmptyAuthHeader      = NewHttpError(http.StatusUnauthorized, "Отсутствует заголовок авторизации", nil, nil)
+
+	// Используем наш новый конструктор для этой ошибки
+	ErrChangePasswordWithToken = NewHttpErrorWithDetails(http.StatusAccepted, "Требуется смена пароля", nil, nil, nil)
 )

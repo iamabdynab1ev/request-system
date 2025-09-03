@@ -1,12 +1,12 @@
 package dto
 
+
 type CreateUserDTO struct {
 	Fio          string  `json:"fio" validate:"required"`
 	Email        string  `json:"email" validate:"email,omitempty"`
 	PhoneNumber  string  `json:"phone_number" validate:"required"`
 	Position     string  `json:"position" validate:"required"`
-	Password     string  `json:"password" validate:"required"`
-	StatusID     uint64  `json:"status_id" validate:"required"`
+	StatusID     uint64  `json:"status_id" validate:"omitempty"` 
 	RoleID       uint64  `json:"role_id" validate:"required"`
 	BranchID     uint64  `json:"branch_id" validate:"required"`
 	DepartmentID uint64  `json:"department_id" validate:"required"`
@@ -32,17 +32,18 @@ type UpdateUserDTO struct {
 }
 
 type UserDTO struct {
-	ID           uint64  `json:"id"`
-	Fio          string  `json:"fio"`
-	Email        string  `json:"email"`
-	PhoneNumber  string  `json:"phone_number"`
-	Position     string  `json:"position"`
-	RoleID       uint64  `json:"role_id"`
-	StatusID     uint64  `json:"status_id"`
-	BranchID     uint64  `json:"branch_id"`
-	DepartmentID uint64  `json:"department_id"`
-	OfficeID     *uint64 `json:"office_id,omitempty"`
-	OtdelID      *uint64 `json:"otdel_id,omitempty"`
-	RoleName     string  `json:"role_name"`
-	PhotoURL     *string `json:"photo_url,omitempty"`
+	ID                 uint64  `json:"id"`
+	Fio                string  `json:"fio"`
+	Email              string  `json:"email"`
+	PhoneNumber        string  `json:"phone_number"`
+	Position           string  `json:"position"`
+	RoleID             uint64  `json:"role_id"`
+	StatusID           uint64  `json:"status_id"` 
+	BranchID           uint64  `json:"branch_id"`
+	DepartmentID       uint64  `json:"department_id"`
+	OfficeID           *uint64 `json:"office_id,omitempty"`
+	OtdelID            *uint64 `json:"otdel_id,omitempty"`
+	RoleName           string  `json:"role_name"`
+	PhotoURL           *string `json:"photo_url,omitempty"`
+	MustChangePassword bool    `json:"must_change_password"`
 }

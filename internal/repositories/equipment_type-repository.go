@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"request-system/internal/dto"
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
@@ -19,7 +20,7 @@ import (
 const equipmentTypeTable = "equipment_types"
 
 var (
-	etAllowedFilterFields = map[string]bool{} // Пока нет полей для фильтрации
+	etAllowedFilterFields = map[string]bool{}
 	etAllowedSortFields   = map[string]bool{
 		"id":         true,
 		"name":       true,
@@ -31,7 +32,7 @@ type EquipmentTypeRepositoryInterface interface {
 	GetEquipmentTypes(ctx context.Context, filter types.Filter) ([]entities.EquipmentType, uint64, error)
 	FindEquipmentType(ctx context.Context, id uint64) (*entities.EquipmentType, error)
 	CreateEquipmentType(ctx context.Context, et entities.EquipmentType) (*entities.EquipmentType, error)
-	UpdateEquipmentType(ctx context.Context, id uint64, et entities.EquipmentType) (*entities.EquipmentType, error)
+	UpdateEquipmentType(ctx context.Context, id uint64, reqDTO dto.UpdateEquipmentTypeDTO) (*dto.EquipmentTypeDTO, error)
 	DeleteEquipmentType(ctx context.Context, id uint64) error
 }
 
@@ -49,8 +50,6 @@ func NewEquipmentTypeRepository(storage *pgxpool.Pool, logger *zap.Logger) Equip
 
 func scanEquipmentType(row pgx.Row) (*entities.EquipmentType, error) {
 	var et entities.EquipmentType
-
-	// Временные переменные для сканирования. Они нам все еще нужны.
 	var createdAt, updatedAt time.Time
 
 	err := row.Scan(&et.ID, &et.Name, &createdAt, &updatedAt)
@@ -69,7 +68,7 @@ func scanEquipmentType(row pgx.Row) (*entities.EquipmentType, error) {
 
 func (r *EquipmentTypeRepository) GetEquipmentTypes(ctx context.Context, filter types.Filter) ([]entities.EquipmentType, uint64, error) {
 	allArgs := make([]interface{}, 0)
-	conditions := []string{} // У справочников нет deleted_at
+	conditions := []string{}
 	placeholderNum := 1
 
 	if filter.Search != "" {
@@ -142,13 +141,60 @@ func (r *EquipmentTypeRepository) FindEquipmentType(ctx context.Context, id uint
 }
 
 func (r *EquipmentTypeRepository) CreateEquipmentType(ctx context.Context, et entities.EquipmentType) (*entities.EquipmentType, error) {
-	query := `INSERT INTO equipment_types (name) VALUES($1) RETURNING id, name, created_at, updated_at`
-	return scanEquipmentType(r.storage.QueryRow(ctx, query, et.Name))
+	query := `INSERT INTO equipment_types (name, created_at, updated_at) VALUES($1, $2, $3) RETURNING id, name, created_at, updated_at`
+	return scanEquipmentType(r.storage.QueryRow(ctx, query, et.Name, et.CreatedAt, et.UpdatedAt))
 }
 
-func (r *EquipmentTypeRepository) UpdateEquipmentType(ctx context.Context, id uint64, et entities.EquipmentType) (*entities.EquipmentType, error) {
-	query := `UPDATE equipment_types SET name = $1, updated_at = NOW() WHERE id = $2 RETURNING id, name, created_at, updated_at`
-	return scanEquipmentType(r.storage.QueryRow(ctx, query, et.Name, id))
+func (r *EquipmentTypeRepository) UpdateEquipmentType(ctx context.Context, id uint64, reqDTO dto.UpdateEquipmentTypeDTO) (*dto.EquipmentTypeDTO, error) {
+	updates := make([]string, 0)
+	args := make([]interface{}, 0)
+	argID := 1
+
+	if reqDTO.Name != "" {
+		updates = append(updates, fmt.Sprintf("name = $%d", argID))
+		args = append(args, reqDTO.Name)
+		argID++
+	}
+
+	if len(updates) == 0 {
+		existingEntity, err := r.FindEquipmentType(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		createdAtStr := existingEntity.CreatedAt.Format("2006-01-02 15:04:05")
+		updatedAtStr := existingEntity.UpdatedAt.Format("2006-01-02 15:04:05")
+		return &dto.EquipmentTypeDTO{
+			ID:        existingEntity.ID,
+			Name:      existingEntity.Name,
+			CreatedAt: &createdAtStr, // Передаем как *string
+			UpdatedAt: &updatedAtStr, // Передаем как *string
+		}, nil
+	}
+
+	updates = append(updates, fmt.Sprintf("updated_at = $%d", argID))
+	args = append(args, time.Now())
+	argID++
+
+	args = append(args, id)
+	selectFieldsForReturn := "id, name, created_at, updated_at"
+	query := fmt.Sprintf(`UPDATE %s SET %s WHERE id = $%d RETURNING %s`, equipmentTypeTable, strings.Join(updates, ", "), argID, selectFieldsForReturn)
+
+	var dtoResult dto.EquipmentTypeDTO
+	var createdAtTime, updatedAtTime time.Time // Временные переменные для time.Time
+	err := r.storage.QueryRow(ctx, query, args...).Scan(&dtoResult.ID, &dtoResult.Name, &createdAtTime, &updatedAtTime)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+
+	createdAtStr := createdAtTime.Format("2006-01-02 15:04:05")
+	updatedAtStr := updatedAtTime.Format("2006-01-02 15:04:05")
+	dtoResult.CreatedAt = &createdAtStr
+	dtoResult.UpdatedAt = &updatedAtStr
+
+	return &dtoResult, nil
 }
 
 func (r *EquipmentTypeRepository) DeleteEquipmentType(ctx context.Context, id uint64) error {

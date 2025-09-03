@@ -37,6 +37,16 @@ func ValidateFile(fileHeader *multipart.FileHeader, file io.ReadSeeker, contextN
 	}
 	mimeType := http.DetectContentType(buffer)
 
+	if mimeType == "text/plain; charset=utf-8" ||
+		mimeType == "text/xml; charset=utf-8" ||
+		mimeType == "application/octet-stream" {
+
+		// Проверим первые байты на <svg
+		if string(buffer[:4]) == "<svg" || string(buffer[:5]) == "<?xml" {
+			mimeType = "image/svg+xml"
+		}
+	}
+
 	if !slices.Contains(rules.AllowedMimeTypes, mimeType) {
 		return fmt.Errorf("недопустимый тип файла: %s", mimeType)
 	}

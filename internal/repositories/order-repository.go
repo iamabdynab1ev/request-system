@@ -17,7 +17,7 @@ import (
 
 const (
 	orderTable           = "orders"
-	orderSelectFields    = "id, name, address, department_id, status_id, priority_id, user_id, executor_id, duration, created_at, updated_at"
+	orderSelectFields    = "id, name, address, department_id, otdel_id, branch_id, office_id, equipment_id, status_id, priority_id, user_id, executor_id, duration, created_at, updated_at"
 	orderInsertFields    = "name, address, department_id, otdel_id, branch_id, office_id, equipment_id, status_id, priority_id, user_id, executor_id"
 	orderUpdateSetClause = `name = $1, address = $2, department_id = $3, otdel_id = $4, branch_id = $5, office_id = $6, equipment_id = $7, status_id = $8, priority_id = $9, user_id = $10, executor_id = $11, duration = $12, updated_at = NOW()`
 )
@@ -28,7 +28,7 @@ var orderAllowedFilterFields = map[string]bool{
 }
 
 var orderAllowedSortFields = map[string]bool{
-	"id": true, "created_at": true, "updated_at": true, "priority_id": true,
+	"id": true, "created_at": true, "updated_at": true, "priority_id": true, "status_id": true, "duration": true,
 }
 
 type OrderRepositoryInterface interface {
@@ -51,9 +51,11 @@ func NewOrderRepository(storage *pgxpool.Pool, logger *zap.Logger) OrderReposito
 
 func (r *OrderRepository) scanOrder(row pgx.Row) (*entities.Order, error) {
 	var order entities.Order
+	// ИСПРАВЛЕНИЕ: Порядок полей здесь должен строго соответствовать порядку в orderSelectFields
 	err := row.Scan(
 		&order.ID, &order.Name, &order.Address,
-		&order.DepartmentID, &order.StatusID, &order.PriorityID,
+		&order.DepartmentID, &order.OtdelID, &order.BranchID, &order.OfficeID, &order.EquipmentID,
+		&order.StatusID, &order.PriorityID,
 		&order.CreatorID, &order.ExecutorID, &order.Duration,
 		&order.CreatedAt, &order.UpdatedAt,
 	)
@@ -73,12 +75,12 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 
 	// Шаг 1: Применяем фильтр безопасности (этот код мы уже исправили)
 	if securityFilter != "" {
-		for i := 0; i < strings.Count(securityFilter, "?"); i++ {
+		allArgs = append(allArgs, securityArgs...)
+		for i := 0; i < len(securityArgs); i++ {
 			securityFilter = strings.Replace(securityFilter, "?", fmt.Sprintf("$%d", placeholderNum), 1)
 			placeholderNum++
 		}
 		conditions = append(conditions, securityFilter)
-		allArgs = append(allArgs, securityArgs...)
 	}
 
 	// Шаг 2: Применяем текстовый поиск
@@ -89,7 +91,6 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 		placeholderNum++
 	}
 
-	// >>> НАЧАЛО ГЛАВНЫХ ИЗМЕНЕНИЙ <<<
 	// Шаг 3: Применяем фильтры из URL (status_id, branch_id и т.д.)
 	for key, value := range filter.Filter {
 		// Пропускаем поля, которые не разрешены для фильтрации
@@ -100,27 +101,21 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 		// Используем switch-case для проверки типа значения
 		switch v := value.(type) {
 		case []string:
-			// Этот блок работает для ?filter[branch_id]=1,2,4
-			// Если пришел срез строк, генерируем SQL-оператор IN (...)
 			placeholders := make([]string, len(v))
 			for i, item := range v {
 				placeholders[i] = fmt.Sprintf("$%d", placeholderNum)
-				allArgs = append(allArgs, item) // Добавляем каждый элемент среза как отдельный аргумент
+				allArgs = append(allArgs, item)
 				placeholderNum++
 			}
 			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", key, strings.Join(placeholders, ",")))
 
 		case string:
-			// Этот блок работает для ?filter[status_id]=1
-			// Если пришла обычная строка, генерируем оператор =
 			conditions = append(conditions, fmt.Sprintf("%s = $%d", key, placeholderNum))
 			allArgs = append(allArgs, v)
 			placeholderNum++
 
-			// Можно добавить default для обработки других типов, если понадобится
 		}
 	}
-	// >>> КОНЕЦ ГЛАВНЫХ ИЗМЕНЕНИЙ <<<
 
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 

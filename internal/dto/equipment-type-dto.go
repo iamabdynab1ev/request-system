@@ -1,19 +1,18 @@
 package dto
 
 type CreateEquipmentTypeDTO struct {
-	Name string `json:"name" validate:"required"`
+	Name string `json:"name" validate:"required,max=255"`
 }
 
 type UpdateEquipmentTypeDTO struct {
-	ID   uint64 `json:"id" validate:"required"`
-	Name string `json:"name" validate:"omitempty"`
+	Name string `json:"name" validate:"omitempty,min=1,max=255"`
 }
 
 type EquipmentTypeDTO struct {
-	ID        uint64 `json:"id"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID        uint64  `json:"id"`
+	Name      string  `json:"name"`
+	CreatedAt *string `json:"created_at"`
+	UpdatedAt *string `json:"updated_at"`
 }
 
 type ShortEquipmentTypeDTO struct {

@@ -220,8 +220,6 @@ func (r *PriorityRepository) DeletePriority(ctx context.Context, id uint64) erro
 	return nil
 }
 
-// ↑↑↑↑↑↑  ВОТ ГЛАВНОЕ ИЗМЕНЕНИЕ  ↑↑↑↑↑↑
-
 func (r *PriorityRepository) FindByCode(ctx context.Context, code string) (*entities.Priority, error) {
 	query := `SELECT id, code, name FROM priorities WHERE code = $1 LIMIT 1`
 	var priority entities.Priority

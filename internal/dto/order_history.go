@@ -1,12 +1,14 @@
 package dto
 
+// TimelineEventDTO - наша обновленная структура ответа
 type TimelineEventDTO struct {
-	Icon      string       `json:"icon"`
 	Lines     []string     `json:"lines"`
+	Comment   *string      `json:"comment,omitempty"`
 	Actor     ShortUserDTO `json:"actor"`
 	CreatedAt string       `json:"created_at"`
 }
 
+// CreateOrderHistoryDTO остается без изменений
 type CreateOrderHistoryDTO struct {
 	OrderID      uint64  `json:"order_id"`
 	UserID       uint64  `json:"user_id"`

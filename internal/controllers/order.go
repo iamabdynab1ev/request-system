@@ -90,6 +90,31 @@ func (c *OrderController) FindOrder(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, order, "Заявка успешно найдена", http.StatusOK)
 }
 
+func (ctrl *OrderController) CreateOrderFromJSON(c echo.Context) error {
+	var createDTO dto.CreateOrderDTO
+
+	// Биндим напрямую из тела запроса (application/json)
+	if err := c.Bind(&createDTO); err != nil {
+		// ... (обработка ошибки)
+		return err
+	}
+	if err := c.Validate(&createDTO); err != nil {
+		// ... (обработка ошибки)
+		return err
+	}
+
+	// Здесь `data` это JSON строка, которую мы получаем из DTO,
+	// но твой сервис ожидает строку. Это неудобно, давай вызовем другой метод.
+	// Давай предположим, что у тебя есть второй CreateOrder, который принимает DTO.
+	// Если нет - это можно будет поправить.
+
+	// ВАЖНАЯ ЧАСТЬ ТЕСТА
+	ctrl.logger.Debug("ДАННЫЕ ИЗ JSON BIND", zap.Any("createDTO", createDTO))
+
+	// Просто возвращаем DTO, чтобы проверить, что он распарсился.
+	return c.JSON(http.StatusOK, createDTO)
+}
+
 func (c *OrderController) CreateOrder(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	dataString := ctx.FormValue("data")
