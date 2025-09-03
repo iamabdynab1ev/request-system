@@ -9,7 +9,6 @@ import (
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
-	"request-system/pkg/utils"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,7 +17,7 @@ import (
 
 const (
 	orderTable           = "orders"
-	orderSelectFields    = "id, name, address, department_id, status_id, priority_id, user_id, executor_id, duration::TEXT, created_at, updated_at"
+	orderSelectFields    = "id, name, address, department_id, status_id, priority_id, user_id, executor_id, duration, created_at, updated_at"
 	orderInsertFields    = "name, address, department_id, otdel_id, branch_id, office_id, equipment_id, status_id, priority_id, user_id, executor_id"
 	orderUpdateSetClause = `name = $1, address = $2, department_id = $3, otdel_id = $4, branch_id = $5, office_id = $6, equipment_id = $7, status_id = $8, priority_id = $9, user_id = $10, executor_id = $11, duration = $12, updated_at = NOW()`
 )
@@ -72,44 +71,64 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 	conditions := []string{"deleted_at IS NULL"}
 	placeholderNum := 1
 
+	// Шаг 1: Применяем фильтр безопасности (этот код мы уже исправили)
 	if securityFilter != "" {
+		for i := 0; i < strings.Count(securityFilter, "?"); i++ {
+			securityFilter = strings.Replace(securityFilter, "?", fmt.Sprintf("$%d", placeholderNum), 1)
+			placeholderNum++
+		}
 		conditions = append(conditions, securityFilter)
 		allArgs = append(allArgs, securityArgs...)
-		placeholderNum += len(securityArgs)
 	}
 
+	// Шаг 2: Применяем текстовый поиск
 	if filter.Search != "" {
-		searchPattern := "%" + filter.Search + "%"
+		searchPattern := "%" + strings.ToLower(filter.Search) + "%" // поиск без учета регистра
 		conditions = append(conditions, fmt.Sprintf("name ILIKE $%d", placeholderNum))
 		allArgs = append(allArgs, searchPattern)
 		placeholderNum++
 	}
 
+	// >>> НАЧАЛО ГЛАВНЫХ ИЗМЕНЕНИЙ <<<
+	// Шаг 3: Применяем фильтры из URL (status_id, branch_id и т.д.)
 	for key, value := range filter.Filter {
+		// Пропускаем поля, которые не разрешены для фильтрации
 		if !orderAllowedFilterFields[key] {
 			continue
 		}
-		if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
-			items := strings.Split(strVal, ",")
-			placeholders := make([]string, len(items))
-			for i, item := range items {
+
+		// Используем switch-case для проверки типа значения
+		switch v := value.(type) {
+		case []string:
+			// Этот блок работает для ?filter[branch_id]=1,2,4
+			// Если пришел срез строк, генерируем SQL-оператор IN (...)
+			placeholders := make([]string, len(v))
+			for i, item := range v {
 				placeholders[i] = fmt.Sprintf("$%d", placeholderNum)
-				allArgs = append(allArgs, item)
+				allArgs = append(allArgs, item) // Добавляем каждый элемент среза как отдельный аргумент
 				placeholderNum++
 			}
 			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", key, strings.Join(placeholders, ",")))
-		} else {
+
+		case string:
+			// Этот блок работает для ?filter[status_id]=1
+			// Если пришла обычная строка, генерируем оператор =
 			conditions = append(conditions, fmt.Sprintf("%s = $%d", key, placeholderNum))
-			allArgs = append(allArgs, value)
+			allArgs = append(allArgs, v)
 			placeholderNum++
+
+			// Можно добавить default для обработки других типов, если понадобится
 		}
 	}
+	// >>> КОНЕЦ ГЛАВНЫХ ИЗМЕНЕНИЙ <<<
 
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 
 	countQuery := fmt.Sprintf("SELECT COUNT(id) FROM %s %s", orderTable, whereClause)
 	var totalCount uint64
 	if err := r.storage.QueryRow(ctx, countQuery, allArgs...).Scan(&totalCount); err != nil {
+		// Ошибка происходит именно здесь, поэтому логируем аргументы
+		r.logger.Error("ошибка подсчета заявок", zap.Error(err), zap.String("query", countQuery), zap.Any("args", allArgs))
 		return nil, 0, fmt.Errorf("ошибка подсчета заявок: %w", err)
 	}
 
@@ -117,6 +136,7 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 		return []entities.Order{}, 0, nil
 	}
 
+	// ... (весь остальной код функции - orderByClause, limitClause, mainQuery - остается БЕЗ ИЗМЕНЕНИЙ) ...
 	orderByClause := "ORDER BY id DESC"
 	if len(filter.Sort) > 0 {
 		var sortParts []string
@@ -182,7 +202,7 @@ func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities
 	_, err := tx.Exec(ctx, query,
 		order.Name, order.Address, order.DepartmentID, order.OtdelID, order.BranchID,
 		order.OfficeID, order.EquipmentID, order.StatusID, order.PriorityID,
-		order.CreatorID, order.ExecutorID, utils.StringPtrToNullString(order.Duration), order.ID,
+		order.CreatorID, order.ExecutorID, order.Duration, order.ID,
 	)
 	return err
 }

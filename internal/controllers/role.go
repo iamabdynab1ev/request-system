@@ -23,76 +23,142 @@ func NewRoleController(roleService services.RoleServiceInterface, logger *zap.Lo
 }
 
 func (c *RoleController) GetRoles(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
-	res, total, err := c.roleService.GetRoles(ctx.Request().Context(), filter)
+
+	res, total, err := c.roleService.GetRoles(reqCtx, filter)
 	if err != nil {
-		c.logger.Error("ошибка получения списка ролей", zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+		c.logger.Error("GetRoles: ошибка получения списка ролей", zap.Error(err))
+		return utils.ErrorResponse(ctx, err, c.logger)
 	}
+
 	return utils.SuccessResponse(ctx, res, "Список ролей успешно получен", http.StatusOK, total)
 }
 
 func (c *RoleController) FindRole(ctx echo.Context) error {
-	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	reqCtx := ctx.Request().Context()
+	idParam := ctx.Param("id")
+
+	id, err := strconv.ParseUint(idParam, 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID роли"))
+		c.logger.Warn("FindRole: Неверный формат ID роли", zap.String("param", idParam), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат ID роли",
+				err,
+				map[string]interface{}{"param": idParam},
+			),
+			c.logger,
+		)
 	}
-	res, err := c.roleService.FindRole(ctx.Request().Context(), id)
+
+	res, err := c.roleService.FindRole(reqCtx, id)
 	if err != nil {
-		c.logger.Error("ошибка поиска роли", zap.Uint64("id", id), zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+		c.logger.Error("FindRole: ошибка поиска роли", zap.Uint64("id", id), zap.Error(err))
+		return utils.ErrorResponse(ctx, err, c.logger)
 	}
+
 	return utils.SuccessResponse(ctx, res, "Роль успешно найдена", http.StatusOK)
 }
 
 func (c *RoleController) CreateRole(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
 	var dto dto.CreateRoleDTO
 	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат запроса"))
-	}
-	if err := ctx.Validate(&dto); err != nil {
-		return utils.ErrorResponse(ctx, err)
+		c.logger.Warn("CreateRole: Неверный формат запроса", zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат запроса",
+				err,
+				nil,
+			),
+			c.logger,
+		)
 	}
 
-	res, err := c.roleService.CreateRole(ctx.Request().Context(), dto)
-	if err != nil {
-		c.logger.Error("ошибка создания роли", zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+	if err := ctx.Validate(&dto); err != nil {
+		c.logger.Error("CreateRole: Ошибка валидации DTO", zap.Error(err))
+		return utils.ErrorResponse(ctx, err, c.logger)
 	}
+
+	res, err := c.roleService.CreateRole(reqCtx, dto)
+	if err != nil {
+		c.logger.Error("CreateRole: Ошибка создания роли", zap.Error(err))
+		return utils.ErrorResponse(ctx, err, c.logger)
+	}
+
 	return utils.SuccessResponse(ctx, res, "Роль успешно создана", http.StatusCreated)
 }
 
 func (c *RoleController) UpdateRole(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID роли"))
+		c.logger.Warn("UpdateRole: Неверный формат ID роли", zap.String("param", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат ID роли",
+				err,
+				map[string]interface{}{"param": ctx.Param("id")},
+			),
+			c.logger,
+		)
 	}
 
 	var dto dto.UpdateRoleDTO
 	if err := ctx.Bind(&dto); err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат запроса"))
-	}
-	if err := ctx.Validate(&dto); err != nil {
-		return utils.ErrorResponse(ctx, err)
+		c.logger.Warn("UpdateRole: Неверный формат запроса", zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат запроса",
+				err,
+				nil,
+			),
+			c.logger,
+		)
 	}
 
-	res, err := c.roleService.UpdateRole(ctx.Request().Context(), id, dto)
-	if err != nil {
-		c.logger.Error("ошибка обновления роли", zap.Uint64("id", id), zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+	if err := ctx.Validate(&dto); err != nil {
+		c.logger.Error("UpdateRole: Ошибка валидации DTO", zap.Error(err))
+		return utils.ErrorResponse(ctx, err, c.logger)
 	}
+
+	res, err := c.roleService.UpdateRole(reqCtx, id, dto)
+	if err != nil {
+		c.logger.Error("UpdateRole: Ошибка при обновлении роли", zap.Uint64("id", id), zap.Error(err))
+		return utils.ErrorResponse(ctx, err, c.logger)
+	}
+
 	return utils.SuccessResponse(ctx, res, "Роль успешно обновлена", http.StatusOK)
 }
 
 func (c *RoleController) DeleteRole(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID роли"))
+		c.logger.Warn("DeleteRole: Неверный формат ID роли", zap.String("param", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат ID роли",
+				err,
+				map[string]interface{}{"param": ctx.Param("id")},
+			),
+			c.logger,
+		)
 	}
 
-	if err := c.roleService.DeleteRole(ctx.Request().Context(), id); err != nil {
-		c.logger.Error("ошибка удаления роли", zap.Uint64("id", id), zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+	if err := c.roleService.DeleteRole(reqCtx, id); err != nil {
+		c.logger.Error("DeleteRole: Ошибка при удалении роли", zap.Uint64("id", id), zap.Error(err))
+		return utils.ErrorResponse(ctx, err, c.logger)
 	}
+
 	return utils.SuccessResponse(ctx, struct{}{}, "Роль успешно удалена", http.StatusOK)
 }

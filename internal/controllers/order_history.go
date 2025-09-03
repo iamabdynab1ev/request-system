@@ -26,13 +26,32 @@ func (c *OrderHistoryController) GetHistoryForOrder(ctx echo.Context) error {
 
 	orderID, err := strconv.ParseUint(ctx.Param("orderID"), 10, 64)
 	if err != nil {
-		return utils.ErrorResponse(ctx, apperrors.ErrBadRequest)
+		c.logger.Error("GetHistoryForOrder: неверный формат ID заявки", zap.String("orderID", ctx.Param("orderID")), zap.Error(err))
+		return utils.ErrorResponse(
+			ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат ID заявки",
+				err,
+				map[string]interface{}{"param": ctx.Param("orderID")},
+			),
+			c.logger,
+		)
 	}
 
 	timeline, err := c.historyService.GetTimelineByOrderID(reqCtx, orderID)
 	if err != nil {
-		c.logger.Error("Ошибка при получении истории заявки", zap.Error(err), zap.Uint64("orderID", orderID))
-		return utils.ErrorResponse(ctx, err)
+		c.logger.Error("GetHistoryForOrder: ошибка при получении истории заявки", zap.Uint64("orderID", orderID), zap.Error(err))
+		return utils.ErrorResponse(
+			ctx,
+			apperrors.NewHttpError(
+				http.StatusInternalServerError,
+				"Не удалось получить историю заявки",
+				err,
+				nil,
+			),
+			c.logger,
+		)
 	}
 
 	return utils.SuccessResponse(ctx, timeline, "История заявки успешно получена", http.StatusOK)

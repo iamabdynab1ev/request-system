@@ -7,73 +7,56 @@ import (
 
 // HttpError - структура для кастомных HTTP-ошибок.
 type HttpError struct {
-	Code    int    `json:"-"`
-	Message string `json:"message"`
-	Err     error  `json:"-"` // Для внутреннего логирования
+	Code    int                    `json:"-"`
+	Message string                 `json:"message"` // Сообщение для пользователя
+	Err     error                  `json:"-"`       // Внутреннее сообщение для логов
+	Context map[string]interface{} `json:"-"`       // Доп. данные
 }
 
-// Error - реализация интерфейса error.
+// Error - реализация интерфейса error
 func (e *HttpError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("code: %d, message: %s, internal: %v", e.Code, e.Message, e.Err)
+	}
 	return fmt.Sprintf("code: %d, message: %s", e.Code, e.Message)
 }
 
-// NewHttpError - конструктор для создания новых ошибок.
-func NewHttpError(code int, message string, err error) *HttpError {
+// Конструктор
+func NewHttpError(code int, message string, err error, context map[string]interface{}) *HttpError {
 	return &HttpError{
 		Code:    code,
 		Message: message,
 		Err:     err,
+		Context: context,
 	}
 }
 
 func NewBadRequestError(message string) *HttpError {
-	// Если сообщение пустое, возвращаем стандартную ошибку.
 	if message == "" {
 		return ErrBadRequest
 	}
-	return NewHttpError(http.StatusBadRequest, message, nil)
+	return NewHttpError(http.StatusBadRequest, message, nil, nil)
 }
 
 // Предопределенные ошибки
 var (
-	// Ошибки валидации и запроса
-	ErrBadRequest               = NewHttpError(http.StatusBadRequest, "Неверный запрос", nil)
-	ErrValidation               = NewHttpError(http.StatusBadRequest, "Ошибка валидации данных", nil)
-	ErrHeadOfDepartmentNotFound = NewHttpError(http.StatusBadRequest, "Руководитель отдела не найден", nil)
-	ErrConflict                 = NewHttpError(http.StatusConflict, "Запрашиваемый ресурс уже существует", nil)
-	ErrNotImplemented           = NewHttpError(http.StatusNotImplemented, "Функционал не реализован", nil)
-	// Ошибки аутентификации
-	ErrUnauthorized       = NewHttpError(http.StatusUnauthorized, "Необходима авторизация", nil)
-	ErrEmptyAuthHeader    = NewHttpError(http.StatusUnauthorized, "Заголовок авторизации отсутствует", nil)
-	ErrInvalidAuthHeader  = NewHttpError(http.StatusUnauthorized, "Неверный формат заголовка авторизации", nil)
-	ErrInvalidCredentials = NewHttpError(http.StatusUnauthorized, "Неверные учётные данные", nil)
-	ErrAccountLocked      = NewHttpError(http.StatusLocked, "Аккаунт временно заблокирован", nil)
-
-	// Ошибки авторизации
-	ErrForbidden = NewHttpError(http.StatusForbidden, "Доступ запрещен", nil)
-
-	// Ошибки токенов
-	ErrInvalidToken      = NewHttpError(http.StatusUnauthorized, "Недопустимый или некорректный токен", nil)
-	ErrTokenExpired      = NewHttpError(http.StatusUnauthorized, "Срок действия токена истёк", nil)
-	ErrInvalidResetToken = NewHttpError(http.StatusBadRequest, "Невалидный или истекший токен сброса пароля", nil)
-	ErrTokenIsNotAccess  = NewHttpError(http.StatusUnauthorized, "Попытка доступа с refresh токеном", nil)
-
-	// Ошибки верификации
-	ErrInvalidVerificationCode = NewHttpError(http.StatusBadRequest, "Неверный код верификации", nil)
-
-	// Ошибки, связанные с данными
-	ErrNotFound       = NewHttpError(http.StatusNotFound, "Запрашиваемый ресурс не найден", nil)
-	ErrUserNotFound   = NewHttpError(http.StatusNotFound, "Пользователь не найден", nil)
-	ErrStatusNotFound = NewHttpError(http.StatusNotFound, "Статус не найден", nil)
-	ErrStatusInUse    = NewHttpError(http.StatusBadRequest, "Статус не может быть удален, так как он используется", nil)
-	ErrPriorityInUse  = NewHttpError(http.StatusBadRequest, "Невозможно удалить приоритет, так как он используется в заявках", nil)
-
-	// Внутренние ошибки
-	ErrInternalServer          = NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", nil)
-	ErrFileProcessing          = NewHttpError(http.StatusInternalServerError, "Ошибка сервера при обработке файла", nil)
-	ErrUserIDNotFoundInContext = NewHttpError(http.StatusInternalServerError, "UserID не найден в контексте запроса", nil)
-	ErrInvalidSigningMethod    = NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера: неверный метод подписи токена", nil)
-	ErrInvalidUserID           = NewHttpError(http.StatusInternalServerError, "UserID в контексте имеет неверный тип или равен нулю", nil)
-	ErrDefaultPriorityNotFound = NewHttpError(http.StatusInternalServerError, "Приоритет по умолчанию не найден", nil)
-	ErrDefaultStatusNotFound   = NewHttpError(http.StatusBadRequest, "Статус по умолчанию не найден", nil)
+	ErrBadRequest           = NewHttpError(http.StatusBadRequest, "Неверный запрос", nil, nil)
+	ErrValidation           = NewHttpError(http.StatusBadRequest, "Ошибка валидации данных", nil, nil)
+	ErrUnauthorized         = NewHttpError(http.StatusUnauthorized, "Необходима авторизация", nil, nil)
+	ErrForbidden            = NewHttpError(http.StatusForbidden, "Доступ запрещен", nil, nil)
+	ErrNotFound             = NewHttpError(http.StatusNotFound, "Запрашиваемый ресурс не найден", nil, nil)
+	ErrInternal             = NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", nil, nil)
+	ErrInvalidToken         = NewHttpError(http.StatusUnauthorized, "Недействительный токен", nil, nil)
+	ErrTokenExpired         = NewHttpError(http.StatusUnauthorized, "Срок действия токена истек", nil, nil)
+	ErrInvalidSigningMethod = NewHttpError(http.StatusUnauthorized, "Недействительный метод подписи токена", nil, nil)
+	ErrConflict             = NewHttpError(http.StatusConflict, "Ресурс уже существует", nil, nil)
+	ErrUserNotFound         = NewHttpError(http.StatusNotFound, "Пользователь не найден", nil, nil)
+	ErrPriorityInUse        = NewHttpError(http.StatusBadRequest, "Приоритет используется и не может быть удалён", nil, nil)
+	ErrStatusInUse          = NewHttpError(http.StatusBadRequest, "Статус используется и не может быть удалён", nil, nil)
+	ErrInvalidCredentials   = NewHttpError(http.StatusUnauthorized, "Неверные учетные данные", nil, nil)
+	ErrInternalServer       = NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", nil, nil)
+	ErrAccountLocked        = NewHttpError(http.StatusForbidden, "Аккаунт заблокирован", nil, nil)
+	ErrTokenIsNotAccess     = NewHttpError(http.StatusUnauthorized, "Токен не является access токеном", nil, nil)
+	ErrInvalidAuthHeader    = NewHttpError(http.StatusUnauthorized, "Недействительный заголовок авторизации", nil, nil)
+	ErrEmptyAuthHeader      = NewHttpError(http.StatusUnauthorized, "Отсутствует заголовок авторизации", nil, nil)
 )

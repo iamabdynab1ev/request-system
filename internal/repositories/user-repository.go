@@ -79,46 +79,43 @@ func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter, secu
 
 	// Шаг 1: Применяем фильтр безопасности, если он есть
 	if securityFilter != "" {
+		for i := 0; i < strings.Count(securityFilter, "?"); i++ {
+			securityFilter = strings.Replace(securityFilter, "?", fmt.Sprintf("$%d", placeholderNum), 1)
+			placeholderNum++
+		}
 		conditions = append(conditions, securityFilter)
 		allArgs = append(allArgs, securityArgs...)
-		placeholderNum += len(securityArgs)
 	}
 
-	// Шаг 2: Применяем текстовый поиск
+	// ИСПРАВЛЕНО: Логика фильтрации теперь, как в Order, поддерживает срезы
 	if filter.Search != "" {
-		searchPattern := "%" + filter.Search + "%"
-		// Правильный поиск по нескольким полям
+		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
 		searchCondition := fmt.Sprintf("(u.fio ILIKE $%d OR u.email ILIKE $%d OR u.phone_number ILIKE $%d)",
 			placeholderNum, placeholderNum+1, placeholderNum+2)
 		conditions = append(conditions, searchCondition)
-		allArgs = append(allArgs, searchPattern, searchPattern, searchPattern) // Передаем значение 3 раза для 3-х плейсхолдеров
+		allArgs = append(allArgs, searchPattern, searchPattern, searchPattern)
 		placeholderNum += 3
 	}
 
-	// Шаг 3: Применяем фильтры по конкретным полям
 	for key, value := range filter.Filter {
 		if !userAllowedFilterFields[key] {
-			continue // Пропускаем поля, которых нет в "белом списке"
+			continue
 		}
-
-		if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
-			// Обработка нескольких значений (например, filter[role_id]=1,2)
-			items := strings.Split(strVal, ",")
-			placeholders := make([]string, len(items))
-			for i, item := range items {
+		switch v := value.(type) {
+		case []string: // Для filter[role_id]=1,2
+			placeholders := make([]string, len(v))
+			for i, item := range v {
 				placeholders[i] = fmt.Sprintf("$%d", placeholderNum)
 				allArgs = append(allArgs, item)
 				placeholderNum++
 			}
 			conditions = append(conditions, fmt.Sprintf("u.%s IN (%s)", key, strings.Join(placeholders, ",")))
-		} else {
-			// Обработка одного значения
+		case string: // Для filter[status_id]=1
 			conditions = append(conditions, fmt.Sprintf("u.%s = $%d", key, placeholderNum))
-			allArgs = append(allArgs, value)
+			allArgs = append(allArgs, v)
 			placeholderNum++
 		}
 	}
-
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 
 	// Шаг 4: Считаем общее количество записей с учетом всех фильтров
@@ -258,20 +255,37 @@ func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) 
 	createdEntity, err := scanUser(row)
 	if err != nil {
 		if pgErr, ok := err.(*pgconn.PgError); ok {
-			if pgErr.Code == "23505" {
+			switch pgErr.Code {
+			case "23505":
 				if strings.Contains(pgErr.ConstraintName, "users_email_key") {
-					return nil, apperrors.NewHttpError(http.StatusBadRequest, "Email уже используется.", err)
+					return nil, apperrors.NewHttpError(
+						http.StatusBadRequest,
+						"Email уже используется",
+						err,
+						map[string]interface{}{"email": entity.Email},
+					)
 				}
 				if strings.Contains(pgErr.ConstraintName, "users_phone_number_key") {
-					return nil, apperrors.NewHttpError(http.StatusBadRequest, "Номер телефона уже используется.", err)
+					return nil, apperrors.NewHttpError(
+						http.StatusBadRequest,
+						"Номер телефона уже используется",
+						err,
+						map[string]interface{}{"phone": entity.PhoneNumber},
+					)
 				}
-			}
-			if pgErr.Code == "23503" {
-				return nil, apperrors.NewHttpError(http.StatusBadRequest, "Нарушение внешнего ключа (неверный ID роли, отдела и т.д.).", err)
+			case "23503":
+				return nil, apperrors.NewHttpError(
+					http.StatusBadRequest,
+					"Неверный ID роли, отдела или другого внешнего ключа",
+					err,
+					nil,
+				)
 			}
 		}
-		return nil, err
+
+		return nil, apperrors.ErrInternal
 	}
+
 	return createdEntity, nil
 }
 

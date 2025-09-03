@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 
@@ -39,153 +38,115 @@ func NewUserController(
 	}
 }
 
+func (c *UserController) errorResponse(ctx echo.Context, err error) error {
+	return utils.ErrorResponse(ctx, err, c.logger)
+}
+
 func (c *UserController) GetUsers(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 
 	res, totalCount, err := c.userService.GetUsers(reqCtx, filter)
 	if err != nil {
 		c.logger.Error("Ошибка при получении списка пользователей", zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+		return c.errorResponse(ctx, err)
 	}
 
 	return utils.SuccessResponse(ctx, res, "Пользователи успешно получены", http.StatusOK, totalCount)
 }
 
+// --- Find single user ---
 func (c *UserController) FindUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID пользователя из URL", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid user ID format: %w", apperrors.ErrBadRequest))
+		return c.errorResponse(ctx, apperrors.NewHttpError(
+			http.StatusBadRequest,
+			"Неверный формат ID пользователя",
+			err,
+			map[string]interface{}{"id": ctx.Param("id")},
+		))
 	}
 
 	res, err := c.userService.FindUser(reqCtx, id)
 	if err != nil {
 		c.logger.Error("Ошибка при поиске пользователя по ID", zap.Uint64("id", id), zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+		return c.errorResponse(ctx, err)
 	}
 
-	return utils.SuccessResponse(ctx, res, "Successfully", http.StatusOK)
+	return utils.SuccessResponse(ctx, res, "Пользователь успешно найден", http.StatusOK)
 }
 
 func (c *UserController) CreateUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-
 	dataString := ctx.FormValue("data")
 	if dataString == "" {
-		return utils.ErrorResponse(ctx, fmt.Errorf("поле 'data' в form-data обязательно: %w", apperrors.ErrBadRequest))
+		return c.errorResponse(ctx, apperrors.NewHttpError(
+			http.StatusBadRequest,
+			"Поле 'data' в form-data обязательно",
+			apperrors.ErrBadRequest,
+			nil,
+		))
 	}
 
-	var formData struct {
-		Fio          string  `json:"fio"`
-		Email        string  `json:"email"`
-		PhoneNumber  string  `json:"phone_number"`
-		Position     string  `json:"position"`
-		Password     string  `json:"password"`
-		StatusID     uint64  `json:"status_id"`
-		RoleID       uint64  `json:"role_id"`
-		BranchID     uint64  `json:"branch_id"`
-		DepartmentID uint64  `json:"department_id"`
-		OfficeID     *uint64 `json:"office_id"`
-		OtdelID      *uint64 `json:"otdel_id"`
-	}
+	var formData dto.CreateUserDTO
 	if err := json.Unmarshal([]byte(dataString), &formData); err != nil {
 		c.logger.Error("Ошибка десериализации 'data'", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("некорректный JSON в поле 'data': %w", apperrors.ErrBadRequest))
+		return c.errorResponse(ctx, apperrors.NewHttpError(
+			http.StatusBadRequest,
+			"Некорректный JSON в поле 'data'",
+			err,
+			nil,
+		))
 	}
 
-	finalDTO := dto.CreateUserDTO{
-		Fio:          formData.Fio,
-		Email:        formData.Email,
-		PhoneNumber:  formData.PhoneNumber,
-		Position:     formData.Position,
-		Password:     formData.Password,
-		StatusID:     formData.StatusID,
-		RoleID:       formData.RoleID,
-		BranchID:     formData.BranchID,
-		DepartmentID: formData.DepartmentID,
-		OfficeID:     formData.OfficeID,
-		OtdelID:      formData.OtdelID,
-	}
-
-	file, err := ctx.FormFile("photoFile")
-	if err != nil && err != http.ErrMissingFile {
-		return utils.ErrorResponse(ctx, fmt.Errorf("ошибка при чтении файла: %w", err))
-	}
-
-	if file != nil {
-		src, err := file.Open()
-		if err != nil {
-			c.logger.Error("Не удалось открыть файл фото", zap.Error(err))
-			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
-		}
-		defer src.Close()
-
-		const uploadContext = "profile_photo"
-
-		if err := utils.ValidateFile(file, src, uploadContext); err != nil {
-			return utils.ErrorResponse(ctx, fmt.Errorf("файл фото не прошел валидацию: %w", err))
-		}
-
-		rules, _ := config.UploadContexts[uploadContext]
-
-		// Сохраняем файл, передавая префикс пути
-		savedPath, err := c.fileStorage.Save(src, file.Filename, rules.PathPrefix)
-		if err != nil {
-			c.logger.Error("Ошибка сохранения фото профиля", zap.Error(err))
-			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
-		}
-
-		fileURL := "/uploads/" + savedPath
-		finalDTO.PhotoURL = &fileURL
-	}
-	res, err := c.userService.CreateUser(reqCtx, finalDTO)
+	photoURL, err := c.handlePhotoUpload(ctx, "profile_photo")
 	if err != nil {
-		return utils.ErrorResponse(ctx, err)
+		return c.errorResponse(ctx, err)
+	}
+	formData.PhotoURL = photoURL
+
+	res, err := c.userService.CreateUser(reqCtx, formData)
+	if err != nil {
+		return c.errorResponse(ctx, err)
 	}
 
-	return utils.SuccessResponse(ctx, res, "Successfully created", http.StatusCreated)
+	return utils.SuccessResponse(ctx, res, "Пользователь успешно создан", http.StatusCreated)
 }
 
 func (c *UserController) UpdateUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-
 	idFromURL, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID из URL для обновления", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid user ID: %w", apperrors.ErrBadRequest))
+		return c.errorResponse(ctx, apperrors.NewHttpError(
+			http.StatusBadRequest,
+			"Неверный формат ID пользователя",
+			err,
+			map[string]interface{}{"id": ctx.Param("id")},
+		))
 	}
 
 	dataString := ctx.FormValue("data")
 	finalDTO := dto.UpdateUserDTO{ID: idFromURL}
 
 	if dataString != "" {
-		var formData struct {
-			Fio          string  `json:"fio"`
-			Email        string  `json:"email"`
-			PhoneNumber  string  `json:"phone_number"`
-			Position     string  `json:"position"`
-			Password     string  `json:"password"`
-			StatusID     uint64  `json:"status_id"`
-			RoleID       uint64  `json:"role_id"`
-			BranchID     uint64  `json:"branch_id"`
-			DepartmentID uint64  `json:"department_id"`
-			OfficeID     *uint64 `json:"office_id"`
-			OtdelID      *uint64 `json:"otdel_id"`
-		}
+		var formData dto.UpdateUserDTO
 		if err = json.Unmarshal([]byte(dataString), &formData); err != nil {
 			c.logger.Error("Ошибка десериализации 'data' при обновлении", zap.Error(err))
-			return utils.ErrorResponse(ctx, fmt.Errorf("некорректный JSON в 'data': %w", apperrors.ErrBadRequest))
+			return c.errorResponse(ctx, apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Некорректный JSON в 'data'",
+				err,
+				nil,
+			))
 		}
 
 		finalDTO.Fio = formData.Fio
 		finalDTO.Email = formData.Email
 		finalDTO.PhoneNumber = formData.PhoneNumber
 		finalDTO.Position = formData.Position
-		finalDTO.Password = formData.Password
 		finalDTO.StatusID = formData.StatusID
 		finalDTO.RoleID = formData.RoleID
 		finalDTO.BranchID = formData.BranchID
@@ -194,63 +155,86 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 		finalDTO.OtdelID = formData.OtdelID
 	}
 
-	file, err := ctx.FormFile("photoFile")
-	if err != nil && err != http.ErrMissingFile {
-		return utils.ErrorResponse(ctx, fmt.Errorf("ошибка при чтении файла: %w", err))
+	photoURL, err := c.handlePhotoUpload(ctx, "profile_photo")
+	if err != nil {
+		return c.errorResponse(ctx, err)
 	}
-
-	if file != nil {
-		src, err := file.Open()
-		if err != nil {
-			c.logger.Error("Не удалось открыть файл фото при обновлении", zap.Error(err))
-			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
-		}
-		defer src.Close()
-
-		const uploadContext = "profile_photo"
-
-		if err := utils.ValidateFile(file, src, uploadContext); err != nil {
-			return utils.ErrorResponse(ctx, fmt.Errorf("файл фото не прошел валидацию: %w", err))
-		}
-
-		rules, _ := config.UploadContexts[uploadContext]
-
-		savedPath, err := c.fileStorage.Save(src, file.Filename, rules.PathPrefix)
-		if err != nil {
-			c.logger.Error("Ошибка сохранения фото профиля при обновлении", zap.Error(err))
-			return utils.ErrorResponse(ctx, apperrors.ErrInternalServer)
-		}
-
-		fileURL := "/uploads/" + savedPath
-		finalDTO.PhotoURL = &fileURL
-	}
+	finalDTO.PhotoURL = photoURL
 
 	if err = ctx.Validate(&finalDTO); err != nil {
-		return utils.ErrorResponse(ctx, err)
+		return c.errorResponse(ctx, err)
 	}
 
 	res, err := c.userService.UpdateUser(reqCtx, finalDTO)
 	if err != nil {
-		return utils.ErrorResponse(ctx, err)
+		return c.errorResponse(ctx, err)
 	}
 
-	return utils.SuccessResponse(ctx, res, "Successfully updated", http.StatusOK)
+	return utils.SuccessResponse(ctx, res, "Пользователь успешно обновлен", http.StatusOK)
 }
 
 func (c *UserController) DeleteUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		c.logger.Error("Ошибка парсинга ID пользователя из URL для удаления", zap.Error(err))
-		return utils.ErrorResponse(ctx, fmt.Errorf("invalid user ID format: %w", apperrors.ErrBadRequest))
+		return c.errorResponse(ctx, apperrors.NewHttpError(
+			http.StatusBadRequest,
+			"Неверный формат ID пользователя",
+			err,
+			map[string]interface{}{"id": ctx.Param("id")},
+		))
 	}
 
-	err = c.userService.DeleteUser(reqCtx, id)
+	if err := c.userService.DeleteUser(reqCtx, id); err != nil {
+		c.logger.Error("Ошибка при мягком удалении пользователя в сервисе",
+			zap.Uint64("id", id),
+			zap.Error(err),
+		)
+		return c.errorResponse(ctx, err)
+	}
+
+	return utils.SuccessResponse(ctx, struct{}{}, "Пользователь успешно удален", http.StatusOK)
+}
+
+func (c *UserController) handlePhotoUpload(ctx echo.Context, uploadContext string) (*string, error) {
+	file, err := ctx.FormFile("photoFile")
 	if err != nil {
-		c.logger.Error("Ошибка при мягком удалении пользователя в сервисе", zap.Uint64("id", id), zap.Error(err))
-		return utils.ErrorResponse(ctx, err)
+		if err == http.ErrMissingFile {
+			return nil, nil
+		}
+		return nil, apperrors.NewHttpError(
+			http.StatusBadRequest,
+			"Ошибка при чтении файла",
+			err,
+			nil,
+		)
 	}
 
-	return utils.SuccessResponse(ctx, struct{}{}, "Successfully deleted", http.StatusOK)
+	src, err := file.Open()
+	if err != nil {
+		c.logger.Error("Не удалось открыть файл", zap.Error(err))
+		return nil, apperrors.ErrInternalServer
+	}
+	defer src.Close()
+
+	if err := utils.ValidateFile(file, src, uploadContext); err != nil {
+		return nil, apperrors.NewHttpError(
+			http.StatusBadRequest,
+			"Файл не прошел валидацию",
+			err,
+			nil,
+		)
+	}
+
+	rules, _ := config.UploadContexts[uploadContext]
+
+	savedPath, err := c.fileStorage.Save(src, file.Filename, rules.PathPrefix)
+	if err != nil {
+		c.logger.Error("Ошибка сохранения файла", zap.Error(err))
+		return nil, apperrors.ErrInternalServer
+	}
+
+	fileURL := "/uploads/" + savedPath
+	return &fileURL, nil
 }

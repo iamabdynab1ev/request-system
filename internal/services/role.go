@@ -73,15 +73,26 @@ func (s *RoleService) GetRoles(ctx context.Context, filter types.Filter) ([]dto.
 		return []dto.RoleDTO{}, 0, nil
 	}
 
+	// Репозиторий теперь возвращает роли СРАЗУ с правами
 	entities, err := s.repo.GetRoles(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
 
+	// Конвертируем в DTO
 	dtos := make([]dto.RoleDTO, 0, len(entities))
 	for _, role := range entities {
-		dtos = append(dtos, *roleEntityToDTO(&role, []uint64{}))
+		dtos = append(dtos, dto.RoleDTO{
+			ID:          role.ID,
+			Name:        role.Name,
+			Description: role.Description,
+			StatusID:    role.StatusID,
+			Permissions: role.Permissions,
+			CreatedAt:   *role.CreatedAt,
+			UpdatedAt:   *role.UpdatedAt,
+		})
 	}
+
 	return dtos, total, nil
 }
 

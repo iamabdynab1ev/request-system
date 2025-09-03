@@ -58,15 +58,16 @@ func main() {
 		DisableStackAll: true,
 		StackSize:       1 << 10,
 		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
+			// Используем новую функцию с логером
 			logger.Error("!!! ОБНАРУЖЕНА ПАНИКА (PANIC) !!!",
 				zap.String("method", c.Request().Method),
 				zap.String("uri", c.Request().RequestURI),
-				zap.Any("error", err),
+				zap.Error(err),
 				zap.String("stack", string(stack)),
 			)
 			if !c.Response().Committed {
-				httpErr := apperrors.NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", err)
-				utils.ErrorResponse(c, httpErr)
+				httpErr := apperrors.NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", err, nil)
+				utils.ErrorResponse(c, httpErr, logger)
 			}
 			return err
 		},
@@ -80,17 +81,30 @@ func main() {
 	})
 
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{
-			"http://localhost:5173",
-			"https://6cbea72d26ee.ngrok-free.app",
-			"https://5d6248dfbdff.ngrok-free.app",
+		AllowOriginFunc: func(origin string) (bool, error) {
+			allowedOrigin := "https://d41fdadc8416.ngrok-free.app"
+			if origin == allowedOrigin {
+				return true, nil
+			}
+			return false, nil
 		},
-		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "ngrok-skip-browser-warning"},
+		AllowMethods: []string{
+			http.MethodGet,
+			http.MethodPost,
+			http.MethodPut,
+			http.MethodDelete,
+			http.MethodOptions,
+		},
+		AllowHeaders: []string{
+			echo.HeaderOrigin,
+			echo.HeaderContentType,
+			echo.HeaderAccept,
+			echo.HeaderAuthorization,
+			"ngrok-skip-browser-warning",
+		},
 		AllowCredentials: true,
 		ExposeHeaders:    []string{"Content-Disposition"},
 	}))
-
 	absPath, err := filepath.Abs("./uploads")
 	if err != nil {
 		logger.Fatal("не удалось получить абсолютный путь к uploads", zap.Error(err))

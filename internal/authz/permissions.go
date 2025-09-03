@@ -1,10 +1,8 @@
 package authz
 
 const (
-	// ГЛОБАЛЬНЫЕ
-	Superuser = "superuser" // Полный доступ, обходит все проверки.
+	Superuser = "superuser"
 
-	// СЛОЖНЫЕ СУЩНОСТИ
 	OrdersCreate = "orders:create"
 	OrdersView   = "orders:view"
 	OrdersUpdate = "orders:update"
@@ -15,20 +13,16 @@ const (
 	UsersUpdate = "users:update"
 	UsersDelete = "users:delete"
 
-	// СПРАВОЧНИКИ И УПРАВЛЕНИЕ СИСТЕМОЙ
-	// Для каждой сущности свой, независимый набор прав
-
 	RolesCreate = "roles:create"
 	RolesView   = "roles:view"
 	RolesUpdate = "roles:update"
 	RolesDelete = "roles:delete"
 
-	PermissionsView = "permissions:view" // Управлять (C/U/D) может только superuser
-
-	StatusesCreate = "statuses:create"
-	StatusesView   = "statuses:view"
-	StatusesUpdate = "statuses:update"
-	StatusesDelete = "statuses:delete"
+	PermissionsView = "permissions:view"
+	StatusesCreate  = "statuses:create"
+	StatusesView    = "statuses:view"
+	StatusesUpdate  = "statuses:update"
+	StatusesDelete  = "statuses:delete"
 
 	PrioritiesCreate = "priorities:create"
 	PrioritiesView   = "priorities:view"

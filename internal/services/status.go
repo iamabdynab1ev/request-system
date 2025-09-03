@@ -132,7 +132,12 @@ func (s *StatusService) CreateStatus(
 
 		// ИЗМЕНЕНИЕ ЗДЕСЬ
 		if err = utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
-			return nil, apperrors.NewHttpError(http.StatusBadRequest, "Маленькая иконка: "+err.Error(), err)
+			return nil, apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Маленькая иконка: "+err.Error(),
+				err,
+				nil,
+			)
 		}
 
 		// И ИЗМЕНЕНИЕ ЗДЕСЬ
@@ -155,7 +160,12 @@ func (s *StatusService) CreateStatus(
 
 		// ИЗМЕНЕНИЕ ЗДЕСЬ
 		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
-			return nil, apperrors.NewHttpError(http.StatusBadRequest, "Большая иконка: "+err.Error(), err)
+			return nil, apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Большая иконка: "+err.Error(),
+				err,
+				nil,
+			)
 		}
 
 		// И ИЗМЕНЕНИЕ ЗДЕСЬ

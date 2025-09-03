@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"request-system/config"
+	apperrors "request-system/pkg/errors"
 	"request-system/pkg/filestorage"
 	"request-system/pkg/utils"
 
@@ -18,46 +19,79 @@ type UploadController struct {
 	logger      *zap.Logger
 }
 
-func NewUploadController(fs filestorage.FileStorageInterface, logger *zap.Logger) *UploadController {
-	return &UploadController{fileStorage: fs, logger: logger}
-}
-
 func (ctrl *UploadController) Upload(c echo.Context) error {
 	uploadContext := c.Param("context")
 
 	// Получаем правила из конфига
 	rules, ok := config.UploadContexts[uploadContext]
 	if !ok {
-		return utils.ErrorResponse(c, echo.NewHTTPError(http.StatusBadRequest, "Неизвестный контекст загрузки"))
+		return utils.ErrorResponse(c,
+			apperrors.NewHttpError(
+				http.StatusBadRequest, // код HTTP
+				"Неизвестный контекст загрузки", // сообщение для пользователя
+				apperrors.ErrBadRequest,                          // внутренняя ошибка для логов (error)
+				map[string]interface{}{"context": uploadContext}, // контекст (можно nil)
+			),
+			ctrl.logger,
+		)
 	}
 
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		return utils.ErrorResponse(c, echo.NewHTTPError(http.StatusBadRequest, "Файл не был передан"))
+		return utils.ErrorResponse(c,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Файл не был передан",
+				apperrors.ErrBadRequest,
+				nil,
+			),
+			ctrl.logger,
+		)
 	}
 
 	src, err := fileHeader.Open()
 	if err != nil {
-		return utils.ErrorResponse(c, echo.NewHTTPError(http.StatusInternalServerError, "Ошибка обработки файла"))
+		return utils.ErrorResponse(c,
+			apperrors.NewHttpError(
+				http.StatusInternalServerError,
+				"Ошибка обработки файла",
+				apperrors.ErrBadRequest,
+				nil,
+			),
+			ctrl.logger,
+		)
 	}
 	defer src.Close()
 
 	if err := utils.ValidateFile(fileHeader, src, uploadContext); err != nil {
-		return utils.ErrorResponse(c, echo.NewHTTPError(http.StatusBadRequest, err.Error()))
+		return utils.ErrorResponse(c,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				err.Error(),
+				apperrors.ErrBadRequest,
+				nil,
+			),
+			ctrl.logger,
+		)
 	}
 
-	// Передаем префикс из конфига в метод Save
+	// Сохраняем файл
 	savedPath, err := ctrl.fileStorage.Save(src, fileHeader.Filename, rules.PathPrefix)
 	if err != nil {
 		ctrl.logger.Error("Ошибка сохранения файла", zap.Error(err))
-		return utils.ErrorResponse(c, echo.NewHTTPError(http.StatusInternalServerError, "Ошибка сохранения файла"))
+		return utils.ErrorResponse(c,
+			apperrors.NewHttpError(
+				http.StatusInternalServerError,
+				"Ошибка сохранения файла",
+				err,
+				nil,
+			),
+			ctrl.logger,
+		)
 	}
 
-	// Теперь просто добавляем корневой `/uploads/` к пути, который вернул `Save`
-	// `Save` вернет, например: "avatars/2024/05/20/file.jpg"
-	// `fileURL` станет: "/uploads/avatars/2024/05/20/file.jpg"
+	// Формируем URL
 	fileURL := "/uploads/" + savedPath
-
 	response := map[string]interface{}{
 		"url":      fileURL,
 		"filePath": savedPath,

@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -55,7 +56,7 @@ func (r *RoleRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 
 func (r *RoleRepository) buildFilterQuery(filter types.Filter) (string, []interface{}) {
 	args := make([]interface{}, 0)
-	conditions := []string{} // >>> ИСПРАВЛЕНИЕ: Начинаем с пустого среза <<<
+	conditions := []string{}
 	argCounter := 1
 
 	if filter.Search != "" {
@@ -119,15 +120,24 @@ func (r *RoleRepository) GetRoles(ctx context.Context, filter types.Filter) ([]e
 		args = append(args, filter.Limit, filter.Offset)
 	}
 
+	// НАДЕЖНЫЙ ЗАПРОС С JSON_AGG
 	query := fmt.Sprintf(`
-		SELECT r.id, r.name, r.description, r.status_id, r.created_at, r.updated_at
-		FROM %s r
-		%s %s %s
-	`, roleTable, whereClause, orderByClause, limitClause)
+		SELECT 
+			r.id, r.name, r.description, r.status_id, r.created_at, r.updated_at,
+			COALESCE(
+				(SELECT json_agg(rp.permission_id) FROM role_permissions rp WHERE rp.role_id = r.id),
+				'[]'::json
+			) AS permission_ids
+		FROM 
+			roles r
+		%s
+		%s
+		%s
+	`, whereClause, orderByClause, limitClause)
 
 	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
-		r.logger.Error("ошибка получения списка ролей", zap.Error(err), zap.String("query", query))
+		r.logger.Error("ошибка получения списка ролей с правами", zap.Error(err), zap.String("query", query))
 		return nil, err
 	}
 	defer rows.Close()
@@ -136,19 +146,35 @@ func (r *RoleRepository) GetRoles(ctx context.Context, filter types.Filter) ([]e
 	for rows.Next() {
 		var role entities.Role
 		var createdAt, updatedAt time.Time
-		err := rows.Scan(&role.ID, &role.Name, &role.Description, &role.StatusID, &createdAt, &updatedAt)
+		var permissionIDsBytes []byte // Получаем JSON как байты
+
+		err := rows.Scan(
+			&role.ID, &role.Name, &role.Description, &role.StatusID,
+			&createdAt, &updatedAt, &permissionIDsBytes,
+		)
 		if err != nil {
 			r.logger.Error("ошибка сканирования строки роли", zap.Error(err))
 			return nil, err
 		}
+
+		// Распаковываем JSON прямо в поле `Permissions` нашей роли
+		if err := json.Unmarshal(permissionIDsBytes, &role.Permissions); err != nil {
+			r.logger.Error("ошибка распаковки permission_ids из JSON", zap.Error(err))
+			// Не возвращаем ошибку, просто у роли будет пустой срез прав
+			role.Permissions = []uint64{}
+		}
+
 		role.CreatedAt = &createdAt
 		role.UpdatedAt = &updatedAt
 		roles = append(roles, role)
 	}
+
 	if err = rows.Err(); err != nil {
 		r.logger.Error("ошибка после итерации по ролям", zap.Error(err))
 		return nil, err
 	}
+
+	// Возвращаем []entities.Role, как и ожидает твой сервис
 	return roles, nil
 }
 
@@ -200,7 +226,6 @@ func (r *RoleRepository) CreateRoleInTx(ctx context.Context, tx pgx.Tx, role ent
 }
 
 func (r *RoleRepository) UpdateRoleInTx(ctx context.Context, tx pgx.Tx, role entities.Role) error {
-	// >>> ИСПРАВЛЕНИЕ: Убрали `deleted_at` <<<
 	query := `UPDATE roles SET name = $1, description = $2, status_id = $3, updated_at = NOW() WHERE id = $4`
 	result, err := tx.Exec(ctx, query, role.Name, role.Description, role.StatusID, role.ID)
 	if err != nil {

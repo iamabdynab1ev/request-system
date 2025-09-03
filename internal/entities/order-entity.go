@@ -17,8 +17,7 @@ type Order struct {
 	EquipmentID  *uint64      `db:"equipment_id"`
 	CreatorID    uint64       `db:"user_id"`
 	ExecutorID   uint64       `db:"executor_id"`
-	Duration     *string      `db:"duration"`
-	Comment      *string      `db:"comment"`
+	Duration     *time.Time   `db:"duration"`
 	Address      string       `db:"address"`
 	CreatedAt    time.Time    `db:"created_at"`
 	UpdatedAt    time.Time    `db:"updated_at"`

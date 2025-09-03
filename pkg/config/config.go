@@ -10,10 +10,11 @@ import (
 )
 
 type AuthConfig struct {
-	MaxLoginAttempts    int           `yaml:"max_login_attempts"`
-	LockoutDuration     time.Duration `yaml:"lockout_duration"`
-	ResetTokenTTL       time.Duration `yaml:"reset_token_ttl"`
-	VerificationCodeTTL time.Duration `yaml:"verification_code_ttl"`
+	ResetTokenTTL       time.Duration
+	VerificationCodeTTL time.Duration
+	MaxResetAttempts    int
+	MaxLoginAttempts    int
+	LockoutDuration     time.Duration
 }
 
 type JWTConfig struct {
@@ -65,10 +66,11 @@ func New() *Config {
 			RefreshTokenTTL: time.Hour * 24 * 30,
 		},
 		Auth: AuthConfig{
+			MaxResetAttempts:    5,
 			MaxLoginAttempts:    5,
 			LockoutDuration:     time.Minute * 15,
 			ResetTokenTTL:       time.Minute * 15,
-			VerificationCodeTTL: time.Minute * 5,
+			VerificationCodeTTL: time.Minute * 15,
 		},
 	}
 }

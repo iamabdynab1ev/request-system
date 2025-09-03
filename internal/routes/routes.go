@@ -35,7 +35,6 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 
 	runStatusRouter(secureGroup, dbConn, logger, authMW)
 
-	runUploadRouter(secureGroup, fileStorage, logger)
 	RunPriorityRouter(secureGroup, dbConn, logger, authMW)
 	runDepartmentRouter(secureGroup, dbConn, logger, authMW)
 	runOtdelRouter(secureGroup, dbConn, logger, authMW)
@@ -50,7 +49,7 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	runOrderRouter(secureGroup, dbConn, logger, authMW)
 
 	runEquipmentRouter(secureGroup, dbConn, logger, authMW)
-	RunOrderDocumentRouter(secureGroup, dbConn, logger)
+
 	runPositionRouter(secureGroup, dbConn, logger)
 	runOrderHistoryRouter(secureGroup, dbConn, logger, authMW)
 	runAttachmentRouter(secureGroup, dbConn, fileStorage, logger)

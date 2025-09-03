@@ -14,13 +14,14 @@ var UploadContexts = map[string]UploadConfig{
 	"profile_photo": {
 		AllowedMimeTypes: []string{"image/jpeg", "image/png", "image/gif", "image/webp", "image/jpg"},
 		MaxSizeMB:        20,
-		MinWidth:         200,
-		MinHeight:        8500,
+		MinWidth:         50,
+		MinHeight:        50,
 		PathPrefix:       "avatars",
 	},
 	"order_document": {
 		AllowedMimeTypes: []string{
-			"image/jpeg", "image/png", "application/pdf", "image/jpg",
+			"image/jpeg", "image/png", "application/pdf", "image/jpg", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			"application/vnd.oasis.opendocument.text", "application/vnd.oasis.opendocument.presentation", "application/vnd.oasis.opendocument.spreadsheet",
 		},
 		MaxSizeMB:  20,
 		PathPrefix: "orders",

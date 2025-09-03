@@ -35,7 +35,7 @@ type DelegateOrderDTO struct {
 	ExecutorID   *uint64 `json:"executor_id" validate:"required,gt=0"`
 	StatusID     *uint64 `json:"status_id" validate:"required,gt=0"`
 	PriorityID   *uint64 `json:"priority_id" validate:"required,gt=0"`
-	Duration     *string `json:"duration,omitempty" validate:"omitempty,duration_format"`
+	Duration     *string `json:"duration,omitempty" validate:"omitempty,datetime=2006-01-02T15:04:05Z07:00"`
 	Comment      *string `json:"comment" validate:"required,min=3"`
 	Name         *string `json:"name,omitempty" validate:"omitempty,min=5,max=255"`
 	Address      *string `json:"address,omitempty" validate:"omitempty,min=5"`
@@ -59,6 +59,6 @@ type UpdateOrderDTO struct {
 	ExecutorID   *uint64 `json:"executor_id,omitempty" validate:"omitempty,gt=0"`
 	StatusID     *uint64 `json:"status_id,omitempty" validate:"omitempty,gt=0"`
 	PriorityID   *uint64 `json:"priority_id,omitempty" validate:"omitempty,gt=0"`
-	Duration     *string `json:"duration,omitempty" validate:"omitempty,duration_format"`
+	Duration     *string `json:"duration,omitempty" validate:"omitempty,datetime=2006-01-02T15:04:05Z07:00"`
 	Comment      *string `json:"comment,omitempty" validate:"omitempty,min=3"`
 }

@@ -1,0 +1,239 @@
+package controllers
+
+/*import (
+	"net/http"
+	"strconv"
+
+	"request-system/internal/dto"
+	"request-system/internal/services"
+	apperrors "request-system/pkg/errors"
+	"request-system/pkg/utils"
+
+	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
+)
+
+type OrderDocumentController struct {
+	orderDocumentService *services.OrderDocumentService
+	logger               *zap.Logger
+}
+
+func NewOrderDocumentController(
+	orderDocumentService *services.OrderDocumentService,
+	logger *zap.Logger,
+) *OrderDocumentController {
+	return &OrderDocumentController{
+		orderDocumentService: orderDocumentService,
+		logger:               logger,
+	}
+}
+
+func (c *OrderDocumentController) GetOrderDocuments(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
+
+	res, total, err := c.orderDocumentService.GetOrderDocuments(
+		reqCtx,
+		uint64(filter.Limit),
+		uint64(filter.Offset),
+	)
+	if err != nil {
+		c.logger.Error("GetOrderDocuments: ошибка при получении списка документов заказа", zap.Error(err))
+		return utils.ErrorResponse(
+			ctx,
+			apperrors.NewHttpError(
+				http.StatusInternalServerError,
+				"Не удалось получить документы заказа",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	return utils.SuccessResponse(
+		ctx,
+		res,
+		"Список документов заказа успешно получен",
+		http.StatusOK,
+		total,
+	)
+}
+
+func (c *OrderDocumentController) FindOrderDocument(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
+	idParam := ctx.Param("id")
+	id, err := strconv.ParseUint(idParam, 10, 64)
+	if err != nil {
+		c.logger.Error("FindOrderDocument: некорректный ID документа заказа", zap.String("id", idParam), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат ID документа заказа",
+				err,
+				map[string]interface{}{"param": idParam},
+			),
+			c.logger,
+		)
+	}
+
+	res, err := c.orderDocumentService.FindOrderDocument(reqCtx, id)
+	if err != nil {
+		c.logger.Error("FindOrderDocument: ошибка поиска документа заказа", zap.Uint64("id", id), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusInternalServerError,
+				"Не удалось найти документ заказа",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	return utils.SuccessResponse(ctx, res, "Документ заказа успешно найден", http.StatusOK)
+}
+
+func (c *OrderDocumentController) CreateOrderDocument(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
+	var dto dto.CreateOrderDocumentDTO
+	if err := ctx.Bind(&dto); err != nil {
+		c.logger.Error("CreateOrderDocument: некорректный запрос", zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат запроса для создания документа заказа",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	if err := ctx.Validate(&dto); err != nil {
+		c.logger.Error("CreateOrderDocument: ошибка валидации DTO", zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Ошибка валидации данных для документа заказа",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	res, err := c.orderDocumentService.CreateOrderDocument(reqCtx, dto)
+	if err != nil {
+		c.logger.Error("CreateOrderDocument: ошибка сервиса при создании документа", zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusInternalServerError,
+				"Не удалось создать документ заказа",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	return utils.SuccessResponse(ctx, res, "Документ заказа успешно создан", http.StatusCreated)
+}
+
+func (c *OrderDocumentController) UpdateOrderDocument(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		c.logger.Error("UpdateOrderDocument: некорректный ID документа в URL", zap.String("id", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат ID документа заказа",
+				err,
+				map[string]interface{}{"param": ctx.Param("id")},
+			),
+			c.logger,
+		)
+	}
+
+	var dto dto.UpdateOrderDocumentDTO
+	if err := ctx.Bind(&dto); err != nil {
+		c.logger.Error("UpdateOrderDocument: ошибка привязки запроса", zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат данных для обновления документа заказа",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	if err := ctx.Validate(&dto); err != nil {
+		c.logger.Error("UpdateOrderDocument: ошибка валидации DTO", zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Ошибка валидации данных документа заказа",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	res, err := c.orderDocumentService.UpdateOrderDocument(reqCtx, id, dto)
+	if err != nil {
+		c.logger.Error("UpdateOrderDocument: ошибка сервиса при обновлении документа", zap.Uint64("id", id), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusInternalServerError,
+				"Не удалось обновить документ заказа",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	return utils.SuccessResponse(ctx, res, "Документ заказа успешно обновлен", http.StatusOK)
+}
+
+func (c *OrderDocumentController) DeleteOrderDocument(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		c.logger.Error("DeleteOrderDocument: некорректный ID документа в URL", zap.String("id", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат ID документа заказа",
+				err,
+				map[string]interface{}{"param": ctx.Param("id")},
+			),
+			c.logger,
+		)
+	}
+
+	if err := c.orderDocumentService.DeleteOrderDocument(reqCtx, id); err != nil {
+		c.logger.Error("DeleteOrderDocument: ошибка сервиса при удалении документа", zap.Uint64("id", id), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusInternalServerError,
+				"Не удалось удалить документ заказа",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	return utils.SuccessResponse(ctx, struct{}{}, "Документ заказа успешно удален", http.StatusOK)
+}
+*/

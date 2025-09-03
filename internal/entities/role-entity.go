@@ -7,6 +7,7 @@ type Role struct {
 	Name        string
 	Description string
 	StatusID    uint64
+	Permissions []uint64
 
 	types.BaseEntity
 	types.SoftDelete

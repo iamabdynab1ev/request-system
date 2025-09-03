@@ -115,7 +115,7 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 			case "CREATE":
 				eventDTO.Icon = "status_open"
 				if event.Comment != nil {
-					line = fmt.Sprintf("Создал(а) заявку: «%s»", *event.Comment)
+					line = fmt.Sprintf("Создана заявка: «%s»", *event.Comment)
 				}
 			case "STATUS_CHANGE":
 				eventDTO.Icon = "status_inprogress"
@@ -125,7 +125,7 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 			case "DELEGATION":
 				eventDTO.Icon = "status_inprogress"
 				if event.NewValue != nil {
-					line = fmt.Sprintf("Назначены исполнитель: %s", *event.NewValue)
+					line = fmt.Sprintf("Назначен исполнитель: %s", *event.NewValue)
 				}
 				if event.Comment != nil && strings.Contains(*event.Comment, "после перевода заявки") {
 					line += fmt.Sprintf(" (%s)", *event.Comment)
@@ -138,7 +138,7 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 			case "DURATION_CHANGE":
 				eventDTO.Icon = "timer"
 				if event.NewValue != nil {
-					line = fmt.Sprintf("Срок выполнения изменен на: %s", *event.NewValue)
+					line = fmt.Sprintf("Срок выполнения: %s", *event.NewValue)
 				}
 			case "PRIORITY_CHANGE":
 				eventDTO.Icon = "priority"

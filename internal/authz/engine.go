@@ -20,7 +20,11 @@ func CanDo(permission string, ctx Context) bool {
 	if ctx.Permissions[Superuser] {
 		return true
 	}
-
+	if permission == UsersView && ctx.Target != nil {
+		if _, ok := ctx.Target.(*entities.User); ok {
+			return true // РАЗРЕШАЕМ просмотр профиля любого пользователя
+		}
+	}
 	// Этап 2: Проверяем, есть ли у пользователя базовый пермишен на само действие.
 	if !ctx.Permissions[permission] {
 		return false

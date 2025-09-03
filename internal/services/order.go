@@ -82,10 +82,10 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter) (*dto
 
 	if !(permissionsMap[authz.Superuser] || permissionsMap[authz.ScopeAll]) {
 		if permissionsMap[authz.ScopeDepartment] {
-			securityFilter = fmt.Sprintf("department_id = $%d", 1)
+			securityFilter = "department_id = ?"
 			securityArgs = append(securityArgs, actor.DepartmentID)
 		} else if permissionsMap[authz.ScopeOwn] {
-			securityFilter = fmt.Sprintf("(user_id = $%d OR executor_id = $%d)", 1, 2)
+			securityFilter = "(user_id = ? OR executor_id = ?)"
 			securityArgs = append(securityArgs, actor.ID, actor.ID)
 		} else {
 			return &dto.OrderListResponseDTO{List: []dto.OrderResponseDTO{}, TotalCount: 0}, nil
@@ -198,8 +198,6 @@ func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multi
 	return s.buildOrderResponse(ctx, createdOrder)
 }
 
-// >>> НАЧАЛО ИЗМЕНЕНИЙ <<<
-// Полностью заменяем метод UpdateOrder на этот
 func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx, orderID)
 	if err != nil {
@@ -218,12 +216,17 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 		return nil, err
 	}
 	if currentStatus.Code == "CLOSED" {
-		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Невозможно изменить закрытую заявку.", nil)
+		return nil, apperrors.NewHttpError(
+			http.StatusBadRequest,
+			"Невозможно изменить закрытую заявку.",
+			nil,
+			nil,
+		)
 	}
 
 	isCreator := actor.ID == orderToUpdate.CreatorID
 	isExecutor := actor.ID == orderToUpdate.ExecutorID
-	isDepartmentHead := actor.DepartmentID == orderToUpdate.DepartmentID && (actor.RoleName == "User") // Упрощенная проверка
+	isDepartmentHead := actor.DepartmentID == orderToUpdate.DepartmentID && (actor.RoleName == "User")
 	isGlobalAdmin := authContext.Permissions[authz.ScopeAll] || authContext.Permissions[authz.Superuser]
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
@@ -231,21 +234,35 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 
 		// 1. Смена Департамента (только админ)
 		if updateDTO.DepartmentID != nil && isGlobalAdmin && *updateDTO.DepartmentID != orderToUpdate.DepartmentID {
-			// ... (логика получения old/new head) ...
-			deptComment := fmt.Sprintf("Заявка переведена в другой департамент.")
-			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "DEPARTMENT_CHANGE", Comment: &deptComment}
-			if err := s.historyRepo.CreateInTx(ctx, tx, history, nil); err != nil {
+			commentDeptChange := "Заявка переведена в другой департамент."
+			historyDeptChange := &entities.OrderHistory{
+				OrderID: orderID, UserID: actor.ID, EventType: "DEPARTMENT_CHANGE", Comment: &commentDeptChange,
+			}
+			if err := s.historyRepo.CreateInTx(ctx, tx, historyDeptChange, nil); err != nil {
 				return fmt.Errorf("ошибка истории (смена департамента): %w", err)
 			}
+			newDepartmentID := *updateDTO.DepartmentID
+			newExecutor, err := s.userRepo.FindHeadByDepartmentInTx(ctx, tx, newDepartmentID)
+			if err != nil {
+				return apperrors.NewHttpError(http.StatusNotFound, "В целевом департаменте не найден руководитель.", err, nil)
+			}
+			orderToUpdate.DepartmentID = newDepartmentID
+			orderToUpdate.ExecutorID = newExecutor.ID
 			hasChanges = true
+			commentNewExecutor := fmt.Sprintf("Назначен новый ответственный: %s", newExecutor.Fio)
+			historyNewExecutor := &entities.OrderHistory{
+				OrderID: orderID, UserID: actor.ID, EventType: "DELEGATION", NewValue: &newExecutor.Fio, Comment: &commentNewExecutor,
+			}
+			if err = s.historyRepo.CreateInTx(ctx, tx, historyNewExecutor, nil); err != nil {
+				return fmt.Errorf("ошибка истории (авто-делегирование): %w", err)
+			}
 		}
 
 		// 2. Смена Исполнителя
 		if updateDTO.ExecutorID != nil && (isDepartmentHead || isGlobalAdmin) && *updateDTO.ExecutorID != orderToUpdate.ExecutorID {
-			// ... (логика валидации нового исполнителя) ...
 			newExec, _ := s.userRepo.FindUserByID(ctx, *updateDTO.ExecutorID)
-			execComment := fmt.Sprintf("Назначен новый ответственный: %s", newExec.Fio)
-			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "DELEGATION", NewValue: &newExec.Fio, Comment: &execComment}
+			comment := fmt.Sprintf("Назначен новый ответственный: %s", newExec.Fio)
+			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "DELEGATION", NewValue: &newExec.Fio, Comment: &comment}
 			if err = s.historyRepo.CreateInTx(ctx, tx, history, nil); err != nil {
 				return fmt.Errorf("ошибка истории (делегирование): %w", err)
 			}
@@ -253,11 +270,11 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 			hasChanges = true
 		}
 
-		// 3. Изменение Заголовка и Адреса (только создатель открытой заявки)
+		// 3. Изменение Названия и Адреса (только создатель открытой заявки)
 		if currentStatus.Code == "OPEN" && isCreator {
 			if updateDTO.Name != nil && *updateDTO.Name != orderToUpdate.Name {
-				historyComment := fmt.Sprintf("Название заявки изменено.")
-				history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "NAME_CHANGE", NewValue: updateDTO.Name, Comment: &historyComment}
+				comment := "Название заявки изменено."
+				history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "NAME_CHANGE", NewValue: updateDTO.Name, Comment: &comment}
 				if err = s.historyRepo.CreateInTx(ctx, tx, history, nil); err != nil {
 					return fmt.Errorf("ошибка истории (смена названия): %w", err)
 				}
@@ -265,8 +282,8 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 				hasChanges = true
 			}
 			if updateDTO.Address != nil && *updateDTO.Address != orderToUpdate.Address {
-				historyComment := fmt.Sprintf("Адрес заявки изменен.")
-				history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "ADDRESS_CHANGE", NewValue: updateDTO.Address, Comment: &historyComment}
+				comment := "Адрес заявки изменен."
+				history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "ADDRESS_CHANGE", NewValue: updateDTO.Address, Comment: &comment}
 				if err = s.historyRepo.CreateInTx(ctx, tx, history, nil); err != nil {
 					return fmt.Errorf("ошибка истории (смена адреса): %w", err)
 				}
@@ -277,10 +294,9 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 
 		// 4. Смена Статуса
 		if updateDTO.StatusID != nil && *updateDTO.StatusID != orderToUpdate.StatusID && (isExecutor || isDepartmentHead || isGlobalAdmin) {
-			// ... (логика проверки прав на закрытие) ...
 			newStatus, _ := s.statusRepo.FindStatus(ctx, *updateDTO.StatusID)
-			historyComment := fmt.Sprintf("Статус изменен на: «%s»", newStatus.Name)
-			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "STATUS_CHANGE", NewValue: &newStatus.Name, Comment: &historyComment}
+			comment := fmt.Sprintf("Статус изменен на: «%s»", newStatus.Name)
+			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "STATUS_CHANGE", NewValue: &newStatus.Name, Comment: &comment}
 			if err = s.historyRepo.CreateInTx(ctx, tx, history, nil); err != nil {
 				return fmt.Errorf("ошибка истории (смена статуса): %w", err)
 			}
@@ -291,8 +307,8 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 		// 5. Смена Приоритета
 		if updateDTO.PriorityID != nil && *updateDTO.PriorityID != orderToUpdate.PriorityID && (isDepartmentHead || isGlobalAdmin) {
 			priority, _ := s.priorityRepo.FindPriority(ctx, *updateDTO.PriorityID)
-			historyComment := fmt.Sprintf("Приоритет изменен на: %s", priority.Name)
-			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "PRIORITY_CHANGE", NewValue: &priority.Name, Comment: &historyComment}
+			comment := fmt.Sprintf("Приоритет изменен на: %s", priority.Name)
+			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "PRIORITY_CHANGE", NewValue: &priority.Name, Comment: &comment}
 			if err = s.historyRepo.CreateInTx(ctx, tx, history, nil); err != nil {
 				return fmt.Errorf("ошибка истории (смена приоритета): %w", err)
 			}
@@ -302,15 +318,26 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 
 		// 6. Смена Длительности
 		if updateDTO.Duration != nil && (isDepartmentHead || isGlobalAdmin) {
-			historyComment := fmt.Sprintf("Срок выполнения изменен на: %s", *updateDTO.Duration)
-			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "DURATION_CHANGE", NewValue: updateDTO.Duration, Comment: &historyComment}
+			// 1. ПАРСИМ СТРОКУ С ДАТОЙ, которая пришла в поле "duration"
+			parsedTime, err := time.Parse(time.RFC3339, *updateDTO.Duration)
+			if err != nil {
+				return apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат даты в поле duration", err, nil)
+			}
+
+			// 2. Форматируем дату для красивой записи в историю
+			timeForHistory := parsedTime.Format("02.01.2006 15:04")
+			comment := fmt.Sprintf("Срок выполнения изменен на: %s", timeForHistory)
+
+			// 3. Создаем запись в истории (обрати внимание, в NewValue мы тоже кладем красивую строку)
+			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "DURATION_CHANGE", NewValue: &timeForHistory, Comment: &comment}
 			if err = s.historyRepo.CreateInTx(ctx, tx, history, nil); err != nil {
 				return fmt.Errorf("ошибка истории (смена срока): %w", err)
 			}
-			orderToUpdate.Duration = updateDTO.Duration
+
+			// 4. В сущность `orderToUpdate` мы кладем уже объект time.Time, а не строку
+			orderToUpdate.Duration = &parsedTime
 			hasChanges = true
 		}
-
 		// 7. Добавление Комментария
 		if updateDTO.Comment != nil && *updateDTO.Comment != "" {
 			history := &entities.OrderHistory{OrderID: orderID, UserID: actor.ID, EventType: "COMMENT", Comment: updateDTO.Comment}
@@ -322,7 +349,7 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 		// 8. Прикрепление файла
 		if file != nil {
 			if err = s.attachFileToOrderInTx(ctx, tx, file, orderID, actor.ID); err != nil {
-				return err // Внутренняя функция уже форматирует ошибку
+				return err
 			}
 		}
 
@@ -332,11 +359,13 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 				return err
 			}
 		}
+
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
 	finalOrder, _ := s.orderRepo.FindByID(ctx, orderID)
 	return s.buildOrderResponse(ctx, finalOrder)
 }
@@ -397,11 +426,20 @@ func (s *OrderService) buildOrderResponse(ctx context.Context, order *entities.O
 		})
 	}
 
+	var durationStr *string
+	if order.Duration != nil {
+		formatted := order.Duration.Format(time.RFC3339)
+		durationStr = &formatted
+	}
+
 	return &dto.OrderResponseDTO{
 		ID: order.ID, Name: order.Name, Address: order.Address,
 		Creator: creatorDTO, Executor: executorDTO, DepartmentID: order.DepartmentID,
 		StatusID: order.StatusID, PriorityID: order.PriorityID, Attachments: attachmentsDTO,
-		Duration: order.Duration, CreatedAt: order.CreatedAt.Format(time.RFC3339),
+
+		Duration: durationStr,
+
+		CreatedAt: order.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: order.UpdatedAt.Format(time.RFC3339),
 	}, nil
 }

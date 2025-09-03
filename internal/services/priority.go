@@ -114,9 +114,13 @@ func (s *PriorityService) CreatePriority(ctx context.Context, createDTO dto.Crea
 		defer file.Close()
 		// ИЗМЕНЕНИЕ ЗДЕСЬ
 		if err = utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
-			return nil, apperrors.NewHttpError(http.StatusBadRequest, "Маленькая иконка: "+err.Error(), err)
+			return nil, apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Маленькая иконка: "+err.Error(),
+				err,
+				nil,
+			)
 		}
-		// И ИЗМЕНЕНИЕ ЗДЕСЬ
 		rules, _ := config.UploadContexts["icon_small"]
 		path, err := s.fileStorage.Save(file, iconSmallHeader.Filename, rules.PathPrefix)
 		if err != nil {
@@ -133,11 +137,15 @@ func (s *PriorityService) CreatePriority(ctx context.Context, createDTO dto.Crea
 			return nil, apperrors.ErrInternalServer
 		}
 		defer file.Close()
-		// ИЗМЕНЕНИЕ ЗДЕСЬ
+
 		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
-			return nil, apperrors.NewHttpError(http.StatusBadRequest, "Большая иконка: "+err.Error(), err)
+			return nil, apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Большая иконка: "+err.Error(),
+				err,
+				nil,
+			)
 		}
-		// И ИЗМЕНЕНИЕ ЗДЕСЬ
 		rules, _ := config.UploadContexts["icon_big"]
 		path, err := s.fileStorage.Save(file, iconBigHeader.Filename, rules.PathPrefix)
 		if err != nil {

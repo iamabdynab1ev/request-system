@@ -28,21 +28,8 @@ type ResetPasswordDTO struct {
 }
 type AuthResponseDTO struct {
 	AccessToken string   `json:"accessToken"`
+	RoleID      uint64   `json:"role_id"`
 	Permissions []string `json:"permissions"`
-}
-
-type UserPublicDTO struct {
-	ID           uint64  `json:"id"`
-	Email        string  `json:"email"`
-	Phone        string  `json:"phone_number,omitempty"`
-	FIO          string  `json:"fio"`
-	RoleID       uint64  `json:"role_id"`
-	PhotoURL     *string `json:"photo_url,omitempty"`
-	Position     string  `json:"position"`
-	BranchID     uint64  `json:"branch_id"`
-	DepartmentID uint64  `json:"department_id"`
-	OfficeID     *uint64 `json:"officeId,omitempty"`
-	OtdelID      *uint64 `json:"otdelId,omitempty"`
 }
 
 type UserProfileDTO struct {
