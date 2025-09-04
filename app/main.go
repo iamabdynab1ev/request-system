@@ -46,14 +46,16 @@ func main() {
 
 	// 3. ПОСЛЕ этого настраиваем middleware, так как они используют logger и echo
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
-		DisableStackAll: true,
-		StackSize:       1 << 10,
+		DisableStackAll: false,   // <-- ВРЕМЕННО ВКЛЮЧАЕМ ПОЛНЫЙ STACK TRACE
+		StackSize:       8 << 10, // 8 KB
 		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
+			// <<<--- НАЧАЛО ИЗМЕНЕНИЙ ---
+			// Используем наш логгер для вывода детальной информации о панике
 			logger.Error("!!! ОБНАРУЖЕНА ПАНИКА (PANIC) !!!",
 				zap.String("method", c.Request().Method),
 				zap.String("uri", c.Request().RequestURI),
-				zap.Error(err),
-				zap.String("stack", string(stack)),
+				zap.Error(err),                     // Сама ошибка
+				zap.String("stack", string(stack)), // <-- САМОЕ ВАЖНОЕ: ПОЛНЫЙ ПУТЬ ОШИБКИ
 			)
 			if !c.Response().Committed {
 				httpErr := apperrors.NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", err, nil)

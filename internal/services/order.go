@@ -76,29 +76,37 @@ func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multi
 	s.logger.Debug("Получены данные для создания заявки (CreateOrder)", zap.Any("createDTO", createDTO))
 
 	var finalOrderID uint64
+	var executorFio string // Сохраняем ФИО, чтобы не делать лишний запрос
+
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		status, err := s.statusRepo.FindByCode(ctx, "OPEN")
 		if err != nil {
 			return err
 		}
-		statusID := status.ID
 
 		priority, err := s.priorityRepo.FindByCode(ctx, "MEDIUM")
 		if err != nil {
 			return err
 		}
-		priorityID := priority.ID
 
 		executor, err := s.userRepo.FindHeadByDepartmentInTx(ctx, tx, createDTO.DepartmentID)
 		if err != nil {
 			return err
 		}
+		executorFio = executor.Fio // <--- Сохраняем
 
 		orderEntity := &entities.Order{
-			Name: createDTO.Name, Address: createDTO.Address, DepartmentID: createDTO.DepartmentID,
-			OtdelID: createDTO.OtdelID, BranchID: createDTO.BranchID, OfficeID: createDTO.OfficeID,
-			EquipmentID: createDTO.EquipmentID, StatusID: statusID, PriorityID: priorityID,
-			CreatorID: creatorID, ExecutorID: executor.ID,
+			Name:         createDTO.Name,
+			Address:      createDTO.Address,
+			DepartmentID: createDTO.DepartmentID,
+			OtdelID:      createDTO.OtdelID,
+			BranchID:     createDTO.BranchID,
+			OfficeID:     createDTO.OfficeID,
+			EquipmentID:  createDTO.EquipmentID,
+			StatusID:     status.ID,
+			PriorityID:   priority.ID,
+			CreatorID:    creatorID,
+			ExecutorID:   executor.ID,
 		}
 
 		orderID, err := s.orderRepo.Create(ctx, tx, orderEntity)
@@ -117,7 +125,6 @@ func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multi
 			return err
 		}
 
-		// === НАСТОЯЩИЙ ИСПРАВЛЕННЫЙ КОД ЗДЕСЬ ===
 		if createDTO.Comment != nil && *createDTO.Comment != "" {
 			historyComment := &entities.OrderHistory{
 				OrderID: orderID, UserID: creatorID, EventType: "COMMENT", Comment: createDTO.Comment,
@@ -135,11 +142,30 @@ func (s *OrderService) CreateOrder(ctx context.Context, data string, file *multi
 	if err != nil {
 		return nil, err
 	}
+
+	// <<<--- НАЧАЛО ИСПРАВЛЕНИЙ ---
+	// Теперь мы вручную собираем все данные для ответа, как и в других функциях
+
 	createdOrder, err := s.orderRepo.FindByID(ctx, finalOrderID)
 	if err != nil {
 		return nil, err
 	}
-	return s.buildOrderResponse(ctx, createdOrder)
+
+	// Данные создателя - это текущий пользователь, мы их уже знаем
+	creator := authContext.Actor
+
+	// Данные исполнителя - мы их получили в транзакции
+	executor := &entities.User{
+		ID:  createdOrder.ExecutorID,
+		Fio: executorFio,
+	}
+
+	// Вложения (их не будет, т.к. это новое обращение, но на всякий случай проверяем)
+	attachments, _ := s.attachRepo.FindAllByOrderID(ctx, finalOrderID, 50, 0)
+
+	// Вызываем независимую функцию `buildOrderResponse`
+	return buildOrderResponse(createdOrder, creator, executor, attachments), nil
+	// <<<--- КОНЕЦ ИСПРАВЛЕНИЙ ---
 }
 
 // Реализация с правильной сигнатурой UpdateOrder
@@ -359,10 +385,14 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 	// 4. Формирование ответа (блок остается без изменений)
 	finalOrder, err := s.orderRepo.FindByID(ctx, orderID)
 	if err != nil {
-		s.logger.Error("UpdateOrder: Не удалось найти заявку после обновления для формирования ответа", zap.Uint64("orderID", orderID), zap.Error(err))
+		s.logger.Error("UpdateOrder: Не удалось найти заявку после обновления", zap.Uint64("orderID", orderID), zap.Error(err))
 		return nil, apperrors.ErrInternalServer
 	}
-	return s.buildOrderResponse(ctx, finalOrder)
+
+	creator, _ := s.userRepo.FindUserByID(ctx, finalOrder.CreatorID)
+	executor, _ := s.userRepo.FindUserByID(ctx, finalOrder.ExecutorID)
+	attachments, _ := s.attachRepo.FindAllByOrderID(ctx, finalOrder.ID, 50, 0)
+	return buildOrderResponse(finalOrder, creator, executor, attachments), nil
 }
 
 func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter) (*dto.OrderListResponseDTO, error) {
@@ -395,6 +425,10 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter) (*dto
 			return &dto.OrderListResponseDTO{List: []dto.OrderResponseDTO{}, TotalCount: 0}, nil
 		}
 	}
+
+	// === НАЧАЛО НОВОЙ ОПТИМИЗИРОВАННОЙ ЛОГИКИ ===
+
+	// Шаг 1: Получаем базовый список заявок (1-й SQL-запрос)
 	orders, totalCount, err := s.orderRepo.GetOrders(ctx, filter, securityFilter, securityArgs)
 	if err != nil {
 		return nil, err
@@ -402,26 +436,97 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter) (*dto
 	if len(orders) == 0 {
 		return &dto.OrderListResponseDTO{List: []dto.OrderResponseDTO{}, TotalCount: 0}, nil
 	}
-	dtos := make([]dto.OrderResponseDTO, 0, len(orders))
+
+	// Шаг 2: Собираем все ID, которые нам нужно будет запросить дополнительно
+	creatorIDs := make([]uint64, 0)
+	executorIDs := make([]uint64, 0)
+	orderIDs := make([]uint64, 0, len(orders))
+	// Используем карты, чтобы собрать только УНИКАЛЬНЫЕ ID пользователей
+	userIDsMap := make(map[uint64]struct{})
+
 	for _, order := range orders {
-		orderResponse, err := s.buildOrderResponse(ctx, &order)
-		if err != nil {
-			continue
+		orderIDs = append(orderIDs, order.ID)
+		if order.CreatorID > 0 {
+			if _, ok := userIDsMap[order.CreatorID]; !ok {
+				userIDsMap[order.CreatorID] = struct{}{}
+				creatorIDs = append(creatorIDs, order.CreatorID)
+			}
 		}
+		if order.ExecutorID > 0 {
+			if _, ok := userIDsMap[order.ExecutorID]; !ok {
+				userIDsMap[order.ExecutorID] = struct{}{}
+				executorIDs = append(executorIDs, order.ExecutorID)
+			}
+		}
+	}
+
+	// Шаг 3: Выполняем "пакетные" запросы (еще 2 SQL-запроса)
+	usersMap, err := s.userRepo.FindUsersByIDs(ctx, append(creatorIDs, executorIDs...))
+	if err != nil {
+		s.logger.Error("GetOrders: не удалось получить пользователей по IDs", zap.Error(err))
+		usersMap = make(map[uint64]entities.User) // Инициализируем пустой картой, чтобы избежать паники
+	}
+
+	attachmentsMap, err := s.attachRepo.FindAttachmentsByOrderIDs(ctx, orderIDs)
+	if err != nil {
+		s.logger.Error("GetOrders: не удалось получить вложения по IDs", zap.Error(err))
+		attachmentsMap = make(map[uint64][]entities.Attachment)
+	}
+
+	// Шаг 4: Собираем финальные DTO без единого запроса к БД
+	dtos := make([]dto.OrderResponseDTO, 0, len(orders))
+	for i := range orders {
+		order := &orders[i]
+		creator := usersMap[order.CreatorID]
+		executor := usersMap[order.ExecutorID]
+		attachments := attachmentsMap[order.ID]
+
+		orderResponse := buildOrderResponse(order, &creator, &executor, attachments)
 		dtos = append(dtos, *orderResponse)
 	}
+
 	return &dto.OrderListResponseDTO{List: dtos, TotalCount: totalCount}, nil
 }
 
 func (s *OrderService) FindOrderByID(ctx context.Context, orderID uint64) (*dto.OrderResponseDTO, error) {
-	authContext, err := s.buildAuthzContext(ctx, orderID)
+	// <<<--- НАЧАЛО ОТЛАДОЧНОГО КОДА ---
+	s.logger.Info("--- ЗАПУСК FindOrderByID ---", zap.Uint64("orderID", orderID))
+
+	order, err := s.orderRepo.FindByID(ctx, orderID)
 	if err != nil {
+		s.logger.Warn("--- ОШИБКА в orderRepo.FindByID ---", zap.Error(err))
 		return nil, err
 	}
-	if !authz.CanDo(authz.OrdersView, *authContext) {
+
+	// Если код дошел до сюда, значит, заявка нашлась.
+	s.logger.Info("--- Заявка успешно найдена в repo ---", zap.Any("order", order))
+
+	userID, _ := utils.GetUserIDFromCtx(ctx)
+	permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
+	actor, err := s.userRepo.FindUserByID(ctx, userID)
+	if err != nil {
+		s.logger.Error("--- ОШИБКА: не найден actor ---", zap.Error(err))
+		return nil, apperrors.ErrUserNotFound
+	}
+
+	authContext := authz.Context{Actor: actor, Permissions: permissionsMap, Target: order}
+	s.logger.Info("--- Контекст для authz.CanDo собран ---", zap.Any("authContext.Target", authContext.Target))
+
+	// Проверяем права
+	if !authz.CanDo(authz.OrdersView, authContext) {
+		s.logger.Warn("--- ДОСТУП ЗАПРЕЩЕН со стороны authz.CanDo ---")
 		return nil, apperrors.ErrForbidden
 	}
-	return s.buildOrderResponse(ctx, authContext.Target.(*entities.Order))
+
+	s.logger.Info("--- Права успешно проверены ---")
+	// <<<--- КОНЕЦ ОТЛАДОЧНОГО КОДА ---
+
+	// Собираем ответ (этот код остается прежним)
+	creator, _ := s.userRepo.FindUserByID(ctx, order.CreatorID)
+	executor, _ := s.userRepo.FindUserByID(ctx, order.ExecutorID)
+	attachments, _ := s.attachRepo.FindAllByOrderID(ctx, order.ID, 50, 0)
+
+	return buildOrderResponse(order, creator, executor, attachments), nil
 }
 
 func (s *OrderService) DeleteOrder(ctx context.Context, orderID uint64) error {
@@ -442,31 +547,31 @@ func (s *OrderService) buildAuthzContext(ctx context.Context, orderID uint64) (*
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
+
 	var targetOrder *entities.Order
 	if orderID > 0 {
-		targetOrder, err = s.orderRepo.FindByID(ctx, orderID)
+		foundOrder, err := s.orderRepo.FindByID(ctx, orderID)
 		if err != nil {
 			return nil, err
 		}
+		targetOrder = foundOrder
 	}
 	return &authz.Context{Actor: actor, Permissions: permissionsMap, Target: targetOrder}, nil
 }
 
-func (s *OrderService) buildOrderResponse(ctx context.Context, order *entities.Order) (*dto.OrderResponseDTO, error) {
-	if order == nil {
-		return nil, apperrors.ErrNotFound
-	}
-	creator, _ := s.userRepo.FindUserByID(ctx, order.CreatorID)
-	executor, _ := s.userRepo.FindUserByID(ctx, order.ExecutorID)
-	attachments, _ := s.attachRepo.FindAllByOrderID(ctx, order.ID, 50, 0)
-
+func buildOrderResponse(
+	order *entities.Order,
+	creator *entities.User,
+	executor *entities.User,
+	attachments []entities.Attachment,
+) *dto.OrderResponseDTO {
 	creatorDTO := dto.ShortUserDTO{ID: order.CreatorID}
-	if creator != nil {
+	if creator != nil && creator.ID != 0 {
 		creatorDTO.Fio = creator.Fio
 	}
 
 	executorDTO := dto.ShortUserDTO{ID: order.ExecutorID}
-	if executor != nil {
+	if executor != nil && executor.ID != 0 {
 		executorDTO.Fio = executor.Fio
 	}
 
@@ -479,6 +584,10 @@ func (s *OrderService) buildOrderResponse(ctx context.Context, order *entities.O
 			FileType: att.FileType,
 			URL:      att.FilePath,
 		})
+	}
+	if attachmentsDTO == nil {
+		// Чтобы в JSON всегда был `[]` вместо `null`, если вложений нет
+		attachmentsDTO = make([]dto.AttachmentResponseDTO, 0)
 	}
 
 	var durationStr *string
@@ -504,10 +613,11 @@ func (s *OrderService) buildOrderResponse(ctx context.Context, order *entities.O
 		Duration:     durationStr,
 		CreatedAt:    order.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:    order.UpdatedAt.Format(time.RFC3339),
-	}, nil
+	}
 }
 
 func (s *OrderService) attachFileToOrderInTx(ctx context.Context, tx pgx.Tx, file *multipart.FileHeader, orderID, userID uint64) error {
+	// Этот метод остается как есть, без изменений.
 	src, err := file.Open()
 	if err != nil {
 		return err

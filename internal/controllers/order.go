@@ -76,15 +76,8 @@ func (c *OrderController) FindOrder(ctx echo.Context) error {
 	order, err := c.orderService.FindOrderByID(reqCtx, orderID)
 	if err != nil {
 		c.logger.Warn("FindOrder: ошибка при поиске заявки по ID", zap.Uint64("orderID", orderID), zap.Error(err))
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusInternalServerError,
-				"Не удалось найти заявку",
-				err,
-				nil,
-			),
-			c.logger,
-		)
+
+		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
 	return utils.SuccessResponse(ctx, order, "Заявка успешно найдена", http.StatusOK)

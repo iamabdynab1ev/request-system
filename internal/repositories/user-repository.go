@@ -46,6 +46,7 @@ type UserRepositoryInterface interface {
 	FindHeadByDepartment(ctx context.Context, departmentID uint64) (*entities.User, error)
 	FindHeadByDepartmentInTx(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.User, error)
 	FindByEmail(ctx context.Context, email string) (*entities.User, error)
+	FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error)
 }
 
 type UserRepository struct {
@@ -91,6 +92,34 @@ func scanUser(row pgx.Row) (*entities.User, error) {
 	}
 
 	return &user, nil
+}
+
+func (r *UserRepository) FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error) {
+	if len(userIDs) == 0 {
+		return make(map[uint64]entities.User), nil
+	}
+
+	// Делаем SELECT только на те поля, которые нужны в списке заявок: ID и ФИО
+	// Мы не используем здесь userSelectFieldsForEntityRepo и JOIN, т.к. нам не нужны все данные
+	query := `SELECT u.id, u.fio FROM users u WHERE u.id = ANY($1) AND u.deleted_at IS NULL`
+
+	rows, err := r.storage.Query(ctx, query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	usersMap := make(map[uint64]entities.User)
+	for rows.Next() {
+		var user entities.User
+		// Сканируем только ID и ФИО, т.к. только их и запрашивали
+		if err := rows.Scan(&user.ID, &user.Fio); err != nil {
+			return nil, err
+		}
+		usersMap[user.ID] = user
+	}
+
+	return usersMap, rows.Err()
 }
 
 func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) (*entities.User, error) {
@@ -288,7 +317,6 @@ func (r *UserRepository) FindUserByID(ctx context.Context, id uint64) (*entities
 }
 
 func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error) {
-	
 	query := fmt.Sprintf(`SELECT %s FROM %s WHERE LOWER(u.email) = LOWER($1) AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
 
 	row := r.storage.QueryRow(ctx, query, login) // Передаем login как есть, SQL сам сделает lowercase

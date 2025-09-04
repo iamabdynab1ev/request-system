@@ -12,27 +12,54 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ОДНО ОБЪЯВЛЕНИЕ ИНТЕРФЕЙСА СО ВСЕМИ НУЖНЫМИ МЕТОДАМИ
 type AttachmentRepositoryInterface interface {
 	Create(ctx context.Context, tx pgx.Tx, attachment *entities.Attachment) (uint64, error)
 	FindAllByOrderID(ctx context.Context, orderID uint64, limit, offset int) ([]entities.Attachment, error)
 	FindByID(ctx context.Context, id uint64) (*entities.Attachment, error)
 	DeleteAttachment(ctx context.Context, id uint64) error
+	// <<<--- 1. ДОБАВЛЕН НОВЫЙ МЕТОД В ИНТЕРФЕЙС ---
+	FindAttachmentsByOrderIDs(ctx context.Context, orderIDs []uint64) (map[uint64][]entities.Attachment, error)
 }
 
-// ОДНО ОБЪЯВЛЕНИЕ СТРУКТУРЫ
 type attachmentRepository struct {
 	storage *pgxpool.Pool
 }
 
-// ОДНА ФУНКЦИЯ-КОНСТРУКТОР
 func NewAttachmentRepository(storage *pgxpool.Pool) AttachmentRepositoryInterface {
 	return &attachmentRepository{
 		storage: storage,
 	}
 }
 
-// ВАШ РАБОЧИЙ МЕТОД
+// <<<--- 2. ДОБАВЛЕНА РЕАЛИЗАЦИЯ НОВОГО МЕТОДА ---
+func (r *attachmentRepository) FindAttachmentsByOrderIDs(ctx context.Context, orderIDs []uint64) (map[uint64][]entities.Attachment, error) {
+	if len(orderIDs) == 0 {
+		return make(map[uint64][]entities.Attachment), nil
+	}
+
+	query := `SELECT id, order_id, user_id, file_name, file_path, file_type, file_size, created_at FROM attachments WHERE order_id = ANY($1)`
+	rows, err := r.storage.Query(ctx, query, orderIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	attachmentsMap := make(map[uint64][]entities.Attachment)
+	for rows.Next() {
+		var a entities.Attachment
+		// Используем ваш существующий scan из FindAllByOrderID
+		if err := rows.Scan(&a.ID, &a.OrderID, &a.UserID, &a.FileName, &a.FilePath, &a.FileType, &a.FileSize, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		// Группируем вложения по order_id
+		attachmentsMap[a.OrderID] = append(attachmentsMap[a.OrderID], a)
+	}
+
+	return attachmentsMap, rows.Err()
+}
+
+// --- Существующие методы остаются без изменений ---
+
 func (r *attachmentRepository) Create(ctx context.Context, tx pgx.Tx, attachment *entities.Attachment) (uint64, error) {
 	query := `
 		INSERT INTO attachments 
@@ -47,7 +74,6 @@ func (r *attachmentRepository) Create(ctx context.Context, tx pgx.Tx, attachment
 	return attachmentID, err
 }
 
-// ВАШ РАБОЧИЙ МЕТОД
 func (r *attachmentRepository) FindAllByOrderID(ctx context.Context, orderID uint64, limit, offset int) ([]entities.Attachment, error) {
 	query := `
 		SELECT id, order_id, user_id, file_name, file_path, file_type, file_size, created_at 

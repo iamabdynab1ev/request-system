@@ -28,6 +28,7 @@ type PermissionRepositoryInterface interface {
 	UpdatePermission(ctx context.Context, id uint64, dto dto.UpdatePermissionDTO) (*dto.PermissionDTO, error)
 	DeletePermission(ctx context.Context, id uint64) error
 	GetPermissionsNamesByRoleID(ctx context.Context, roleID uint64) ([]string, error)
+	FindPermissionByName(ctx context.Context, name string) (*dto.PermissionDTO, error)
 }
 
 type PermissionRepository struct {
@@ -50,6 +51,19 @@ func (r *PermissionRepository) GetPermissionsNamesByRoleID(ctx context.Context, 
 	}
 	defer rows.Close()
 	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+func (r *PermissionRepository) FindPermissionByName(ctx context.Context, name string) (*dto.PermissionDTO, error) {
+	query := fmt.Sprintf(`SELECT %s FROM %s WHERE name = $1 LIMIT 1`, PermissionFields, PermissionTable)
+	var p dto.PermissionDTO
+	err := r.storage.QueryRow(ctx, query, name).Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	return &p, nil
 }
 
 func (r *PermissionRepository) GetPermissions(ctx context.Context, limit uint64, offset uint64, search string) ([]dto.PermissionDTO, uint64, error) {
