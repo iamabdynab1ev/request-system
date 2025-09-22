@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -101,47 +102,43 @@ func (c *DepartmentController) UpdateDepartment(ctx echo.Context) error {
 		c.logger.Error("UpdateDepartment: неверный формат ID", zap.String("id", ctx.Param("id")), zap.Error(err))
 		return utils.ErrorResponse(
 			ctx,
-			apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Неверный формат ID департамента",
-				err,
-				map[string]interface{}{"param": ctx.Param("id")},
-			),
+			apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID департамента", err, nil),
 			c.logger,
 		)
 	}
+
+	// ---- НОВАЯ, ПРОСТАЯ И НАДЕЖНАЯ ЛОГИКА ПАРСИНГА ----
 	var dto dto.UpdateDepartmentDTO
-	if err := ctx.Bind(&dto); err != nil {
-		c.logger.Error("UpdateDepartment: ошибка привязки данных", zap.Error(err))
+
+	// Мы просто читаем тело запроса и пытаемся его распарсить как JSON.
+	if err := json.NewDecoder(ctx.Request().Body).Decode(&dto); err != nil {
+		c.logger.Error("UpdateDepartment: ошибка привязки данных из JSON-тела", zap.Error(err))
 		return utils.ErrorResponse(
 			ctx,
-			apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Неверный формат данных в теле запроса",
-				err,
-				nil,
-			),
+			apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат данных в теле запроса", err, nil),
 			c.logger,
 		)
 	}
+
+	// После парсинга логгируем, чтобы УБЕДИТЬСЯ, что данные прочитались.
+	c.logger.Debug("DTO после парсинга в контроллере", zap.Any("parsedDTO", dto))
+	// --------------------------------------------------------
+
 	if err := ctx.Validate(&dto); err != nil {
 		c.logger.Error("UpdateDepartment: ошибка валидации данных", zap.Error(err))
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
+
 	res, err := c.departmentService.UpdateDepartment(ctx.Request().Context(), id, dto)
 	if err != nil {
 		c.logger.Error("Ошибка при обновлении департамента", zap.Uint64("id", id), zap.Any("payload", dto), zap.Error(err))
 		return utils.ErrorResponse(
 			ctx,
-			apperrors.NewHttpError(
-				http.StatusInternalServerError,
-				"Не удалось обновить департамент",
-				err,
-				nil,
-			),
+			err, // Передаем ошибку из сервиса/репозитория напрямую
 			c.logger,
 		)
 	}
+
 	return utils.SuccessResponse(ctx, res, "Департамент успешно обновлен", http.StatusOK)
 }
 

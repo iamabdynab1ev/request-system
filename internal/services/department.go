@@ -128,22 +128,13 @@ func (s *DepartmentService) UpdateDepartment(ctx context.Context, id uint64, dto
 		return nil, apperrors.ErrForbidden
 	}
 
-	existingEntity, err := s.departmentRepository.FindDepartment(ctx, id)
+	updatedEntity, err := s.departmentRepository.UpdateDepartment(ctx, id, dto)
 	if err != nil {
+
+		s.logger.Error("Ошибка в репозитории при обновлении департамента", zap.Error(err), zap.Uint64("id", id))
 		return nil, err
 	}
 
-	if dto.Name != nil {
-		existingEntity.Name = *dto.Name
-	}
-	if dto.StatusID != nil {
-		existingEntity.StatusID = (*dto.StatusID)
-	}
-
-	updatedEntity, err := s.departmentRepository.UpdateDepartment(ctx, id, *existingEntity)
-	if err != nil {
-		return nil, err
-	}
 	return departmentEntityToDTO(updatedEntity), nil
 }
 

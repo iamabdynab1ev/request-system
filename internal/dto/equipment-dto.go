@@ -11,14 +11,12 @@ type CreateEquipmentDTO struct {
 }
 
 type UpdateEquipmentDTO struct {
-	ID      uint64 `json:"id" validate:"required"`
-	Name    string `json:"name" validate:"omitempty"`
-	Address string `json:"address" validate:"omitempty"`
-
-	BranchID        uint64 `json:"branch_id" validate:"omitempty"`
-	OfficeID        uint64 `json:"office_id" validate:"omitempty"`
-	StatusID        uint64 `json:"status_id" validate:"omitempty"`
-	EquipmentTypeID uint64 `json:"equipment_type_id" validate:"omitempty"`
+	Name            *string `json:"name,omitempty"           validate:"omitempty"`
+	Address         *string `json:"address,omitempty"        validate:"omitempty"`
+	BranchID        *uint64 `json:"branch_id,omitempty"      validate:"omitempty,gt=0"`
+	OfficeID        *uint64 `json:"office_id,omitempty"      validate:"omitempty,gt=0"`
+	StatusID        *uint64 `json:"status_id,omitempty"      validate:"omitempty,gt=0"`
+	EquipmentTypeID *uint64 `json:"equipment_type_id,omitempty" validate:"omitempty,gt=0"`
 }
 
 type EquipmentDTO struct {

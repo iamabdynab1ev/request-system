@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"time"
 
 	"request-system/internal/authz"
@@ -211,13 +213,25 @@ func (s *EquipmentService) UpdateEquipment(ctx context.Context, id uint64, dto d
 		return nil, err
 	}
 
-	// Обновляем только нужные поля
-	existingEntity.Name = dto.Name
-	existingEntity.Address = dto.Address
-	existingEntity.BranchID = dto.BranchID
-	existingEntity.OfficeID = dto.OfficeID
-	existingEntity.StatusID = dto.StatusID
-	existingEntity.EquipmentTypeID = dto.EquipmentTypeID
+	if dto.Name != nil {
+		existingEntity.Name = *dto.Name
+	}
+	if dto.Address != nil {
+		existingEntity.Address = *dto.Address
+	}
+	if dto.BranchID != nil {
+		existingEntity.BranchID = *dto.BranchID
+	}
+	if dto.OfficeID != nil {
+		existingEntity.OfficeID = *dto.OfficeID
+	}
+	if dto.StatusID != nil {
+		existingEntity.StatusID = *dto.StatusID
+	}
+	if dto.EquipmentTypeID != nil {
+		existingEntity.EquipmentTypeID = *dto.EquipmentTypeID
+	}
+
 	now := time.Now()
 	existingEntity.UpdatedAt = &now
 
@@ -226,10 +240,12 @@ func (s *EquipmentService) UpdateEquipment(ctx context.Context, id uint64, dto d
 		s.logger.Error("Ошибка обновления оборудования в репозитории", zap.Error(err))
 		return nil, err
 	}
+
 	return eqEntityToDTO(updatedEntity), nil
 }
 
 func (s *EquipmentService) DeleteEquipment(ctx context.Context, id uint64) error {
+	// 1. Авторизация
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return err
@@ -237,5 +253,32 @@ func (s *EquipmentService) DeleteEquipment(ctx context.Context, id uint64) error
 	if !authz.CanDo(authz.EquipmentsDelete, *authCtx) {
 		return apperrors.ErrForbidden
 	}
+
+	// 2. Проверяем, существует ли такое оборудование вообще
+	_, err = s.eqRepository.FindEquipment(ctx, id)
+	if err != nil {
+		return err // Если не найдено, вернется правильная 404 ошибка
+	}
+
+	// 3. НОВАЯ ЛОГИКА: Проверяем, используется ли оборудование в заявках
+	orderCount, err := s.eqRepository.CountOrdersByEquipmentID(ctx, id)
+	if err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	// 4. Если используется - возвращаем понятную ошибку
+	if orderCount > 0 {
+		errorMessage := fmt.Sprintf(
+			"Невозможно удалить оборудование, так как оно используется в %d заявках.",
+			orderCount,
+		)
+		s.logger.Warn("Попытка удаления используемого оборудования",
+			zap.Uint64("equipmentID", id),
+			zap.Int("orderCount", orderCount),
+		)
+		return apperrors.NewHttpError(http.StatusConflict, errorMessage, nil, nil)
+	}
+
+	// 5. Если все проверки пройдены - удаляем
 	return s.eqRepository.DeleteEquipment(ctx, id)
 }

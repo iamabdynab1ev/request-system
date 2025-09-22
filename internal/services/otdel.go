@@ -1,8 +1,8 @@
+// services/otdel_service.go
 package services
 
 import (
 	"context"
-	"time"
 
 	"request-system/internal/authz"
 	"request-system/internal/dto"
@@ -37,24 +37,12 @@ func NewOtdelService(otdelRepo repositories.OtdelRepositoryInterface, userRepo r
 	}
 }
 
-func (s *OtdelService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
-	userID, _ := utils.GetUserIDFromCtx(ctx)
-	permissions, _ := utils.GetPermissionsMapFromCtx(ctx)
-	actor, err := s.userRepository.FindUserByID(ctx, userID)
-	if err != nil {
-		return nil, apperrors.ErrUserNotFound
-	}
-	return &authz.Context{Actor: actor, Permissions: permissions}, nil
-}
-
 func otdelEntityToDTO(entity *entities.Otdel) *dto.OtdelDTO {
 	if entity == nil {
 		return nil
 	}
 	return &dto.OtdelDTO{
-		ID:            entity.ID,
-		Name:          entity.Name,
-		StatusID:      entity.StatusID,
+		ID: entity.ID, Name: entity.Name, StatusID: entity.StatusID,
 		DepartmentsID: entity.DepartmentsID,
 		CreatedAt:     entity.CreatedAt.Format("2006-01-02 15:04:05"),
 		UpdatedAt:     entity.UpdatedAt.Format("2006-01-02 15:04:05"),
@@ -62,6 +50,7 @@ func otdelEntityToDTO(entity *entities.Otdel) *dto.OtdelDTO {
 }
 
 func (s *OtdelService) GetOtdels(ctx context.Context, filter types.Filter) ([]dto.OtdelDTO, uint64, error) {
+	// ... (логика авторизации без изменений)
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -83,6 +72,7 @@ func (s *OtdelService) GetOtdels(ctx context.Context, filter types.Filter) ([]dt
 }
 
 func (s *OtdelService) FindOtdel(ctx context.Context, id uint64) (*dto.OtdelDTO, error) {
+	// ... (логика авторизации без изменений)
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -99,6 +89,7 @@ func (s *OtdelService) FindOtdel(ctx context.Context, id uint64) (*dto.OtdelDTO,
 }
 
 func (s *OtdelService) CreateOtdel(ctx context.Context, dto dto.CreateOtdelDTO) (*dto.OtdelDTO, error) {
+	// ... (логика авторизации без изменений)
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -107,12 +98,10 @@ func (s *OtdelService) CreateOtdel(ctx context.Context, dto dto.CreateOtdelDTO) 
 		return nil, apperrors.ErrForbidden
 	}
 
-	now := time.Now()
 	entity := entities.Otdel{
 		Name:          dto.Name,
 		StatusID:      dto.StatusID,
 		DepartmentsID: dto.DepartmentsID,
-		BaseEntity:    types.BaseEntity{CreatedAt: &now, UpdatedAt: &now},
 	}
 	created, err := s.otdelRepository.CreateOtdel(ctx, entity)
 	if err != nil {
@@ -121,7 +110,9 @@ func (s *OtdelService) CreateOtdel(ctx context.Context, dto dto.CreateOtdelDTO) 
 	return otdelEntityToDTO(created), nil
 }
 
+// --- ИСПРАВЛЕННЫЙ UPDATE ---
 func (s *OtdelService) UpdateOtdel(ctx context.Context, id uint64, dto dto.UpdateOtdelDTO) (*dto.OtdelDTO, error) {
+	// ... (логика авторизации без изменений)
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -130,22 +121,7 @@ func (s *OtdelService) UpdateOtdel(ctx context.Context, id uint64, dto dto.Updat
 		return nil, apperrors.ErrForbidden
 	}
 
-	existing, err := s.otdelRepository.FindOtdel(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	if dto.Name != "" {
-		existing.Name = dto.Name
-	}
-	if dto.StatusID != 0 {
-		existing.StatusID = dto.StatusID
-	}
-	if dto.DepartmentsID != 0 {
-		existing.DepartmentsID = dto.DepartmentsID
-	}
-
-	updated, err := s.otdelRepository.UpdateOtdel(ctx, id, *existing)
+	updated, err := s.otdelRepository.UpdateOtdel(ctx, id, dto)
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +129,7 @@ func (s *OtdelService) UpdateOtdel(ctx context.Context, id uint64, dto dto.Updat
 }
 
 func (s *OtdelService) DeleteOtdel(ctx context.Context, id uint64) error {
+	// ... (логика авторизации без изменений)
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return err
@@ -160,5 +137,16 @@ func (s *OtdelService) DeleteOtdel(ctx context.Context, id uint64) error {
 	if !authz.CanDo(authz.OtdelsDelete, *authCtx) {
 		return apperrors.ErrForbidden
 	}
+
 	return s.otdelRepository.DeleteOtdel(ctx, id)
+}
+
+func (s *OtdelService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
+	userID, _ := utils.GetUserIDFromCtx(ctx)
+	permissions, _ := utils.GetPermissionsMapFromCtx(ctx)
+	actor, err := s.userRepository.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, apperrors.ErrUserNotFound
+	}
+	return &authz.Context{Actor: actor, Permissions: permissions}, nil
 }

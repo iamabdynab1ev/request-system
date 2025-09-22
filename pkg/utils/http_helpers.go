@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
 
@@ -28,22 +29,81 @@ const (
 	MaxLimit     = 500
 )
 
-func ParseFilterFromQuery(values url.Values) types.Filter {
-	// ... без изменений
-	filterReq := types.Filter{Sort: make(map[string]string), Filter: make(map[string]interface{}), Limit: DefaultLimit, Page: 1}
-	filterReq.Search = values.Get("search")
-	for key, vals := range values {
-		// Ищем параметры вида "sort[field_name]"
-		if strings.HasPrefix(key, "sort[") && strings.HasSuffix(key, "]") && len(vals) > 0 {
+func StringPtr(s string) *string {
+	return &s
+}
 
-			field := key[5 : len(key)-1]
-			direction := strings.ToLower(vals[0])
+func MergeOrders(original *entities.Order, changes entities.Order) (*entities.Order, bool) {
+	hasChanges := false
+	merged := *original // Создаем копию
 
-			if direction == "asc" || direction == "desc" {
-				filterReq.Sort[field] = direction
-			}
-		}
+	if changes.Name != "" && merged.Name != changes.Name {
+		merged.Name = changes.Name
+		hasChanges = true
 	}
+	if changes.Address != nil && merged.Address != nil && *merged.Address != *changes.Address {
+		merged.Address = changes.Address
+		hasChanges = true
+	}
+	if changes.DepartmentID != 0 && merged.DepartmentID != changes.DepartmentID {
+		merged.DepartmentID = changes.DepartmentID
+		hasChanges = true
+	}
+	if !AreUint64PointersEqual(merged.OtdelID, changes.OtdelID) {
+		merged.OtdelID = changes.OtdelID
+		hasChanges = true
+	}
+	if !AreUint64PointersEqual(merged.BranchID, changes.BranchID) {
+		merged.BranchID = changes.BranchID
+		hasChanges = true
+	}
+	if !AreUint64PointersEqual(merged.OfficeID, changes.OfficeID) {
+		merged.OfficeID = changes.OfficeID
+		hasChanges = true
+	}
+	if !AreUint64PointersEqual(merged.EquipmentID, changes.EquipmentID) {
+		merged.EquipmentID = changes.EquipmentID
+		hasChanges = true
+	}
+	if !AreUint64PointersEqual(merged.EquipmentTypeID, changes.EquipmentTypeID) {
+		merged.EquipmentTypeID = changes.EquipmentTypeID
+		hasChanges = true
+	}
+
+	if changes.StatusID != 0 && merged.StatusID != changes.StatusID {
+		merged.StatusID = changes.StatusID
+		hasChanges = true
+	}
+	if !AreUint64PointersEqual(merged.PriorityID, changes.PriorityID) {
+		merged.PriorityID = changes.PriorityID
+		hasChanges = true
+	}
+	if !AreUint64PointersEqual(merged.ExecutorID, changes.ExecutorID) {
+		merged.ExecutorID = changes.ExecutorID
+		hasChanges = true
+	}
+
+	if changes.Duration != nil {
+		if merged.Duration == nil || !merged.Duration.Equal(*changes.Duration) {
+			merged.Duration = changes.Duration
+			hasChanges = true
+		}
+	} else if merged.Duration != nil {
+		merged.Duration = nil
+		hasChanges = true
+	}
+
+	return &merged, hasChanges
+}
+
+func ParseFilterFromQuery(values url.Values) types.Filter {
+	filterReq := types.Filter{
+		Sort:   make(map[string]string),
+		Filter: make(map[string]interface{}),
+		Limit:  DefaultLimit,
+		Page:   1,
+	}
+
 	if limitStr := values.Get("limit"); limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
 			if l > MaxLimit {
@@ -53,21 +113,60 @@ func ParseFilterFromQuery(values url.Values) types.Filter {
 			}
 		}
 	}
+
 	if pageStr := values.Get("page"); pageStr != "" {
 		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
 			filterReq.Page = p
 		}
 	}
-	if values.Get("offset") != "" {
-		if o, err := strconv.Atoi(values.Get("offset")); err == nil && o >= 0 {
+
+	if offsetStr := values.Get("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
 			filterReq.Offset = o
 		}
 	} else {
 		filterReq.Offset = (filterReq.Page - 1) * filterReq.Limit
 	}
+
 	if values.Get("withPagination") == "true" {
 		filterReq.WithPagination = true
+	} else if values.Get("withPagination") == "false" {
+		filterReq.WithPagination = false
+	} else {
+		filterReq.WithPagination = true
 	}
+
+	for key, vals := range values {
+		if len(vals) == 0 || vals[0] == "" {
+			continue
+		}
+
+		if key == "search" {
+			filterReq.Search = vals[0]
+			continue
+		}
+
+		if strings.HasPrefix(key, "sort[") && strings.HasSuffix(key, "]") {
+			field := key[5 : len(key)-1]
+			direction := strings.ToLower(vals[0])
+			if direction == "asc" || direction == "desc" {
+				filterReq.Sort[field] = direction
+			}
+			continue
+		}
+
+		if strings.HasPrefix(key, "filter[") && strings.HasSuffix(key, "]") {
+			field := key[7 : len(key)-1]
+
+			if existing, ok := filterReq.Filter[field]; ok {
+				filterReq.Filter[field] = fmt.Sprintf("%v,%s", existing, vals[0])
+			} else {
+				filterReq.Filter[field] = vals[0]
+			}
+		}
+	}
+	// <<<--- КОНЕЦ НОВОЙ ЛОГИКИ ---
+
 	return filterReq
 }
 

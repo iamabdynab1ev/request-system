@@ -1,4 +1,3 @@
-// Файл: pkg/utils/phone_helpers.go
 package utils
 
 import (
@@ -6,27 +5,36 @@ import (
 	"strings"
 )
 
-var digitsOnly = regexp.MustCompile(`^\d+$`)
+// nonDigitRegexp находит все символы, которые НЕ являются цифрами.
+// Он лучше, чем твой digitsOnly, так как позволяет очищать строки вида "+992 (92) ..."
+var nonDigitRegexp = regexp.MustCompile(`\D`)
 
-// NormalizeTajikPhoneNumber приводит разные форматы таджикских номеров к единому
-// виду, который хранится в БД (12 цифр, например, "992955555555").
+// NormalizeTajikPhoneNumber приводит разные форматы таджикских номеров
+// к единому 9-значному виду, который будет храниться в БД (например, "927771122").
 // Возвращает пустую строку, если формат неверный.
 func NormalizeTajikPhoneNumber(phone string) string {
-	// 1. Убираем все символы, кроме цифр
-	phone = strings.TrimPrefix(phone, "+")
-	if !digitsOnly.MatchString(phone) {
-		return "" // Если после очистки остались не-цифры, это не номер
+	// 1. Убираем из входной строки ВСЁ, кроме цифр.
+	// "+992 (92) 777-11-22" -> "992927771122"
+	// "8(92) 777-11-22"   -> "8927771122"
+	digitsOnly := nonDigitRegexp.ReplaceAllString(phone, "")
+
+	// 2. Проверяем, начинается ли номер с кода страны '992'
+	if strings.HasPrefix(digitsOnly, "992") {
+		// Если да, отрезаем этот префикс, чтобы получить 9 цифр
+		// "992927771122" -> "927771122"
+		phoneWithoutCountryCode := digitsOnly[3:]
+		if len(phoneWithoutCountryCode) == 9 {
+			return phoneWithoutCountryCode
+		}
 	}
 
-	// 2. Приводим к стандартному формату (12 цифр)
-	if len(phone) == 9 {
-		// Формат "955555555" -> "992955555555"
-		return "992" + phone
-	} else if len(phone) == 12 && strings.HasPrefix(phone, "992") {
-		// Формат "992955555555" -> уже правильный
-		return phone
+	// 3. Проверяем, не является ли номер уже 9-значным
+	if len(digitsOnly) == 9 {
+		// "927771122" -> "927771122"
+		return digitsOnly
 	}
 
-	// Все остальные форматы считаем неверными
+	// 4. Если мы не смогли привести номер к 9-значному формату,
+	// считаем его неверным и возвращаем пустую строку.
 	return ""
 }

@@ -2,7 +2,7 @@
 -- +goose StatementBegin
 CREATE TABLE roles (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
+    name VARCHAR(100) NOT NULL UNIQUE,
     description TEXT,
     status_id INTEGER NOT NULL,
 

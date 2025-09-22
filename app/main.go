@@ -1,148 +1,138 @@
-// Файл: main.go
-
 package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
+
+	"github.com/go-playground/validator/v10"
+	"github.com/go-redis/redis/v8"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"go.uber.org/zap"
 
 	"request-system/internal/repositories"
 	"request-system/internal/routes"
 	"request-system/internal/services"
 	"request-system/pkg/config"
-	"request-system/pkg/customvalidator" // Убедитесь, что этот импорт есть
+	"request-system/pkg/customvalidator"
 	"request-system/pkg/database/postgresql"
-	apperrors "request-system/pkg/errors"
-	applogger "request-system/pkg/logger"
+	"request-system/pkg/logger" // <<<--- ИСПОЛЬЗУЕМ ИМПОРТ БЕЗ ПСЕВДОНИМА
 	"request-system/pkg/service"
 	"request-system/pkg/utils"
-
-	"github.com/go-playground/validator/v10"
-	"github.com/go-redis/redis/v8"
-	"github.com/joho/godotenv"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	"go.uber.org/zap"
 )
 
-// !!! ВСЕ ФУНКЦИИ-ВАЛИДАТОРЫ (isGoodEmailFormat, isTajikPhoneNumber и т.д.) ОТСЮДА УДАЛЕНЫ !!!
-// Теперь они живут в pkg/customvalidator/validators.go
-
 func main() {
-	if err := godotenv.Load(); err != nil {
-		log.Println("Warning: .env file not found or could not be loaded.")
-	}
-
-	// 1. СНАЧАЛА создаем базовые экземпляры Echo и логгера
-	e := echo.New()
-	logger := applogger.NewLogger()
-
-	// 2. Инициализируем конфиг
+	// 1. КОНФИГ
 	cfg := config.New()
 
-	// 3. ПОСЛЕ этого настраиваем middleware, так как они используют logger и echo
+	// 2. ЛОГГЕРЫ
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+
+	mainLogger, err := logger.CreateLogger(logLevel, "system") // <-- Вызываем через имя пакета
+	if err != nil {
+		panic("Не удалось создать главный логгер")
+	}
+
+	authLogger, err := logger.CreateLogger(logLevel, "auth")
+	if err != nil {
+		panic("Не удалось создать логгер 'auth'")
+	}
+
+	orderLogger, err := logger.CreateLogger(logLevel, "orders")
+	if err != nil {
+		panic("Не удалось создать логгер 'orders'")
+	}
+
+	userLogger, err := logger.CreateLogger(logLevel, "users")
+	if err != nil {
+		panic("Не удалось создать логгер 'users'")
+	}
+
+	orderHistoryLogger, err := logger.CreateLogger(logLevel, "order_history")
+	if err != nil {
+		panic("Не удалось создать логгер 'order_history'")
+	}
+
+	appLoggers := &routes.Loggers{
+		Main:         mainLogger,
+		Auth:         authLogger,
+		Order:        orderLogger,
+		User:         userLogger,
+		OrderHistory: orderHistoryLogger,
+	}
+
+	// 3. НАСТРОЙКА ECHO
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+
+	e.GET("/ping", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"message": "pong"})
+	})
+
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
-		DisableStackAll: false,   // <-- ВРЕМЕННО ВКЛЮЧАЕМ ПОЛНЫЙ STACK TRACE
-		StackSize:       8 << 10, // 8 KB
+		DisableStackAll: false, StackSize: 8 << 10,
 		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
-			// <<<--- НАЧАЛО ИЗМЕНЕНИЙ ---
-			// Используем наш логгер для вывода детальной информации о панике
-			logger.Error("!!! ОБНАРУЖЕНА ПАНИКА (PANIC) !!!",
-				zap.String("method", c.Request().Method),
-				zap.String("uri", c.Request().RequestURI),
-				zap.Error(err),                     // Сама ошибка
-				zap.String("stack", string(stack)), // <-- САМОЕ ВАЖНОЕ: ПОЛНЫЙ ПУТЬ ОШИБКИ
-			)
-			if !c.Response().Committed {
-				httpErr := apperrors.NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", err, nil)
-				utils.ErrorResponse(c, httpErr, logger)
-			}
+			mainLogger.Error("!!! ПАНИКА В ПРИЛОЖЕНИИ !!!", zap.Error(err), zap.String("stack", string(stack)))
 			return err
 		},
 	}))
 
-	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			c.Response().Header().Set("ngrok-skip-browser-warning", "true")
-			return next(c)
-		}
-	})
-
+	// 4. НАСТРОЙКА MIDDLEWARES
+	allowedOrigins := []string{
+		"http://localhost:4040", "http://10.98.102.66:4040", "http://10.98.102.66",
+		"http://helpdesk.local", "https://a089b2344e17.ngrok-free.app",
+	}
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOriginFunc: func(origin string) (bool, error) {
-			allowedOrigins := []string{
-				"https://d41fdadc8416.ngrok-free.app",
-				"http://localhost:5173",
-			}
-			for _, o := range allowedOrigins {
-				if origin == o {
-					return true, nil
-				}
-			}
-			return false, nil
-		},
+		AllowOriginFunc:  func(origin string) (bool, error) { return slices.Contains(allowedOrigins, origin), nil },
 		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
 		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "ngrok-skip-browser-warning"},
 		AllowCredentials: true,
-		ExposeHeaders:    []string{"Content-Disposition"},
 	}))
 
-	// 4. Настраиваем статические файлы
 	absPath, err := filepath.Abs("./uploads")
 	if err != nil {
-		logger.Fatal("не удалось получить абсолютный путь к uploads", zap.Error(err))
+		mainLogger.Fatal("Не удалось получить путь к ./uploads", zap.Error(err))
 	}
 	e.Static("/uploads", absPath)
 
-	// <<<--- 5. ЭТО ПРАВИЛЬНОЕ МЕСТО ДЛЯ ИНИЦИАЛИЗАЦИИ ВАЛИДАТОРА ---
-	// Он использует logger для вывода ошибок и `e` для присваивания.
 	v := validator.New()
-	// Вызываем нашу единую функцию из нового пакета
 	if err := customvalidator.RegisterCustomValidations(v); err != nil {
-		logger.Fatal("Ошибка регистрации кастомных правил валидации", zap.Error(err))
+		mainLogger.Fatal("Не удалось зарегистрировать валидаторы", zap.Error(err))
 	}
 	e.Validator = utils.NewValidator(v)
-	// <<<--- КОНЕЦ БЛОКА ВАЛИДАТОРА ---
 
-	// 6. Подключаемся к базам данных и другим сервисам
+	// 5. ПОДКЛЮЧЕНИЯ
 	dbConn := postgresql.ConnectDB()
 	defer dbConn.Close()
 
-	redisAddr := os.Getenv("REDIS_ADDRESS")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
 	redisClient := redis.NewClient(&redis.Options{
-		Addr:     redisAddr,
-		Password: os.Getenv("REDIS_PASSWORD"),
+		Addr:     cfg.Redis.Address,
+		Password: cfg.Redis.Password,
 		DB:       0,
 	})
 	if _, err := redisClient.Ping(context.Background()).Result(); err != nil {
-		logger.Fatal("не удалось подключиться к Redis", zap.Error(err), zap.String("address", redisAddr))
+		mainLogger.Fatal("Не удалось подключиться к Redis", zap.Error(err))
 	}
 
-	// 7. Инициализируем сервисы
-	jwtSecretKey := os.Getenv("JWT_SECRET_KEY")
-	accessTokenTTL := time.Hour * 24
-	refreshTokenTTL := time.Hour * 24 * 7 // Примечание: в вашем коде это значение может быть переопределено из .env в config.New()
-	jwtSvc := service.NewJWTService(jwtSecretKey, accessTokenTTL, refreshTokenTTL, logger)
-
-	permissionRepo := repositories.NewPermissionRepository(dbConn, logger)
+	// 6. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ И ЗАПУСК РОУТЕРОВ
+	jwtSvc := service.NewJWTService(cfg.JWT.SecretKey, cfg.JWT.AccessTokenTTL, cfg.JWT.RefreshTokenTTL, authLogger)
+	permissionRepo := repositories.NewPermissionRepository(dbConn, mainLogger)
 	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
+	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, authLogger, 10*time.Minute)
 
-	rolePermissionsCacheTTL := time.Minute * 10
-	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, logger, rolePermissionsCacheTTL)
+	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg)
 
-	// 8. Инициализируем роуты
-	routes.InitRouter(e, dbConn, redisClient, jwtSvc, logger, authPermissionService, cfg)
-
-	// 9. Запускаем сервер
-	logger.Info("🚀 Сервер запущен на :8080")
+	// 7. ЗАПУСК СЕРВЕРЕРА
+	mainLogger.Info("🚀 Сервер запущен на :8080")
 	if err := e.Start(":8080"); err != nil {
-		logger.Fatal("Ошибка запуска сервера", zap.Error(err))
+		mainLogger.Fatal("Не удалось запустить сервер", zap.Error(err))
 	}
 }

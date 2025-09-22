@@ -1,18 +1,16 @@
-// internal/repositories/branch.go - ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ
-
 package repositories
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
+	"strconv" // <<<--- 1. ДОБАВЛЯЕМ НУЖНЫЙ ИМПОРТ
 	"strings"
 
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
-	// <-- ИМПОРТИРУЕМ strconv
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,7 +19,10 @@ import (
 
 const branchTable = "branches"
 
-var branchAllowedFilterFields = map[string]string{"status_id": "b.status_id"}
+var (
+	branchAllowedFilterFields = map[string]string{"status_id": "b.status_id"}
+	branchAllowedSortFields   = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true}
+)
 
 type BranchRepositoryInterface interface {
 	GetBranches(ctx context.Context, filter types.Filter) ([]entities.Branch, uint64, error)
@@ -40,7 +41,6 @@ func NewBranchRepository(storage *pgxpool.Pool, logger *zap.Logger) BranchReposi
 	return &BranchRepository{storage: storage, logger: logger}
 }
 
-// ИСПРАВЛЕННАЯ ФУНКЦИЯ
 func (r *BranchRepository) buildFilterQuery(filter types.Filter) (string, []interface{}) {
 	args := make([]interface{}, 0)
 	conditions := []string{}
@@ -104,9 +104,14 @@ func (r *BranchRepository) scanBranch(row pgx.Row) (*entities.Branch, error) {
 	var b entities.Branch
 	var s entities.Status
 
+	// Создаем временные переменные для полей, которые могут быть NULL
+	var emailIndex sql.NullString
+
 	err := row.Scan(
 		&b.ID, &b.Name, &b.ShortName, &b.Address, &b.PhoneNumber,
-		&b.Email, &b.EmailIndex, &b.OpenDate, &b.StatusID,
+		&b.Email,
+		&emailIndex, // Сканируем значение email_index в sql.NullString
+		&b.OpenDate, &b.StatusID,
 		&b.CreatedAt, &b.UpdatedAt,
 		&s.ID, &s.Name,
 	)
@@ -118,6 +123,10 @@ func (r *BranchRepository) scanBranch(row pgx.Row) (*entities.Branch, error) {
 		r.logger.Error("Failed to scan branch row", zap.Error(err))
 		return nil, err
 	}
+	if emailIndex.Valid {
+		b.EmailIndex = emailIndex.String
+	}
+
 	if s.ID > 0 {
 		b.Status = &s
 	}

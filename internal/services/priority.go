@@ -3,44 +3,46 @@ package services
 
 import (
 	"context"
-	"mime/multipart"
-	"net/http"
+	"strings" // Добавляем импорт для работы со строками
 
-	"request-system/config"
 	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
-	"request-system/pkg/filestorage"
 	"request-system/pkg/utils"
 
 	"go.uber.org/zap"
 )
 
+// PriorityServiceInterface - ОБНОВЛЕННЫЙ ИНТЕРФЕЙС.
+// Вся информация о файлах (multipart.FileHeader) удалена.
 type PriorityServiceInterface interface {
 	GetPriorities(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.PriorityDTO], error)
 	FindPriority(ctx context.Context, id uint64) (*dto.PriorityDTO, error)
-	CreatePriority(ctx context.Context, createDTO dto.CreatePriorityDTO, iconSmallHeader *multipart.FileHeader, iconBigHeader *multipart.FileHeader) (*dto.PriorityDTO, error)
-	UpdatePriority(ctx context.Context, id uint64, updateDTO dto.UpdatePriorityDTO, iconSmallHeader *multipart.FileHeader, iconBigHeader *multipart.FileHeader) (*dto.PriorityDTO, error)
+	CreatePriority(ctx context.Context, createDTO dto.CreatePriorityDTO) (*dto.PriorityDTO, error)
+	UpdatePriority(ctx context.Context, id uint64, updateDTO dto.UpdatePriorityDTO) (*dto.PriorityDTO, error)
 	DeletePriority(ctx context.Context, id uint64) error
 }
 
+// PriorityService - ОБНОВЛЕННАЯ СТРУКТУРА.
+// Убрано поле fileStorage, так как оно больше не используется.
 type PriorityService struct {
-	repo        repositories.PriorityRepositoryInterface
-	userRepo    repositories.UserRepositoryInterface
-	fileStorage filestorage.FileStorageInterface
-	logger      *zap.Logger
+	repo     repositories.PriorityRepositoryInterface
+	userRepo repositories.UserRepositoryInterface
+	logger   *zap.Logger
 }
 
+// NewPriorityService - ОБНОВЛЕННЫЙ КОНСТРУКТОР.
+// Убран параметр fileStorage.
 func NewPriorityService(
 	repo repositories.PriorityRepositoryInterface,
 	userRepo repositories.UserRepositoryInterface,
-	fileStorage filestorage.FileStorageInterface,
 	logger *zap.Logger,
 ) PriorityServiceInterface {
-	return &PriorityService{repo: repo, userRepo: userRepo, fileStorage: fileStorage, logger: logger}
+	return &PriorityService{repo: repo, userRepo: userRepo, logger: logger}
 }
 
+// buildAuthzContext - остается без изменений
 func (s *PriorityService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
 	userID, err := utils.GetUserIDFromCtx(ctx)
 	if err != nil {
@@ -57,6 +59,7 @@ func (s *PriorityService) buildAuthzContext(ctx context.Context) (*authz.Context
 	return &authz.Context{Actor: actor, Permissions: permissionsMap}, nil
 }
 
+// GetPriorities и FindPriority - остаются без изменений
 func (s *PriorityService) GetPriorities(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.PriorityDTO], error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -93,7 +96,8 @@ func (s *PriorityService) FindPriority(ctx context.Context, id uint64) (*dto.Pri
 	return s.repo.FindPriority(ctx, id)
 }
 
-func (s *PriorityService) CreatePriority(ctx context.Context, createDTO dto.CreatePriorityDTO, iconSmallHeader *multipart.FileHeader, iconBigHeader *multipart.FileHeader) (*dto.PriorityDTO, error) {
+// CreatePriority - ИСПРАВЛЕННЫЙ И УПРОЩЕННЫЙ МЕТОД
+func (s *PriorityService) CreatePriority(ctx context.Context, createDTO dto.CreatePriorityDTO) (*dto.PriorityDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -102,63 +106,21 @@ func (s *PriorityService) CreatePriority(ctx context.Context, createDTO dto.Crea
 		return nil, apperrors.ErrForbidden
 	}
 
-	var smallIconPath, bigIconPath string
-	const urlPrefix = "/uploads/"
-
-	if iconSmallHeader != nil {
-		file, err := iconSmallHeader.Open()
-		if err != nil {
-			s.logger.Error("Не удалось открыть small icon", zap.Error(err))
-			return nil, apperrors.ErrInternalServer
-		}
-		defer file.Close()
-		// ИЗМЕНЕНИЕ ЗДЕСЬ
-		if err = utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
-			return nil, apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Маленькая иконка: "+err.Error(),
-				err,
-				nil,
-			)
-		}
-		rules, _ := config.UploadContexts["icon_small"]
-		path, err := s.fileStorage.Save(file, iconSmallHeader.Filename, rules.PathPrefix)
-		if err != nil {
-			s.logger.Error("Не удалось сохранить small icon", zap.Error(err))
-			return nil, apperrors.ErrInternalServer
-		}
-		smallIconPath = urlPrefix + path
+	// Добавлена логика генерации 'code', если он не был предоставлен клиентом.
+	if createDTO.Code == "" && createDTO.Name != "" {
+		// "Высокий приоритет" -> "ВЫСОКИЙ_ПРИОРИТЕТ"
+		// Для русского языка может понадобиться транслитерация, но это простой рабочий пример.
+		createDTO.Code = strings.ToUpper(strings.ReplaceAll(createDTO.Name, " ", "_"))
+		s.logger.Debug("Поле 'code' не было предоставлено, сгенерировано автоматически", zap.String("generated_code", createDTO.Code))
 	}
 
-	if iconBigHeader != nil {
-		file, err := iconBigHeader.Open()
-		if err != nil {
-			s.logger.Error("Не удалось открыть big icon", zap.Error(err))
-			return nil, apperrors.ErrInternalServer
-		}
-		defer file.Close()
-
-		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
-			return nil, apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Большая иконка: "+err.Error(),
-				err,
-				nil,
-			)
-		}
-		rules, _ := config.UploadContexts["icon_big"]
-		path, err := s.fileStorage.Save(file, iconBigHeader.Filename, rules.PathPrefix)
-		if err != nil {
-			s.logger.Error("Не удалось сохранить big icon", zap.Error(err))
-			return nil, apperrors.ErrInternalServer
-		}
-		bigIconPath = urlPrefix + path
-	}
-
-	return s.repo.CreatePriority(ctx, createDTO, smallIconPath, bigIconPath)
+	// Вся логика работы с файлами и иконками удалена.
+	// Просто вызываем метод репозитория.
+	return s.repo.CreatePriority(ctx, createDTO)
 }
 
-func (s *PriorityService) UpdatePriority(ctx context.Context, id uint64, updateDTO dto.UpdatePriorityDTO, iconSmallHeader, iconBigHeader *multipart.FileHeader) (*dto.PriorityDTO, error) {
+// UpdatePriority - ИСПРАВЛЕННЫЙ И УПРОЩЕННЫЙ МЕТОД
+func (s *PriorityService) UpdatePriority(ctx context.Context, id uint64, updateDTO dto.UpdatePriorityDTO) (*dto.PriorityDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -167,69 +129,17 @@ func (s *PriorityService) UpdatePriority(ctx context.Context, id uint64, updateD
 		return nil, apperrors.ErrForbidden
 	}
 
-	currentPriority, err := s.repo.FindPriority(ctx, id)
-	if err != nil {
-		return nil, err
+	// Вся логика работы с файлами и иконками удалена.
+	// Можно добавить проверку существования записи перед обновлением для большей надежности.
+	if _, err := s.repo.FindPriority(ctx, id); err != nil {
+		s.logger.Warn("Попытка обновить несуществующий приоритет", zap.Uint64("id", id), zap.Error(err))
+		return nil, err // err здесь будет ErrNotFound
 	}
 
-	var smallIconPath, bigIconPath *string
-	const urlPrefix = "/uploads/"
-
-	if iconSmallHeader != nil {
-		file, _ := iconSmallHeader.Open()
-		defer file.Close()
-		// ИЗМЕНЕНИЕ ЗДЕСЬ
-		if err := utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
-			return nil, err
-		}
-		// И ИЗМЕНЕНИЕ ЗДЕСЬ
-		rules, _ := config.UploadContexts["icon_small"]
-		path, err := s.fileStorage.Save(file, iconSmallHeader.Filename, rules.PathPrefix)
-		if err != nil {
-			return nil, err
-		}
-		fullPath := urlPrefix + path
-		smallIconPath = &fullPath
-	}
-
-	if iconBigHeader != nil {
-		file, _ := iconBigHeader.Open()
-		defer file.Close()
-		// ИЗМЕНЕНИЕ ЗДЕСЬ
-		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
-			return nil, err
-		}
-		// И ИЗМЕНЕНИЕ ЗДЕСЬ
-		rules, _ := config.UploadContexts["icon_big"]
-		path, err := s.fileStorage.Save(file, iconBigHeader.Filename, rules.PathPrefix)
-		if err != nil {
-			return nil, err
-		}
-		fullPath := urlPrefix + path
-		bigIconPath = &fullPath
-	}
-
-	updatedPriority, err := s.repo.UpdatePriority(ctx, id, updateDTO, smallIconPath, bigIconPath)
-	if err != nil {
-		if smallIconPath != nil {
-			_ = s.fileStorage.Delete(*smallIconPath)
-		}
-		if bigIconPath != nil {
-			_ = s.fileStorage.Delete(*bigIconPath)
-		}
-		return nil, err
-	}
-
-	if smallIconPath != nil && currentPriority.IconSmall != "" {
-		_ = s.fileStorage.Delete(currentPriority.IconSmall)
-	}
-	if bigIconPath != nil && currentPriority.IconBig != "" {
-		_ = s.fileStorage.Delete(currentPriority.IconBig)
-	}
-
-	return updatedPriority, nil
+	return s.repo.UpdatePriority(ctx, id, updateDTO)
 }
 
+// DeletePriority - ИСПРАВЛЕННЫЙ И УПРОЩЕННЫЙ МЕТОД
 func (s *PriorityService) DeletePriority(ctx context.Context, id uint64) error {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -239,26 +149,6 @@ func (s *PriorityService) DeletePriority(ctx context.Context, id uint64) error {
 		return apperrors.ErrForbidden
 	}
 
-	priorityToDelete, err := s.repo.FindPriority(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	err = s.repo.DeletePriority(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	if priorityToDelete.IconSmall != "" {
-		if err := s.fileStorage.Delete(priorityToDelete.IconSmall); err != nil {
-			s.logger.Warn("Не удалось удалить маленькую иконку приоритета", zap.String("path", priorityToDelete.IconSmall), zap.Error(err))
-		}
-	}
-	if priorityToDelete.IconBig != "" {
-		if err := s.fileStorage.Delete(priorityToDelete.IconBig); err != nil {
-			s.logger.Warn("Не удалось удалить большую иконку приоритета", zap.String("path", priorityToDelete.IconBig), zap.Error(err))
-		}
-	}
-
-	return nil
+	// Вся логика удаления файлов иконок удалена.
+	return s.repo.DeletePriority(ctx, id)
 }

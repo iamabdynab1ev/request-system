@@ -128,10 +128,36 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.Rese
 // Здесь я их привожу, чтобы вы могли просто заменить весь файл целиком.
 
 func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error) {
-	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, payload.Login)
+	loginInput := strings.ToLower(payload.Login)
+
+	// <<<--- НАЧАЛО НОВОЙ ЛОГИКИ ПОИСКА ---
+	var user *entities.User
+	var err error
+
+	// Проверяем, это email, или что-то, что может быть телефоном.
+	if emailRegex.MatchString(loginInput) {
+		// Если это email, ищем как и раньше.
+		user, err = s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
+	} else {
+		// А если это не email, ПРИНУДИТЕЛЬНО нормализуем ввод как телефонный номер.
+		normalizedPhone := utils.NormalizeTajikPhoneNumber(loginInput)
+		if normalizedPhone != "" {
+			// Если нормализация удалась, ищем пользователя в базе по ЧИСТОМУ номеру.
+			user, err = s.userRepo.FindUserByPhone(ctx, normalizedPhone)
+		} else {
+			// Если это и не email, и не распознаваемый телефон, тогда это просто логин.
+			// Пытаемся найти по нему как есть (для обратной совместимости).
+			user, err = s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
+		}
+	}
+	// <<<--- КОНЕЦ НОВОЙ ЛОГИКИ ПОИСКА ---
+
+	// Если пользователь не найден ни одним из способов, возвращаем ошибку.
 	if err != nil {
 		return nil, apperrors.ErrInvalidCredentials
 	}
+
+	// Весь остальной код остается БЕЗ ИЗМЕНЕНИЙ
 	if err := s.checkLockout(ctx, user.ID); err != nil {
 		return nil, err
 	}

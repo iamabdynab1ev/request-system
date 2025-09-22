@@ -12,7 +12,7 @@ CREATE TABLE offices (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT fk_office_branches_id FOREIGN KEY (branche_id) REFERENCES branche(id),
+    CONSTRAINT fk_office_branches_id FOREIGN KEY (branche_id) REFERENCES branches(id),
     CONSTRAINT fk_office_status_id FOREIGN KEY (status_id) REFERENCES statuses(id)
 );
 -- +goose StatementEnd

@@ -1,17 +1,8 @@
 -- +goose Up
--- +goose StatementBegin
--- Изменяем таблицу priorities: удаляем старую колонку и добавляем две новые
-ALTER TABLE priorities
-    DROP COLUMN icon,
-    ADD COLUMN icon_small VARCHAR(100) NOT NULL,
-    ADD COLUMN icon_big VARCHAR(100) NOT NULL;
--- +goose StatementEnd
+-- SQL in this section is executed when the migration is applied.
+-- Эта миграция больше не нужна, так как таблица priorities
+-- уже создается с колонками icon_small и icon_big.
+-- Оставляем её пустой.
 
 -- +goose Down
--- +goose StatementBegin
--- Код для отката изменений: удаляем новые колонки и возвращаем старую
-ALTER TABLE priorities
-    DROP COLUMN icon_small,
-    DROP COLUMN icon_big,
-    ADD COLUMN icon VARCHAR(255) NOT NULL;
--- +goose StatementEnd
+-- SQL in this section is executed when the migration is rolled back.

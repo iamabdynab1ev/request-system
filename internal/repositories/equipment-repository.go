@@ -38,6 +38,7 @@ type EquipmentRepositoryInterface interface {
 	CreateEquipment(ctx context.Context, eq entities.Equipment) (*entities.Equipment, error)
 	UpdateEquipment(ctx context.Context, id uint64, eq entities.Equipment) (*entities.Equipment, error)
 	DeleteEquipment(ctx context.Context, id uint64) error
+	CountOrdersByEquipmentID(ctx context.Context, id uint64) (int, error)
 }
 
 type EquipmentRepository struct {
@@ -217,4 +218,15 @@ func (r *EquipmentRepository) DeleteEquipment(ctx context.Context, id uint64) er
 		return apperrors.ErrNotFound
 	}
 	return nil
+}
+
+func (r *EquipmentRepository) CountOrdersByEquipmentID(ctx context.Context, id uint64) (int, error) {
+	var count int
+	query := "SELECT COUNT(id) FROM orders WHERE equipment_id = $1 AND deleted_at IS NULL"
+	err := r.storage.QueryRow(ctx, query, id).Scan(&count)
+	if err != nil {
+		r.logger.Error("ошибка подсчета заявок по оборудованию", zap.Uint64("equipmentID", id), zap.Error(err))
+		return 0, err
+	}
+	return count, nil
 }

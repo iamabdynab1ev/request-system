@@ -51,10 +51,9 @@ func (suite *OrderTestSuite) SetupSuite() {
 	os.Setenv("DB_PASSWORD", "postgres")
 
 	e := echo.New()
-	logger := zap.NewNop()
 	cfg := config.New()
 	dbConn := postgresql.ConnectDB()
-	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379", DB: 1})
+	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379", DB: 1}) // DB: 1 для тестов - это хорошо!
 
 	v := validator.New()
 	customvalidator.RegisterCustomValidations(v)
@@ -64,17 +63,31 @@ func (suite *OrderTestSuite) SetupSuite() {
 	suite.DB = dbConn
 	suite.Redis = redisClient
 
-	notificationService := services.NewMockNotificationService(logger)
-	userRepo := repositories.NewUserRepository(dbConn, logger)
+	// <<<--- НАЧАЛО ИСПРАВЛЕНИЙ ---
+
+	// 1. Создаем заглушку логгера (zap.NewNop() - идеален для тестов, он ничего не пишет в консоль)
+	nopLogger := zap.NewNop()
+
+	// 2. Создаем структуру Loggers и заполняем все поля этой заглушкой.
+	// В тестах нам не нужны разные файлы, так что один логгер-пустышка для всех - это то, что нужно.
+	appLoggers := &Loggers{
+		Main:         nopLogger,
+		Auth:         nopLogger,
+		Order:        nopLogger,
+		User:         nopLogger,
+		OrderHistory: nopLogger,
+	}
+
+	notificationService := services.NewMockNotificationService(nopLogger)
+	userRepo := repositories.NewUserRepository(dbConn, nopLogger)
 	statusRepo := repositories.NewStatusRepository(dbConn)
-	permissionRepo := repositories.NewPermissionRepository(dbConn, logger)
+	permissionRepo := repositories.NewPermissionRepository(dbConn, nopLogger)
 	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
-	authService := services.NewAuthService(userRepo, cacheRepo, logger, &cfg.Auth, notificationService)
-	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, logger, 10*time.Minute)
-	jwtSvc := service.NewJWTService(cfg.JWT.SecretKey, cfg.JWT.AccessTokenTTL, cfg.JWT.RefreshTokenTTL, logger)
+	authService := services.NewAuthService(userRepo, cacheRepo, nopLogger, &cfg.Auth, notificationService)
+	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, nopLogger, 10*time.Minute)
+	jwtSvc := service.NewJWTService(cfg.JWT.SecretKey, cfg.JWT.AccessTokenTTL, cfg.JWT.RefreshTokenTTL, nopLogger)
 
-	InitRouter(e, dbConn, redisClient, jwtSvc, logger, authPermissionService, cfg)
-
+	InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg)
 	ctx := context.Background()
 
 	activeStatus, err := statusRepo.FindByCode(ctx, "ACTIVE")
@@ -83,14 +96,10 @@ func (suite *OrderTestSuite) SetupSuite() {
 
 	testUserRoleID := uint64(3)
 
-	// <<<--- НАЧАЛО ФИНАЛЬНОГО ИСПРАВЛЕНИЯ ---
-	// 1. ОЧИЩАЕМ КЭШ для нашей тестовой роли, чтобы гарантировать чтение из БД.
-	// Ключ формируется по аналогии с AuthPermissionService
 	cacheKey := fmt.Sprintf("role_permissions:%d", testUserRoleID)
 	err = suite.Redis.Del(ctx, cacheKey).Err()
 	assert.NoError(suite.T(), err, "Очистка кэша прав для роли не должна вызывать ошибок")
 
-	// 2. Находим права по имени
 	permCreate, err := permissionRepo.FindPermissionByName(ctx, "order:create")
 	assert.NoError(suite.T(), err, "Право 'order:create' должно существовать в тестовой БД")
 	permView, err := permissionRepo.FindPermissionByName(ctx, "order:view")
@@ -98,7 +107,6 @@ func (suite *OrderTestSuite) SetupSuite() {
 	permDelete, err := permissionRepo.FindPermissionByName(ctx, "order:delete")
 	assert.NoError(suite.T(), err, "Право 'order:delete' должно существовать в тестовой БД")
 
-	// 3. Связываем Роль с Правами
 	permissionsToLink := []uint64{permCreate.ID, permView.ID, permDelete.ID}
 	for _, permID := range permissionsToLink {
 		_, err = suite.DB.Exec(ctx,
@@ -108,9 +116,7 @@ func (suite *OrderTestSuite) SetupSuite() {
 		)
 		assert.NoError(suite.T(), err, "Привязка прав к роли не должна вызывать ошибок")
 	}
-	// <<<--- КОНЕЦ ФИНАЛЬНОГО ИСПРАВЛЕНИЯ ---
 
-	// --- Создаем и авторизуем пользователя ---
 	hashedPassword, _ := utils.HashPassword("password123")
 	testUserEmail := fmt.Sprintf("testuser_%d@example.com", time.Now().UnixNano())
 	randGenerator := rand.New(rand.NewSource(time.Now().UnixNano()))

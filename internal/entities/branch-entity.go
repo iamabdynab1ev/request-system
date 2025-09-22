@@ -16,9 +16,7 @@ type Branch struct {
 	EmailIndex  string
 	OpenDate    time.Time
 	StatusID    uint64
+	Status      *Status
 
-	types.BaseEntity // CreatedAt, UpdatedAt (time.Time)
-
-	// Поля для JOIN
-	Status *Status `db:"-"`
+	types.BaseEntity
 }

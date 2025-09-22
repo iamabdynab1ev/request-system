@@ -1,20 +1,23 @@
 package authz
 
 import (
+	"slices"
 	"strings"
 
 	"request-system/internal/entities"
 )
 
-// Context содержит все данные, необходимые для принятия решения о доступе.
+// --- РАЗДЕЛ 1: СТРУКТУРЫ И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+// Этот раздел отвечает за подготовку данных для проверки прав.
+
+// Context содержит всю информацию, необходимую для принятия решения о доступе.
 type Context struct {
 	Actor       *entities.User
 	Permissions map[string]bool
 	Target      interface{}
 }
 
-// --- >>> ДОБАВЛЕНО <<< ---
-// HasPermission - это удобный хелпер для проверки, есть ли у пользователя конкретное право.
+// HasPermission - это простой хелпер для безопасной проверки наличия права в карте.
 func (c *Context) HasPermission(permission string) bool {
 	if c.Permissions == nil {
 		return false
@@ -22,74 +25,98 @@ func (c *Context) HasPermission(permission string) bool {
 	return c.Permissions[permission]
 }
 
-// --- >>> КОНЕЦ ДОБАВЛЕНИЯ <<< ---
+// simpleEntities - это список "простых" сущностей (справочников).
+// Для них действуют упрощенные правила доступа.
+var simpleEntities = []string{
+	"role", "permission", "status", "priority", "department", "otdel",
+	"branch", "office", "equipment", "equipment_type", "position",
+}
 
-// CanDo - наша единая "умная" функция проверки прав.
+// isSimpleEntity проверяет, относится ли право к простому справочнику.
+func isSimpleEntity(permission string) bool {
+	entity := strings.Split(permission, ":")[0]
+	return slices.Contains(simpleEntities, entity)
+}
+
+// getAction извлекает действие из права (например, 'update' из 'order:update').
+func getAction(permission string) string {
+	parts := strings.Split(permission, ":")
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return ""
+}
+
+// --- РАЗДЕЛ 2: ГЛАВНАЯ ЛОГИКА АВТОРИЗАЦИИ ---
+// Эта функция - "мозг" всей системы прав. Она вызывается из сервисов.
+
 func CanDo(permission string, ctx Context) bool {
-	// Этап 1: Superuser может абсолютно всё.
-	if ctx.HasPermission(Superuser) { // Используем новый хелпер для чистоты кода
+	// ПРАВИЛО №1: Superuser может абсолютно всё.
+	// Это самая первая и главная проверка.
+	if ctx.HasPermission(Superuser) {
 		return true
 	}
 
-	// Специальное правило: Разрешаем просмотр профиля любого пользователя
-	if permission == UsersView && ctx.Target != nil {
-		if _, ok := ctx.Target.(*entities.User); ok {
-			return ctx.HasPermission(UsersView) // Проверяем, что базовое право на просмотр все-таки есть
-		}
+	// ПРАВИЛО №2 (СПЕЦИАЛЬНОЕ): Упрощенная логика для просмотра пользователей.
+	// Если мы проверяем право "user:view", то вся сложная логика со scope'ами ниже
+	// игнорируется. Достаточно просто иметь это одно право.
+	if permission == UsersView {
+		return ctx.HasPermission(UsersView)
 	}
 
-	// Этап 2: Проверяем, есть ли у пользователя базовый пермишен на само действие.
-	if !ctx.HasPermission(permission) { // Используем новый хелпер
+	// ПРАВИЛО №3: Проверка наличия базового права.
+	// Если у пользователя нет самого простого права на действие, дальнейшие проверки бессмысленны.
+	if !ctx.HasPermission(permission) {
 		return false
 	}
 
-	action := getActionFromPermission(permission)
+	action := getAction(permission)
 
-	// Правило 2.1: Для 'create' достаточно базового пермишена.
+	// ПРАВИЛО №3.1: Для действия 'create' достаточно базового права.
 	if action == "create" {
 		return true
 	}
 
-	// Этап 3: Проверяем простые сущности (справочники).
-	isSimpleEntityPermission := strings.HasPrefix(permission, "role:") ||
-		strings.HasPrefix(permission, "permission:") ||
-		strings.HasPrefix(permission, "status:") ||
-		strings.HasPrefix(permission, "priority:") ||
-		strings.HasPrefix(permission, "department:") ||
-		strings.HasPrefix(permission, "otdel:") ||
-		strings.HasPrefix(permission, "branch:") ||
-		strings.HasPrefix(permission, "office:") ||
-		strings.HasPrefix(permission, "equipment:") ||
-		strings.HasPrefix(permission, "equipment_type:") ||
-		strings.HasPrefix(permission, "position:")
-
-	if isSimpleEntityPermission {
+	// ПРАВИЛО №4: Логика для простых справочников.
+	if isSimpleEntity(permission) {
+		// Смотреть ('view') справочники можно, если есть базовое право.
 		if action == "view" {
 			return true
 		}
-		return ctx.HasPermission(ScopeAll) // Для управления справочниками нужен scope:all
+		// А изменять/удалять справочники может только тот, у кого есть глобальный доступ (`scope:all`).
+		return ctx.HasPermission(ScopeAll)
 	}
 
-	// Этап 4: Применяем сложную логику scope для Заявок и Пользователей.
+	// ПРАВИЛО №5: Сложная логика на основе SCOPE для основных сущностей (Заявки).
+	// Если у пользователя есть `scope:all`, он может выполнять действие над любым объектом.
 	if ctx.HasPermission(ScopeAll) {
 		return true
 	}
 
-	if ctx.Target == nil { // Запрос на список
+	// Если `Target` не указан, значит, это запрос на СПИСОК (например, GET /api/orders).
+	// Чтобы видеть хоть что-то, пользователь должен иметь хотя бы один scope.
+	if ctx.Target == nil {
 		return ctx.HasPermission(ScopeDepartment) || ctx.HasPermission(ScopeOwn)
 	}
 
-	// Запрос на конкретный объект
+	// Если `Target` указан, это запрос на КОНКРЕТНЫЙ объект.
 	switch target := ctx.Target.(type) {
-	case *entities.Order: // Работа с Заявкой
+	case *entities.Order: // ПРАВИЛА ДЛЯ ЗАЯВОК
+		// Разрешено, если у пользователя есть scope отдела и заявка из его отдела.
 		if ctx.HasPermission(ScopeDepartment) && ctx.Actor.DepartmentID == target.DepartmentID {
 			return true
 		}
-		if ctx.HasPermission(ScopeOwn) && (ctx.Actor.ID == target.CreatorID || ctx.Actor.ID == target.ExecutorID) {
-			return true
+		// Разрешено, если у пользователя есть scope "своих данных" и он является создателем ИЛИ исполнителем.
+		if ctx.HasPermission(ScopeOwn) {
+			isCreator := ctx.Actor.ID == target.CreatorID
+			isExecutor := target.ExecutorID != nil && ctx.Actor.ID == *target.ExecutorID
+			if isCreator || isExecutor {
+				return true
+			}
 		}
 
-	case *entities.User: // Работа с Пользователем
+	case *entities.User:
+		// Эти правила теперь будут работать для `user:update`, `user:delete` и т.д.
 		if ctx.HasPermission(ScopeDepartment) && ctx.Actor.DepartmentID == target.DepartmentID {
 			return true
 		}
@@ -98,14 +125,6 @@ func CanDo(permission string, ctx Context) bool {
 		}
 	}
 
-	return false // Если ни одно правило не сработало
-}
-
-// getActionFromPermission - приватный хелпер для извлечения действия (без изменений).
-func getActionFromPermission(permission string) string {
-	parts := strings.Split(permission, ":")
-	if len(parts) >= 2 {
-		return parts[1]
-	}
-	return ""
+	// ПРАВИЛО №6 (ПО УМОЛЧАНИЮ): Если ни одно из правил выше не разрешило доступ, запретить.
+	return false
 }

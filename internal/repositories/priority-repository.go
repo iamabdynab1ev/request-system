@@ -1,4 +1,3 @@
-// Файл: internal/repositories/priority_repository.go
 package repositories
 
 import (
@@ -12,7 +11,7 @@ import (
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
-	"request-system/pkg/utils" // ИСПОЛЬЗУЕМ utils вместо локального хелпера
+	"request-system/pkg/utils"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -20,41 +19,37 @@ import (
 	"go.uber.org/zap"
 )
 
+// PriorityRepositoryInterface - обновленный интерфейс
 type PriorityRepositoryInterface interface {
-	// IsPriorityInUse УБРАН
 	GetPriorities(ctx context.Context, limit uint64, offset uint64, search string) ([]dto.PriorityDTO, uint64, error)
 	FindPriority(ctx context.Context, id uint64) (*dto.PriorityDTO, error)
-	CreatePriority(ctx context.Context, dto dto.CreatePriorityDTO, iconSmallPath, iconBigPath string) (*dto.PriorityDTO, error)
-	UpdatePriority(ctx context.Context, id uint64, dto dto.UpdatePriorityDTO, iconSmallPath, iconBigPath *string) (*dto.PriorityDTO, error)
+	CreatePriority(ctx context.Context, dto dto.CreatePriorityDTO) (*dto.PriorityDTO, error)
+	UpdatePriority(ctx context.Context, id uint64, dto dto.UpdatePriorityDTO) (*dto.PriorityDTO, error)
 	DeletePriority(ctx context.Context, id uint64) error
 	FindByCode(ctx context.Context, code string) (*entities.Priority, error)
 	FindByID(ctx context.Context, id uint64) (*entities.Priority, error)
 }
 
-// ==========================================================
-
+// Глобальные константы без полей иконок
 const (
 	priorityTable  = "priorities"
-	priorityFields = "id, icon_small, icon_big, name, rate, code, created_at, updated_at"
+	priorityFields = "id, name, rate, code, created_at, updated_at"
 )
 
+// dbPriority - структура для сканирования из БД, без иконок.
 type dbPriority struct {
 	ID        uint64
-	IconSmall sql.NullString
-	IconBig   sql.NullString
 	Name      string
-	Rate      sql.NullInt32 // NullInt32 для безопасности
+	Rate      sql.NullInt32
 	Code      sql.NullString
 	CreatedAt time.Time
 	UpdatedAt sql.NullTime
 }
 
-// Теперь используется utils
+// toDTO - конвертер без полей иконок.
 func (db *dbPriority) toDTO() dto.PriorityDTO {
 	return dto.PriorityDTO{
 		ID:        db.ID,
-		IconSmall: utils.NullStringToString(db.IconSmall),
-		IconBig:   utils.NullStringToString(db.IconBig),
 		Name:      db.Name,
 		Rate:      utils.NullInt32ToInt(db.Rate),
 		Code:      utils.NullStringToString(db.Code),
@@ -72,32 +67,38 @@ func NewPriorityRepository(storage *pgxpool.Pool, logger *zap.Logger) PriorityRe
 	return &PriorityRepository{storage: storage, logger: logger}
 }
 
-// ... GetPriorities, FindPriority, FindByCode, FindByID ...
-
+// GetPriorities: изменен Scan
 func (r *PriorityRepository) GetPriorities(ctx context.Context, limit, offset uint64, search string) ([]dto.PriorityDTO, uint64, error) {
 	var total uint64
 	var args []interface{}
-	whereClause := ""
+
+	// ИСПРАВЛЕННАЯ ЛОГИКА
+	whereClause := "" // Начинаем с пустой строки
 
 	if search != "" {
-		whereClause = "WHERE name ILIKE $1 OR code ILIKE $1"
+		whereClause = "WHERE name ILIKE $1 OR code ILIKE $1" // Добавляем WHERE, только если он нужен
 		args = append(args, "%"+search+"%")
 	}
+	// Условие "WHERE deleted_at IS NULL" ПОЛНОСТЬЮ УБРАНО.
 
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", priorityTable, whereClause)
 	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		r.logger.Error("GetPriorities (repo): ошибка при подсчете количества", zap.Error(err), zap.String("query", countQuery))
 		return nil, 0, err
 	}
+
 	if total == 0 {
 		return []dto.PriorityDTO{}, 0, nil
 	}
 
+	// Код для постраничной навигации и сортировки остается без изменений
 	queryArgs := append(args, limit, offset)
 	query := fmt.Sprintf("SELECT %s FROM %s %s ORDER BY rate DESC, id LIMIT $%d OFFSET $%d",
 		priorityFields, priorityTable, whereClause, len(args)+1, len(args)+2)
 
 	rows, err := r.storage.Query(ctx, query, queryArgs...)
 	if err != nil {
+		r.logger.Error("GetPriorities (repo): ошибка при выполнении основного запроса", zap.Error(err), zap.String("query", query))
 		return nil, 0, err
 	}
 	defer rows.Close()
@@ -105,7 +106,8 @@ func (r *PriorityRepository) GetPriorities(ctx context.Context, limit, offset ui
 	priorities := make([]dto.PriorityDTO, 0)
 	for rows.Next() {
 		var dbRow dbPriority
-		if err := rows.Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Rate, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt); err != nil {
+		if err := rows.Scan(&dbRow.ID, &dbRow.Name, &dbRow.Rate, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt); err != nil {
+			r.logger.Error("GetPriorities (repo): ошибка при сканировании строки", zap.Error(err))
 			return nil, 0, err
 		}
 		priorities = append(priorities, dbRow.toDTO())
@@ -113,10 +115,11 @@ func (r *PriorityRepository) GetPriorities(ctx context.Context, limit, offset ui
 	return priorities, total, rows.Err()
 }
 
+// FindPriority: изменен Scan
 func (r *PriorityRepository) FindPriority(ctx context.Context, id uint64) (*dto.PriorityDTO, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", priorityFields, priorityTable)
 	var dbRow dbPriority
-	err := r.storage.QueryRow(ctx, query, id).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Rate, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+	err := r.storage.QueryRow(ctx, query, id).Scan(&dbRow.ID, &dbRow.Name, &dbRow.Rate, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
@@ -127,13 +130,14 @@ func (r *PriorityRepository) FindPriority(ctx context.Context, id uint64) (*dto.
 	return &priorityDTO, nil
 }
 
-func (r *PriorityRepository) CreatePriority(ctx context.Context, dto dto.CreatePriorityDTO, iconSmallPath, iconBigPath string) (*dto.PriorityDTO, error) {
-	query := fmt.Sprintf(`INSERT INTO %s (name, rate, code, icon_small, icon_big) VALUES ($1, $2, $3, $4, $5) RETURNING %s`, priorityTable, priorityFields)
+// CreatePriority: изменен INSERT и Scan
+func (r *PriorityRepository) CreatePriority(ctx context.Context, dto dto.CreatePriorityDTO) (*dto.PriorityDTO, error) {
+	query := fmt.Sprintf(`INSERT INTO %s (name, rate, code) VALUES ($1, $2, $3) RETURNING %s`, priorityTable, priorityFields)
 	var dbRow dbPriority
-	err := r.storage.QueryRow(ctx, query, dto.Name, dto.Rate, dto.Code, iconSmallPath, iconBigPath).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Rate, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+	err := r.storage.QueryRow(ctx, query, dto.Name, dto.Rate, dto.Code).Scan(&dbRow.ID, &dbRow.Name, &dbRow.Rate, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // UNIQUE constraint
 			return nil, apperrors.ErrConflict
 		}
 		r.logger.Error("Ошибка при создании приоритета в БД", zap.Error(err))
@@ -143,7 +147,8 @@ func (r *PriorityRepository) CreatePriority(ctx context.Context, dto dto.CreateP
 	return &createdDTO, nil
 }
 
-func (r *PriorityRepository) UpdatePriority(ctx context.Context, id uint64, dto dto.UpdatePriorityDTO, iconSmallPath, iconBigPath *string) (*dto.PriorityDTO, error) {
+// UpdatePriority: изменен UPDATE и Scan, полностью убрана логика иконок
+func (r *PriorityRepository) UpdatePriority(ctx context.Context, id uint64, dto dto.UpdatePriorityDTO) (*dto.PriorityDTO, error) {
 	var setClauses []string
 	var args []interface{}
 	argId := 1
@@ -163,16 +168,7 @@ func (r *PriorityRepository) UpdatePriority(ctx context.Context, id uint64, dto 
 		args = append(args, *dto.Code)
 		argId++
 	}
-	if iconSmallPath != nil {
-		setClauses = append(setClauses, fmt.Sprintf("icon_small = $%d", argId))
-		args = append(args, *iconSmallPath)
-		argId++
-	}
-	if iconBigPath != nil {
-		setClauses = append(setClauses, fmt.Sprintf("icon_big = $%d", argId))
-		args = append(args, *iconBigPath)
-		argId++
-	}
+
 	if len(setClauses) == 0 {
 		return r.FindPriority(ctx, id)
 	}
@@ -184,7 +180,7 @@ func (r *PriorityRepository) UpdatePriority(ctx context.Context, id uint64, dto 
 	args = append(args, id)
 
 	var dbRow dbPriority
-	err := r.storage.QueryRow(ctx, query, args...).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Rate, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+	err := r.storage.QueryRow(ctx, query, args...).Scan(&dbRow.ID, &dbRow.Name, &dbRow.Rate, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
@@ -199,17 +195,13 @@ func (r *PriorityRepository) UpdatePriority(ctx context.Context, id uint64, dto 
 	return &updatedDTO, nil
 }
 
-// ↓↓↓↓↓↓  ВОТ ГЛАВНОЕ ИЗМЕНЕНИЕ  ↓↓↓↓↓↓
-
-// DeletePriority теперь обрабатывает ошибку внешнего ключа (foreign key)
+// DeletePriority: теперь обрабатывает ошибку внешнего ключа
 func (r *PriorityRepository) DeletePriority(ctx context.Context, id uint64) error {
 	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", priorityTable)
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
-		// Проверяем код ошибки: 23503 - это foreign_key_violation
-		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			// Возвращаем специальную ошибку, которую поймет сервис
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" { // foreign_key_violation
 			return apperrors.ErrPriorityInUse
 		}
 		return err

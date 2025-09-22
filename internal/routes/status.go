@@ -1,44 +1,41 @@
 package routes
 
 import (
-	"log"
-
-	"request-system/internal/authz" // <-- Импорт констант
+	"request-system/internal/authz"
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
 	"request-system/pkg/filestorage"
-	"request-system/pkg/middleware" // <-- Импорт мидлвара
+	"request-system/pkg/middleware"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
-// Сигнатура теперь принимает authMW, как и все защищенные роутеры
+// Сигнатура функции правильная - принимает fileStorage
 func runStatusRouter(
-	secureGroup *echo.Group, // Используем secureGroup
+	secureGroup *echo.Group,
 	dbConn *pgxpool.Pool,
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
+	fileStorage filestorage.FileStorageInterface,
 ) {
-	// Инициализация зависимостей
-	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
-	if err != nil {
-		log.Fatalf("не удалось инициализировать хранилище файлов для Status: %v", err)
-	}
-
+	// Инициализируем ВСЕ репозитории, которые нужны сервису
 	statusRepository := repositories.NewStatusRepository(dbConn)
-	userRepository := repositories.NewUserRepository(dbConn, logger)
+	userRepository := repositories.NewUserRepository(dbConn, logger) // <-- ВОТ ЧЕГО НЕ ХВАТАЛО
 
+	// Теперь вызываем конструктор с правильным набором аргументов
 	statusService := services.NewStatusService(statusRepository, userRepository, fileStorage, logger)
 
 	statusCtrl := controllers.NewStatusController(statusService, logger)
 
 	statuses := secureGroup.Group("/status")
-	statuses.GET("", statusCtrl.GetStatuses, authMW.AuthorizeAny(authz.StatusesView))
-	statuses.GET("/:id", statusCtrl.FindStatus, authMW.AuthorizeAny(authz.StatusesView))
-	statuses.POST("", statusCtrl.CreateStatus, authMW.AuthorizeAny(authz.StatusesCreate))
-	statuses.PUT("/:id", statusCtrl.UpdateStatus, authMW.AuthorizeAny(authz.StatusesUpdate))
-	statuses.DELETE("/:id", statusCtrl.DeleteStatus, authMW.AuthorizeAny(authz.StatusesDelete))
+	{
+		statuses.GET("", statusCtrl.GetStatuses, authMW.AuthorizeAny(authz.StatusesView))
+		statuses.GET("/:id", statusCtrl.FindStatus, authMW.AuthorizeAny(authz.StatusesView))
+		statuses.POST("", statusCtrl.CreateStatus, authMW.AuthorizeAny(authz.StatusesCreate))
+		statuses.PUT("/:id", statusCtrl.UpdateStatus, authMW.AuthorizeAny(authz.StatusesUpdate))
+		statuses.DELETE("/:id", statusCtrl.DeleteStatus, authMW.AuthorizeAny(authz.StatusesDelete))
+	}
 }

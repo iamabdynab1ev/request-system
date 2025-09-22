@@ -8,7 +8,6 @@ import (
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
-	"request-system/pkg/filestorage"
 	"request-system/pkg/middleware"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,17 +21,14 @@ func RunPriorityRouter(
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
 ) {
-	// Инициализация файлового хранилища
-	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
-	if err != nil {
-		log.Fatalf("не удалось инициализировать хранилище файлов для Priority: %v", err)
-	}
-
 	priorityRepository := repositories.NewPriorityRepository(dbConn, logger)
 	userRepository := repositories.NewUserRepository(dbConn, logger) // Предполагаем, что он уже есть
 
 	// Внедряем FileStorage в сервис
-	priorityService := services.NewPriorityService(priorityRepository, userRepository, fileStorage, logger)
+	priorityService := services.NewPriorityService(priorityRepository, userRepository, logger)
+	if priorityService == nil {
+		log.Fatal("Не удалось создать PriorityService")
+	}
 	priorityCtrl := controllers.NewPriorityController(priorityService, logger)
 
 	priorities := secureGroup.Group("/priority")

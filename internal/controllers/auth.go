@@ -42,7 +42,6 @@ func (ctrl *AuthController) errorResponse(c echo.Context, err error) error {
 }
 
 func (ctrl *AuthController) Login(c echo.Context) error {
-	ctrl.logger.Error("!!!!!!!!!! МЫ ВНУТРИ ФУНКЦИИ LOGIN !!!!!!!!!!")
 	var payload dto.LoginDTO
 
 	if err := c.Bind(&payload); err != nil {
@@ -77,22 +76,18 @@ func (ctrl *AuthController) Login(c echo.Context) error {
 		permissions = []string{}
 	}
 
-	// <<< ИЗМЕНЕНО: Передаем payload.RememberMe в нашу главную функцию
-	return ctrl.generateTokensAndRespond(c, user.ID, user.RoleID, permissions, "Авторизация прошла успешно", payload.RememberMe)
+	return ctrl.generateTokensAndRespond(c, user.ID, user.RoleID, user.RoleName, permissions, "Авторизация прошла успешно", payload.RememberMe)
 }
 
-// <<< ДОБАВЛЕНО: Новая функция для выхода из системы
 func (ctrl *AuthController) Logout(c echo.Context) error {
-	// Создаем cookie с таким же именем, но с датой истечения в прошлом.
-	// Браузер увидит это и удалит существующую cookie.
 	cookie := &http.Cookie{
 		Name:     "refreshToken",
 		Value:    "",
 		Path:     "/",
-		Expires:  time.Unix(0, 0), // Устанавливаем дату в прошлом, чтобы браузер удалил cookie
-		MaxAge:   -1,              // Дополнительная инструкция для немедленного удаления
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true, // Атрибуты должны совпадать с теми, что при логине
+		Secure:   true,
 		SameSite: http.SameSiteNoneMode,
 	}
 
@@ -126,21 +121,29 @@ func (ctrl *AuthController) RefreshToken(c echo.Context) error {
 		)
 	}
 
+	// <<<--- НАЧАЛО ИЗМЕНЕНИЙ В RefreshToken ---
+	// Получаем пользователя, чтобы достать RoleName
+	user, err := ctrl.authService.GetUserByID(c.Request().Context(), claims.UserID)
+	if err != nil {
+		ctrl.logger.Error("Ошибка получения пользователя по ID при обновлении токена", zap.Uint64("userID", claims.UserID), zap.Error(err))
+		return utils.ErrorResponse(c, err, ctrl.logger)
+	}
+	// <<<--- КОНЕЦ ИЗМЕНЕНИЙ В RefreshToken ---
+
 	permissions, err := ctrl.authPermissionService.GetRolePermissionsNames(c.Request().Context(), claims.RoleID)
 	if err != nil {
 		ctrl.logger.Error("Не удалось получить привилегии при обновлении токена", zap.Uint64("userID", claims.UserID), zap.Uint64("roleID", claims.RoleID), zap.Error(err))
 		permissions = []string{}
 	}
 
-	// <<< ИЗМЕНЕНО: При обновлении токена, считаем, что пользователь хочет остаться в системе.
-	// Поэтому передаем `true` для `rememberMe`.
 	return ctrl.generateTokensAndRespond(
 		c,
 		claims.UserID,
 		claims.RoleID,
+		user.RoleName,
 		permissions,
 		"Токены успешно обновлены",
-		true, // Всегда считаем, что сессию нужно продлить
+		true,
 	)
 }
 
@@ -161,7 +164,6 @@ func (ctrl *AuthController) Me(c echo.Context) error {
 		Email:        user.Email,
 		Phone:        user.PhoneNumber,
 		FIO:          user.Fio,
-		RoleName:     user.RoleName,
 		PhotoURL:     user.PhotoURL,
 		Position:     user.Position,
 		BranchID:     user.BranchID,
@@ -224,17 +226,17 @@ func (ctrl *AuthController) ResetPassword(c echo.Context) error {
 	return utils.SuccessResponse(c, nil, "Пароль успешно изменен.", http.StatusOK)
 }
 
-// <<< ИЗМЕНЕНО: Функция теперь принимает флаг 'rememberMe' для управления логикой cookie
-func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID, roleID uint64, permissions []string, message string, rememberMe bool) error {
-	accessTokenTTL := ctrl.jwtSvc.GetAccessTokenTTL() // Access токен всегда имеет стандартное короткое время жизни
+func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID, roleID uint64, roleName string, permissions []string, message string, rememberMe bool) error { // <<< ДОБАВЛЕН roleName
+	accessTokenTTL := ctrl.jwtSvc.GetAccessTokenTTL()
 	var refreshTokenTTL time.Duration
 
 	if rememberMe {
-		refreshTokenTTL = ctrl.jwtSvc.GetRefreshTokenTTL() // Если "запомнить", используем длинное время из конфига (7 дней)
+		refreshTokenTTL = ctrl.jwtSvc.GetRefreshTokenTTL()
 	} else {
-		refreshTokenTTL = time.Hour * 8 // Если не "запоминать", даем на 8 часов (на рабочий день)
+		refreshTokenTTL = time.Hour * 8
 	}
 
+	// В генерацию токена все еще идет roleID, это правильно.
 	accessToken, refreshToken, err := ctrl.jwtSvc.GenerateTokens(userID, roleID, accessTokenTTL, refreshTokenTTL)
 	if err != nil {
 		ctrl.logger.Error("Не удалось сгенерировать токены", zap.Error(err), zap.Uint64("userID", userID))
@@ -246,24 +248,18 @@ func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID, rol
 	cookie.Value = refreshToken
 	cookie.Path = "/"
 	cookie.HttpOnly = true
-	cookie.Secure = true // Важно для SameSite=None
+	cookie.Secure = true
 	cookie.SameSite = http.SameSiteNoneMode
 
-	// cookie.Partitioned = true // <<< ЭТО СВОЙСТВО МОЖЕТ ВЫЗЫВАТЬ ПРОБЛЕМЫ В СТАРЫХ БРАУЗЕРАХ. ЕСЛИ ЧТО, ЗАКОММЕНТИРУЙ.
-
-	// <<< ДОБАВЛЕНО: Главная логика "Запомнить меня"
 	if rememberMe {
-		// Если нужно запомнить, устанавливаем поле Expires. Cookie станет постоянной.
 		cookie.Expires = time.Now().Add(refreshTokenTTL)
-	} else {
-		// Если не нужно, поле Expires остается пустым. Cookie станет сессионной и удалится при закрытии браузера.
 	}
 
 	c.SetCookie(cookie)
 
 	response := dto.AuthResponseDTO{
 		AccessToken: accessToken,
-		RoleID:      roleID,
+		RoleName:    roleName,
 		Permissions: permissions,
 	}
 
