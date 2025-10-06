@@ -15,7 +15,7 @@ REM --- Шаг 2: Проверяем, существует ли папка дл�
 IF NOT EXIST "uploads" (
     ECHO Folder 'uploads' not found. Creating...
     mkdir uploads
-)
+)a
 
 ECHO.
 ECHO StartingШаг 2: Создание нового, рабочего `.exe` файла**

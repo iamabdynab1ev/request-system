@@ -28,13 +28,11 @@ func NewAuthMiddleware(jwtSvc service.JWTService, authPermissionSvc services.Aut
 func (m *AuthMiddleware) Auth(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		authHeader := c.Request().Header.Get("Authorization")
-		m.logger.Debug("AuthMiddleware: Получен заголовок Authorization", zap.String("authHeader", authHeader))
 		if authHeader == "" {
 			return utils.ErrorResponse(c, apperrors.ErrEmptyAuthHeader, m.logger)
 		}
 
 		parts := strings.Split(authHeader, " ")
-		m.logger.Debug("AuthMiddleware: Разбитый заголовок на части", zap.Strings("parts", parts))
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 			return utils.ErrorResponse(c, apperrors.ErrInvalidAuthHeader, m.logger)
 		}
@@ -50,11 +48,10 @@ func (m *AuthMiddleware) Auth(next echo.HandlerFunc) echo.HandlerFunc {
 			return utils.ErrorResponse(c, apperrors.ErrTokenIsNotAccess, m.logger)
 		}
 
-		permissions, err := m.authPermissionService.GetRolePermissionsNames(c.Request().Context(), claims.RoleID)
+		permissions, err := m.authPermissionService.GetAllUserPermissions(c.Request().Context(), claims.UserID)
 		if err != nil {
-			m.logger.Error("Не удалось получить имена привилегий для роли пользователя",
+			m.logger.Error("Не удалось получить финальный список привилегий для пользователя",
 				zap.Uint64("userID", claims.UserID),
-				zap.Uint64("roleID", claims.RoleID),
 				zap.Error(err),
 			)
 			return utils.ErrorResponse(c, apperrors.ErrInternalServer, m.logger)
@@ -67,14 +64,13 @@ func (m *AuthMiddleware) Auth(next echo.HandlerFunc) echo.HandlerFunc {
 
 		ctx := c.Request().Context()
 		newCtx := context.WithValue(ctx, contextkeys.UserIDKey, claims.UserID)
-		newCtx = context.WithValue(newCtx, contextkeys.UserRoleIDKey, claims.RoleID)
+		newCtx = context.WithValue(newCtx, contextkeys.UserRoleIDKey, claims.RoleID) // RoleID из claims, если оно есть и нужно для чего-то
 		newCtx = context.WithValue(newCtx, contextkeys.UserPermissionsKey, permissions)
 		newCtx = context.WithValue(newCtx, contextkeys.UserPermissionsMapKey, permissionsMap)
 		c.SetRequest(c.Request().WithContext(newCtx))
 
-		m.logger.Info("Пользователь успешно аутентифицирован и привилегии загружены",
+		m.logger.Info("Пользователь успешно аутентифицирован, финальные привилегии загружены",
 			zap.Uint64("userID", claims.UserID),
-			zap.Uint64("roleID", claims.RoleID),
 			zap.Strings("permissions", permissions),
 		)
 
@@ -100,7 +96,7 @@ func getUserPermissionsFromContext(ctx context.Context) ([]string, bool) {
 
 func isSuperuser(permissions []string) bool {
 	for _, perm := range permissions {
-		if perm == "superuser" {
+		if perm == "superuser" { // Предполагается, что существует такое право
 			return true
 		}
 	}
@@ -166,6 +162,7 @@ func (m *AuthMiddleware) AuthorizeAll(requiredPermissions ...string) echo.Middle
 
 			if len(missingPermissions) > 0 {
 				m.logger.Warn("Пользователь не имеет всех необходимых привилегий.", zap.Any("userID", c.Request().Context().Value(contextkeys.UserIDKey)), zap.Strings("missingPermissions", missingPermissions), zap.Strings("requiredPermissions", requiredPermissions), zap.Strings("userPermissions", userPermissions))
+				return utils.ErrorResponse(c, apperrors.ErrForbidden, m.logger) // Добавил возврат Forbidden
 			}
 
 			m.logger.Debug("Пользователь имеет все требуемые привилегии.", zap.Any("userID", c.Request().Context().Value(contextkeys.UserIDKey)))

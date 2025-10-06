@@ -30,7 +30,7 @@ var roleAllowedSortFields = map[string]string{
 }
 
 type RoleRepositoryInterface interface {
-	GetRoles(ctx context.Context, filter types.Filter) ([]entities.Role, error)
+	GetRoles(ctx context.Context, filter types.Filter) ([]entities.Role, uint64, error)
 	CountRoles(ctx context.Context, filter types.Filter) (uint64, error)
 	FindRoleByID(ctx context.Context, id uint64) (*entities.Role, []uint64, error)
 	CreateRoleInTx(ctx context.Context, tx pgx.Tx, role entities.Role) (uint64, error)
@@ -68,7 +68,6 @@ func (r *RoleRepository) buildFilterQuery(filter types.Filter) (string, []interf
 
 	for key, value := range filter.Filter {
 		if dbColumn, ok := roleAllowedFilterFields[key]; ok {
-			//... (стандартная логика IN и =)
 			if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
 				items := strings.Split(strVal, ",")
 				placeholders := make([]string, len(items))
@@ -93,8 +92,16 @@ func (r *RoleRepository) buildFilterQuery(filter types.Filter) (string, []interf
 	return whereClause, args
 }
 
-func (r *RoleRepository) GetRoles(ctx context.Context, filter types.Filter) ([]entities.Role, error) {
+func (r *RoleRepository) GetRoles(ctx context.Context, filter types.Filter) ([]entities.Role, uint64, error) {
 	whereClause, args := r.buildFilterQuery(filter)
+
+	total, err := r.CountRoles(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []entities.Role{}, 0, nil
+	}
 
 	orderByClause := "ORDER BY r.id DESC"
 	if len(filter.Sort) > 0 {
@@ -120,25 +127,20 @@ func (r *RoleRepository) GetRoles(ctx context.Context, filter types.Filter) ([]e
 		args = append(args, filter.Limit, filter.Offset)
 	}
 
-	// НАДЕЖНЫЙ ЗАПРОС С JSON_AGG
 	query := fmt.Sprintf(`
-		SELECT 
-			r.id, r.name, r.description, r.status_id, r.created_at, r.updated_at,
+		SELECT r.id, r.name, r.description, r.status_id, r.created_at, r.updated_at,
 			COALESCE(
 				(SELECT json_agg(rp.permission_id) FROM role_permissions rp WHERE rp.role_id = r.id),
 				'[]'::json
 			) AS permission_ids
-		FROM 
-			roles r
-		%s
-		%s
-		%s
+		FROM
+			roles r %s %s %s
 	`, whereClause, orderByClause, limitClause)
 
 	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
 		r.logger.Error("ошибка получения списка ролей с правами", zap.Error(err), zap.String("query", query))
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -146,7 +148,7 @@ func (r *RoleRepository) GetRoles(ctx context.Context, filter types.Filter) ([]e
 	for rows.Next() {
 		var role entities.Role
 		var createdAt, updatedAt time.Time
-		var permissionIDsBytes []byte // Получаем JSON как байты
+		var permissionIDsBytes []byte
 
 		err := rows.Scan(
 			&role.ID, &role.Name, &role.Description, &role.StatusID,
@@ -154,13 +156,11 @@ func (r *RoleRepository) GetRoles(ctx context.Context, filter types.Filter) ([]e
 		)
 		if err != nil {
 			r.logger.Error("ошибка сканирования строки роли", zap.Error(err))
-			return nil, err
+			return nil, 0, err
 		}
 
-		// Распаковываем JSON прямо в поле `Permissions` нашей роли
 		if err := json.Unmarshal(permissionIDsBytes, &role.Permissions); err != nil {
 			r.logger.Error("ошибка распаковки permission_ids из JSON", zap.Error(err))
-			// Не возвращаем ошибку, просто у роли будет пустой срез прав
 			role.Permissions = []uint64{}
 		}
 
@@ -171,11 +171,10 @@ func (r *RoleRepository) GetRoles(ctx context.Context, filter types.Filter) ([]e
 
 	if err = rows.Err(); err != nil {
 		r.logger.Error("ошибка после итерации по ролям", zap.Error(err))
-		return nil, err
+		return nil, 0, err
 	}
 
-	// Возвращаем []entities.Role, как и ожидает твой сервис
-	return roles, nil
+	return roles, total, nil
 }
 
 func (r *RoleRepository) CountRoles(ctx context.Context, filter types.Filter) (uint64, error) {

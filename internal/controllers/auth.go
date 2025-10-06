@@ -1,4 +1,3 @@
-// Файл: internal/controllers/auth_controller.go
 package controllers
 
 import (
@@ -46,37 +45,27 @@ func (ctrl *AuthController) Login(c echo.Context) error {
 
 	if err := c.Bind(&payload); err != nil {
 		ctrl.logger.Error("Login: ошибка привязки данных", zap.Error(err))
-		return utils.ErrorResponse(c, apperrors.NewHttpError(
-			http.StatusBadRequest,
-			"Неверный формат данных для входа",
-			err,
-			nil,
-		), ctrl.logger)
+		return ctrl.errorResponse(c, apperrors.NewBadRequestError("Неверный формат данных для входа"))
 	}
 
 	if err := c.Validate(&payload); err != nil {
 		ctrl.logger.Error("Login: ошибка валидации данных", zap.Error(err))
-		return utils.ErrorResponse(c, apperrors.NewHttpError(
-			http.StatusBadRequest,
-			"Ошибка валидации данных для входа",
-			err,
-			nil,
-		), ctrl.logger)
+		return ctrl.errorResponse(c, err)
 	}
 
 	user, err := ctrl.authService.Login(c.Request().Context(), payload)
 	if err != nil {
 		ctrl.logger.Error("Login: ошибка авторизации", zap.String("login", payload.Login), zap.Error(err))
-		return utils.ErrorResponse(c, err, ctrl.logger)
+		return ctrl.errorResponse(c, err)
 	}
 
-	permissions, err := ctrl.authPermissionService.GetRolePermissionsNames(c.Request().Context(), user.RoleID)
+	permissions, err := ctrl.authPermissionService.GetAllUserPermissions(c.Request().Context(), user.ID)
 	if err != nil {
 		ctrl.logger.Error("Login: не удалось получить привилегии пользователя", zap.Uint64("userID", user.ID), zap.Error(err))
 		permissions = []string{}
 	}
 
-	return ctrl.generateTokensAndRespond(c, user.ID, user.RoleID, user.RoleName, permissions, "Авторизация прошла успешно", payload.RememberMe)
+	return ctrl.generateTokensAndRespond(c, user.ID, permissions, "Авторизация прошла успешно", payload.RememberMe)
 }
 
 func (ctrl *AuthController) Logout(c echo.Context) error {
@@ -121,26 +110,15 @@ func (ctrl *AuthController) RefreshToken(c echo.Context) error {
 		)
 	}
 
-	// <<<--- НАЧАЛО ИЗМЕНЕНИЙ В RefreshToken ---
-	// Получаем пользователя, чтобы достать RoleName
-	user, err := ctrl.authService.GetUserByID(c.Request().Context(), claims.UserID)
+	permissions, err := ctrl.authPermissionService.GetAllUserPermissions(c.Request().Context(), claims.UserID)
 	if err != nil {
-		ctrl.logger.Error("Ошибка получения пользователя по ID при обновлении токена", zap.Uint64("userID", claims.UserID), zap.Error(err))
-		return utils.ErrorResponse(c, err, ctrl.logger)
-	}
-	// <<<--- КОНЕЦ ИЗМЕНЕНИЙ В RefreshToken ---
-
-	permissions, err := ctrl.authPermissionService.GetRolePermissionsNames(c.Request().Context(), claims.RoleID)
-	if err != nil {
-		ctrl.logger.Error("Не удалось получить привилегии при обновлении токена", zap.Uint64("userID", claims.UserID), zap.Uint64("roleID", claims.RoleID), zap.Error(err))
+		ctrl.logger.Error("Не удалось получить привилегии при обновлении токена", zap.Uint64("userID", claims.UserID), zap.Error(err))
 		permissions = []string{}
 	}
 
 	return ctrl.generateTokensAndRespond(
 		c,
 		claims.UserID,
-		claims.RoleID,
-		user.RoleName,
 		permissions,
 		"Токены успешно обновлены",
 		true,
@@ -226,7 +204,7 @@ func (ctrl *AuthController) ResetPassword(c echo.Context) error {
 	return utils.SuccessResponse(c, nil, "Пароль успешно изменен.", http.StatusOK)
 }
 
-func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID, roleID uint64, roleName string, permissions []string, message string, rememberMe bool) error { // <<< ДОБАВЛЕН roleName
+func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID uint64, permissions []string, message string, rememberMe bool) error {
 	accessTokenTTL := ctrl.jwtSvc.GetAccessTokenTTL()
 	var refreshTokenTTL time.Duration
 
@@ -236,8 +214,7 @@ func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID, rol
 		refreshTokenTTL = time.Hour * 8
 	}
 
-	// В генерацию токена все еще идет roleID, это правильно.
-	accessToken, refreshToken, err := ctrl.jwtSvc.GenerateTokens(userID, roleID, accessTokenTTL, refreshTokenTTL)
+	accessToken, refreshToken, err := ctrl.jwtSvc.GenerateTokens(userID, 0, accessTokenTTL, refreshTokenTTL)
 	if err != nil {
 		ctrl.logger.Error("Не удалось сгенерировать токены", zap.Error(err), zap.Uint64("userID", userID))
 		return ctrl.errorResponse(c, err)
@@ -259,7 +236,6 @@ func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID, rol
 
 	response := dto.AuthResponseDTO{
 		AccessToken: accessToken,
-		RoleName:    roleName,
 		Permissions: permissions,
 	}
 

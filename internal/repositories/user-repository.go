@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
@@ -21,32 +22,47 @@ import (
 )
 
 const (
-	userTableRepo = "users"
-	// Обновляем SELECT и JOIN, добавляя s.code as status_code
-	userSelectFieldsForEntityRepo = "u.id, u.fio, u.email, u.phone_number, u.password, u.position, u.status_id, s.code as status_code, u.photo_url, u.role_id, u.branch_id, u.department_id, u.office_id, u.otdel_id, r.name as role_name, u.created_at, u.updated_at, u.deleted_at, u.must_change_password"
-	userJoinClauseRepo            = "users u JOIN roles r ON u.role_id = r.id JOIN statuses s ON u.status_id = s.id"
+	userTable = "users"
 )
 
 var (
-	userAllowedFilterFields = map[string]bool{"status_id": true, "department_id": true, "branch_id": true, "role_id": true, "position": true}
-	userAllowedSortFields   = map[string]bool{"id": true, "fio": true, "created_at": true, "updated_at": true}
+	userSelectFields = []string{
+		"u.id", "u.fio", "u.email", "u.phone_number", "u.password", "u.position", "u.status_id", "s.code as status_code",
+		"u.photo_url", "u.branch_id", "u.department_id", "u.office_id", "u.otdel_id",
+		"u.created_at", "u.updated_at", "u.deleted_at", "u.must_change_password", "u.is_head",
+	}
+	userAllowedFilterFields = map[string]string{
+		"status_id":     "u.status_id",
+		"department_id": "u.department_id",
+		"branch_id":     "u.branch_id",
+		"position":      "u.position",
+	}
+	userAllowedSortFields = map[string]bool{"id": true, "fio": true, "created_at": true, "updated_at": true}
 )
 
 type UserRepositoryInterface interface {
-	GetUsers(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.User, uint64, error)
-	FindUser(ctx context.Context, id uint64) (*entities.User, error)
-	CreateUser(ctx context.Context, entity *entities.User) (*entities.User, error)
-	UpdateUser(ctx context.Context, payload dto.UpdateUserDTO) (*entities.User, error)
+	GetUsers(ctx context.Context, filter types.Filter) ([]entities.User, uint64, error)
+	FindUserByID(ctx context.Context, id uint64) (*entities.User, error)
+	FindUserByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.User, error) // Добавлен этот метод
+	CreateUser(ctx context.Context, tx pgx.Tx, user *entities.User) (uint64, error)
+	UpdateUser(ctx context.Context, tx pgx.Tx, payload dto.UpdateUserDTO) error
+	SyncUserRoles(ctx context.Context, tx pgx.Tx, userID uint64, roleIDs []uint64) error
 	DeleteUser(ctx context.Context, id uint64) error
 	FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error)
 	FindUserByPhone(ctx context.Context, phone string) (*entities.User, error)
 	UpdatePassword(ctx context.Context, userID uint64, newPasswordHash string) error
 	UpdatePasswordAndClearFlag(ctx context.Context, userID uint64, newPasswordHash string) error
-	FindUserByID(ctx context.Context, id uint64) (*entities.User, error)
+	FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error)
+	IsHeadExistsInDepartment(ctx context.Context, departmentID uint64, excludeUserID uint64) (bool, error)
+	FindUserIDsByRoleID(ctx context.Context, roleID uint64) ([]uint64, error)
+	GetRolesByUserID(ctx context.Context, userID uint64) ([]dto.ShortRoleDTO, error)
+	GetRolesByUserIDs(ctx context.Context, userIDs []uint64) (map[uint64][]dto.ShortRoleDTO, error)
+	BeginTx(ctx context.Context) (pgx.Tx, error)
 	FindHeadByDepartment(ctx context.Context, departmentID uint64) (*entities.User, error)
 	FindHeadByDepartmentInTx(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.User, error)
-	FindByEmail(ctx context.Context, email string) (*entities.User, error)
-	FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error)
+	SyncUserDirectPermissions(ctx context.Context, tx pgx.Tx, userID uint64, permissionIDs []uint64) error
+	SyncUserDeniedPermissions(ctx context.Context, tx pgx.Tx, userID uint64, permissionIDs []uint64) error
+	GetPermissionListsForUI(ctx context.Context, userID uint64) (currentIDs, unavailableIDs []uint64, err error)
 }
 
 type UserRepository struct {
@@ -58,29 +74,26 @@ func NewUserRepository(storage *pgxpool.Pool, logger *zap.Logger) UserRepository
 	return &UserRepository{storage: storage, logger: logger}
 }
 
-func scanUser(row pgx.Row) (*entities.User, error) {
+func (r *UserRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
+	return r.storage.Begin(ctx)
+}
+
+// scanUserEntity остается без изменений, как в вашем файле
+func scanUserEntity(row pgx.Row) (*entities.User, error) {
 	var user entities.User
 	var createdAt, updatedAt, deletedAt sql.NullTime
-
-	// Сканнер остается почти таким же
 	err := row.Scan(
 		&user.ID, &user.Fio, &user.Email, &user.PhoneNumber, &user.Password,
 		&user.Position, &user.StatusID, &user.StatusCode, &user.PhotoURL,
-		&user.RoleID, &user.BranchID,
-		&user.DepartmentID, &user.OfficeID, &user.OtdelID, &user.RoleName,
-		&createdAt, &updatedAt, &deletedAt, // Сканируем в sql.NullTime
-		&user.MustChangePassword,
+		&user.BranchID, &user.DepartmentID, &user.OfficeID, &user.OtdelID,
+		&createdAt, &updatedAt, &deletedAt, &user.MustChangePassword, &user.IsHead,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
 		}
-		// Важно залогировать ошибку сканирования, чтобы в будущем сразу видеть проблему
-		fmt.Printf("SCAN ERROR: %v\n", err) // Временный лог для отладки
 		return nil, err
 	}
-
-	// Теперь безопасно преобразуем sql.NullTime в *time.Time
 	if createdAt.Valid {
 		user.CreatedAt = &createdAt.Time
 	}
@@ -90,96 +103,265 @@ func scanUser(row pgx.Row) (*entities.User, error) {
 	if deletedAt.Valid {
 		user.DeletedAt = &deletedAt.Time
 	}
-
 	return &user, nil
 }
 
-func (r *UserRepository) FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error) {
-	if len(userIDs) == 0 {
-		return make(map[uint64]entities.User), nil
-	}
+func (r *UserRepository) CreateUser(ctx context.Context, tx pgx.Tx, entity *entities.User) (uint64, error) {
+	query := `INSERT INTO users (fio, email, phone_number, password, position, status_id, branch_id, 
+								 department_id, office_id, otdel_id, photo_url, must_change_password, is_head,
+								 created_at, updated_at) 
+			  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`
 
-	// Делаем SELECT только на те поля, которые нужны в списке заявок: ID и ФИО
-	// Мы не используем здесь userSelectFieldsForEntityRepo и JOIN, т.к. нам не нужны все данные
-	query := `SELECT u.id, u.fio FROM users u WHERE u.id = ANY($1) AND u.deleted_at IS NULL`
-
-	rows, err := r.storage.Query(ctx, query, userIDs)
+	var createdID uint64
+	err := tx.QueryRow(ctx, query,
+		entity.Fio, entity.Email, entity.PhoneNumber, entity.Password, entity.Position,
+		entity.StatusID, entity.BranchID, entity.DepartmentID, entity.OfficeID,
+		entity.OtdelID, entity.PhotoURL, entity.MustChangePassword, entity.IsHead,
+		entity.CreatedAt, entity.UpdatedAt,
+	).Scan(&createdID)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	usersMap := make(map[uint64]entities.User)
-	for rows.Next() {
-		var user entities.User
-		// Сканируем только ID и ФИО, т.к. только их и запрашивали
-		if err := rows.Scan(&user.ID, &user.Fio); err != nil {
-			return nil, err
-		}
-		usersMap[user.ID] = user
-	}
-
-	return usersMap, rows.Err()
-}
-
-func (r *UserRepository) CreateUser(ctx context.Context, entity *entities.User) (*entities.User, error) {
-	builder := sq.Insert(userTableRepo).
-		PlaceholderFormat(sq.Dollar).
-		Columns(
-			"fio", "email", "phone_number", "password", "position", "status_id", "role_id",
-			"branch_id", "department_id", "office_id", "otdel_id", "photo_url", "created_at",
-			"updated_at", "must_change_password",
-		)
-
-	builder = builder.Values(
-		entity.Fio,
-		entity.Email,
-		entity.PhoneNumber,
-		entity.Password,
-		entity.Position,
-		entity.StatusID,
-		entity.RoleID,
-		entity.BranchID,
-		entity.DepartmentID,
-		entity.OfficeID,
-		entity.OtdelID,
-		entity.PhotoURL,
-		entity.CreatedAt,
-		entity.UpdatedAt,
-		entity.MustChangePassword,
-	).Suffix("RETURNING id, role_id, status_id")
-
-	query, args, err := builder.ToSql()
-	if err != nil {
-		r.logger.Error("UserRepository.CreateUser: ошибка при сборке SQL-запроса", zap.Error(err))
-		return nil, err
-	}
-
-	// Хитрый трюк для RETURNING с JOIN'ами
-	var createdID, roleID, statusID uint64
-	err = r.storage.QueryRow(ctx, query, args...).Scan(&createdID, &roleID, &statusID)
-	if err != nil {
-		// ... (блок обработки ошибок pgconn остается тот же)
 		if pgErr, ok := err.(*pgconn.PgError); ok {
 			switch pgErr.Code {
 			case "23505":
 				if strings.Contains(pgErr.ConstraintName, "users_email_key") {
-					return nil, apperrors.NewHttpError(http.StatusBadRequest, "Email уже используется", err, map[string]interface{}{"email": entity.Email})
+					return 0, apperrors.NewHttpError(http.StatusConflict, "Email уже используется", err, nil)
 				}
 				if strings.Contains(pgErr.ConstraintName, "users_phone_number_key") {
-					return nil, apperrors.NewHttpError(http.StatusBadRequest, "Номер телефона уже используется", err, map[string]interface{}{"phone": entity.PhoneNumber})
+					return 0, apperrors.NewHttpError(http.StatusConflict, "Номер телефона уже используется", err, nil)
 				}
-			case "23503":
-				errorMessage := fmt.Sprintf("Неверный ID внешнего ключа: %s. Убедитесь, что связанные записи существуют.", pgErr.ConstraintName)
-				return nil, apperrors.NewHttpError(http.StatusBadRequest, errorMessage, err, map[string]interface{}{"constraint": pgErr.ConstraintName})
 			}
 		}
-		r.logger.Error("UserRepository.CreateUser: неожиданная ошибка при создании пользователя", zap.String("query", query), zap.Error(err))
-		return nil, apperrors.ErrInternal
+		return 0, err
+	}
+	return createdID, nil
+}
+
+func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, payload dto.UpdateUserDTO) error {
+	builder := sq.Update(userTable).
+		PlaceholderFormat(sq.Dollar).
+		Where(sq.Eq{"id": payload.ID, "deleted_at": nil}).
+		Set("updated_at", time.Now())
+
+	if payload.Fio != nil {
+		builder = builder.Set("fio", *payload.Fio)
+	}
+	if payload.Email != nil {
+		builder = builder.Set("email", *payload.Email)
+	}
+	if payload.PhoneNumber != nil {
+		builder = builder.Set("phone_number", *payload.PhoneNumber)
+	}
+	if payload.Position != nil {
+		builder = builder.Set("position", *payload.Position)
+	}
+	if payload.StatusID != nil {
+		builder = builder.Set("status_id", *payload.StatusID)
+	}
+	if payload.BranchID != nil {
+		builder = builder.Set("branch_id", *payload.BranchID)
+	}
+	if payload.DepartmentID != nil {
+		builder = builder.Set("department_id", *payload.DepartmentID)
+	}
+	if payload.OfficeID != nil {
+		builder = builder.Set("office_id", payload.OfficeID)
+	}
+	if payload.OtdelID != nil {
+		builder = builder.Set("otdel_id", payload.OtdelID)
+	}
+	if payload.PhotoURL != nil {
+		builder = builder.Set("photo_url", payload.PhotoURL)
+	}
+	if payload.IsHead != nil {
+		builder = builder.Set("is_head", *payload.IsHead)
 	}
 
-	// После успешного INSERT делаем SELECT, чтобы получить все данные с JOIN'ами
-	return r.FindUserByID(ctx, createdID)
+	query, args, err := builder.ToSql()
+	if err != nil {
+		return err
+	}
+	r.logger.Info("Executing UpdateUser", zap.String("query", query), zap.Any("args", args))
+	result, err := tx.Exec(ctx, query, args...)
+	if err != nil {
+		if pgErr, ok := err.(*pgconn.PgError); ok {
+			switch pgErr.Code {
+			case "23505":
+				if strings.Contains(pgErr.ConstraintName, "users_email_key") {
+					return apperrors.NewHttpError(http.StatusConflict, "Email уже используется", err, nil)
+				}
+				if strings.Contains(pgErr.ConstraintName, "users_phone_number_key") {
+					return apperrors.NewHttpError(http.StatusConflict, "Номер телефона уже используется", err, nil)
+				}
+			}
+		}
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) SyncUserRoles(ctx context.Context, tx pgx.Tx, userID uint64, roleIDs []uint64) error {
+	_, err := tx.Exec(ctx, "DELETE FROM user_roles WHERE user_id = $1", userID)
+	if err != nil {
+		return fmt.Errorf("ошибка при удалении старых ролей пользователя: %w", err)
+	}
+	if len(roleIDs) == 0 {
+		return nil
+	}
+	rows := make([][]interface{}, len(roleIDs))
+	for i, roleID := range roleIDs {
+		rows[i] = []interface{}{userID, roleID}
+	}
+	_, err = tx.CopyFrom(ctx, pgx.Identifier{"user_roles"}, []string{"user_id", "role_id"}, pgx.CopyFromRows(rows))
+	if err != nil {
+		return fmt.Errorf("ошибка при вставке новых ролей пользователя: %w", err)
+	}
+	return nil
+}
+
+func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter) ([]entities.User, uint64, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	countBuilder := psql.Select("COUNT(u.id)").From("users u").Where(sq.Eq{"u.deleted_at": nil})
+	selectBuilder := psql.Select(userSelectFields...).From("users u").Join("statuses s ON u.status_id = s.id").Where(sq.Eq{"u.deleted_at": nil})
+
+	if filter.Search != "" {
+		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
+		searchCondition := sq.Or{
+			sq.ILike{"u.fio": searchPattern},
+			sq.ILike{"u.email": searchPattern},
+			sq.ILike{"u.phone_number": searchPattern},
+		}
+		selectBuilder = selectBuilder.Where(searchCondition)
+		countBuilder = countBuilder.Where(searchCondition)
+	}
+	for key, value := range filter.Filter {
+		if dbColumn, ok := userAllowedFilterFields[key]; ok {
+			condition := sq.Eq{dbColumn: value}
+			if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
+				condition = sq.Eq{dbColumn: strings.Split(strVal, ",")}
+			}
+			selectBuilder = selectBuilder.Where(condition)
+			countBuilder = countBuilder.Where(condition)
+		}
+	}
+
+	countQuery, countArgs, err := countBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
+	var totalCount uint64
+	if err = r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount); err != nil {
+		return nil, 0, err
+	}
+	if totalCount == 0 {
+		return []entities.User{}, 0, nil
+	}
+
+	if len(filter.Sort) > 0 {
+		for field, direction := range filter.Sort {
+			if userAllowedSortFields[field] {
+				safeDirection := "ASC"
+				if strings.ToLower(direction) == "desc" {
+					safeDirection = "DESC"
+				}
+				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("u.%s %s", field, safeDirection))
+			}
+		}
+	} else {
+		selectBuilder = selectBuilder.OrderBy("u.id DESC")
+	}
+
+	if filter.WithPagination {
+		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
+	}
+
+	mainQuery, mainArgs, err := selectBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := r.storage.Query(ctx, mainQuery, mainArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var users []entities.User
+	for rows.Next() {
+		user, err := scanUserEntity(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		users = append(users, *user)
+	}
+	return users, totalCount, rows.Err()
+}
+
+func (r *UserRepository) FindUserByID(ctx context.Context, id uint64) (*entities.User, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select(userSelectFields...).
+		From("users u").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{"u.id": id, "u.deleted_at": nil}).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	row := r.storage.QueryRow(ctx, query, args...)
+	return scanUserEntity(row)
+}
+
+// Новый метод, работающий в транзакции
+func (r *UserRepository) FindUserByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.User, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select(userSelectFields...).
+		From("users u").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{"u.id": id, "u.deleted_at": nil}).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	row := tx.QueryRow(ctx, query, args...) // Используем tx
+	return scanUserEntity(row)
+}
+
+func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select(userSelectFields...).
+		From("users u").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{"LOWER(u.email)": strings.ToLower(login), "u.deleted_at": nil}).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	row := r.storage.QueryRow(ctx, query, args...)
+	return scanUserEntity(row)
+}
+
+func (r *UserRepository) FindUserByPhone(ctx context.Context, phone string) (*entities.User, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select(userSelectFields...).
+		From("users u").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{"u.phone_number": phone, "u.deleted_at": nil}).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	row := r.storage.QueryRow(ctx, query, args...)
+	return scanUserEntity(row)
+}
+
+func (r *UserRepository) DeleteUser(ctx context.Context, id uint64) error {
+	query := `UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL`
+	result, err := r.storage.Exec(ctx, query, id)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }
 
 func (r *UserRepository) UpdatePasswordAndClearFlag(ctx context.Context, userID uint64, newPasswordHash string) error {
@@ -194,155 +376,6 @@ func (r *UserRepository) UpdatePasswordAndClearFlag(ctx context.Context, userID 
 	return nil
 }
 
-func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.User, uint64, error) {
-	allArgs := make([]interface{}, 0)
-	conditions := []string{"u.deleted_at IS NULL"}
-	placeholderNum := 1
-
-	if securityFilter != "" {
-		for i := 0; i < strings.Count(securityFilter, "?"); i++ {
-			securityFilter = strings.Replace(securityFilter, "?", fmt.Sprintf("$%d", placeholderNum), 1)
-			placeholderNum++
-		}
-		conditions = append(conditions, securityFilter)
-		allArgs = append(allArgs, securityArgs...)
-	}
-
-	if filter.Search != "" {
-		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
-		searchCondition := fmt.Sprintf("(u.fio ILIKE $%d OR u.email::text ILIKE $%d OR u.phone_number::text ILIKE $%d)",
-			placeholderNum, placeholderNum+1, placeholderNum+2)
-		conditions = append(conditions, searchCondition)
-		allArgs = append(allArgs, searchPattern, searchPattern, searchPattern)
-		placeholderNum += 3
-	}
-
-	for key, value := range filter.Filter {
-		if !userAllowedFilterFields[key] {
-			continue
-		}
-		switch v := value.(type) {
-		case []string:
-			placeholders := make([]string, len(v))
-			for i, item := range v {
-				placeholders[i] = fmt.Sprintf("$%d", placeholderNum)
-				allArgs = append(allArgs, item)
-				placeholderNum++
-			}
-			conditions = append(conditions, fmt.Sprintf("u.%s IN (%s)", key, strings.Join(placeholders, ",")))
-		case string:
-			conditions = append(conditions, fmt.Sprintf("u.%s = $%d", key, placeholderNum))
-			allArgs = append(allArgs, v)
-			placeholderNum++
-		}
-	}
-	whereClause := "WHERE " + strings.Join(conditions, " AND ")
-
-	countQuery := fmt.Sprintf("SELECT COUNT(u.id) FROM %s %s", userJoinClauseRepo, whereClause)
-	var totalCount uint64
-	if err := r.storage.QueryRow(ctx, countQuery, allArgs...).Scan(&totalCount); err != nil {
-		r.logger.Error("ошибка подсчета пользователей", zap.Error(err), zap.String("query", countQuery))
-		return nil, 0, err
-	}
-
-	if totalCount == 0 {
-		return []entities.User{}, 0, nil
-	}
-
-	orderByClause := "ORDER BY u.id DESC"
-	if len(filter.Sort) > 0 {
-		var sortParts []string
-		for field, direction := range filter.Sort {
-			if userAllowedSortFields[field] {
-				safeDirection := "ASC"
-				if strings.ToLower(direction) == "desc" {
-					safeDirection = "DESC"
-				}
-				sortParts = append(sortParts, fmt.Sprintf("u.%s %s", field, safeDirection))
-			}
-		}
-		if len(sortParts) > 0 {
-			orderByClause = "ORDER BY " + strings.Join(sortParts, ", ")
-		}
-	}
-
-	limitClause := ""
-	if filter.WithPagination {
-		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", placeholderNum, placeholderNum+1)
-		allArgs = append(allArgs, filter.Limit, filter.Offset)
-	}
-
-	mainQuery := fmt.Sprintf("SELECT %s FROM %s %s %s %s", userSelectFieldsForEntityRepo, userJoinClauseRepo, whereClause, orderByClause, limitClause)
-
-	rows, err := r.storage.Query(ctx, mainQuery, allArgs...)
-	if err != nil {
-		r.logger.Error("ошибка получения пользователей", zap.Error(err), zap.String("query", mainQuery))
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	users := make([]entities.User, 0)
-	for rows.Next() {
-		user, err := scanUser(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		users = append(users, *user)
-	}
-	return users, totalCount, rows.Err()
-}
-
-func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*entities.User, error) {
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE u.email = $1 AND u.deleted_at IS NULL LIMIT 1", userSelectFieldsForEntityRepo, userJoinClauseRepo)
-	row := r.storage.QueryRow(ctx, query, email)
-	return scanUser(row)
-}
-
-func (r *UserRepository) FindHeadByDepartment(ctx context.Context, departmentID uint64) (*entities.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.department_id = $1 AND LOWER(TRIM(r.name)) = LOWER('User') AND u.deleted_at IS NULL LIMIT 1`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
-	row := r.storage.QueryRow(ctx, query, departmentID)
-	return scanUser(row)
-}
-
-func (r *UserRepository) FindHeadByDepartmentInTx(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.department_id = $1 AND LOWER(TRIM(r.name)) = LOWER('User') AND u.deleted_at IS NULL LIMIT 1`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
-	row := tx.QueryRow(ctx, query, departmentID)
-	return scanUser(row)
-}
-
-func (r *UserRepository) FindUserByID(ctx context.Context, id uint64) (*entities.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.id = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
-	row := r.storage.QueryRow(ctx, query, id)
-	return scanUser(row)
-}
-
-func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s WHERE LOWER(u.email) = LOWER($1) AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
-
-	row := r.storage.QueryRow(ctx, query, login) // Передаем login как есть, SQL сам сделает lowercase
-
-	user, err := scanUser(row)
-	if err != nil {
-		if errors.Is(err, apperrors.ErrNotFound) {
-			return nil, apperrors.NewHttpError(http.StatusUnauthorized, "Неверные учетные данные", err, nil)
-		}
-		return nil, err
-	}
-	return user, nil
-}
-
-func (r *UserRepository) FindUser(ctx context.Context, id uint64) (*entities.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.id = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
-	row := r.storage.QueryRow(ctx, query, id)
-	return scanUser(row)
-}
-
-func (r *UserRepository) FindUserByPhone(ctx context.Context, phone string) (*entities.User, error) {
-	query := fmt.Sprintf(`SELECT %s FROM %s WHERE u.phone_number = $1 AND u.deleted_at IS NULL`, userSelectFieldsForEntityRepo, userJoinClauseRepo)
-	row := r.storage.QueryRow(ctx, query, phone)
-	return scanUser(row)
-}
-
 func (r *UserRepository) UpdatePassword(ctx context.Context, userID uint64, newPasswordHash string) error {
 	query := `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2`
 	result, err := r.storage.Exec(ctx, query, newPasswordHash, userID)
@@ -355,105 +388,201 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID uint64, newP
 	return nil
 }
 
-func (r *UserRepository) UpdateUser(ctx context.Context, payload dto.UpdateUserDTO) (*entities.User, error) {
-	// Сначала получаем ID обновляемой записи
-	updateBuilder := sq.Update(userTableRepo).
-		PlaceholderFormat(sq.Dollar).
-		Where(sq.Eq{"id": payload.ID, "deleted_at": nil}).
-		Set("updated_at", sq.Expr("CURRENT_TIMESTAMP"))
-
-	hasChanges := false
-	if payload.Fio != nil {
-		updateBuilder = updateBuilder.Set("fio", *payload.Fio)
-		hasChanges = true
-	}
-
-	if payload.Email != nil {
-		updateBuilder = updateBuilder.Set("email", *payload.Email)
-		hasChanges = true
-	}
-	if payload.PhoneNumber != nil {
-		updateBuilder = updateBuilder.Set("phone_number", *payload.PhoneNumber)
-		hasChanges = true
-	}
-	if payload.Position != nil {
-		updateBuilder = updateBuilder.Set("position", *payload.Position)
-		hasChanges = true
-	}
-	if payload.StatusID != nil {
-		updateBuilder = updateBuilder.Set("status_id", *payload.StatusID)
-		hasChanges = true
-	}
-	if payload.RoleID != nil {
-		updateBuilder = updateBuilder.Set("role_id", *payload.RoleID)
-		hasChanges = true
-	}
-	if payload.BranchID != nil {
-		updateBuilder = updateBuilder.Set("branch_id", *payload.BranchID)
-		hasChanges = true
-	}
-	if payload.DepartmentID != nil {
-		updateBuilder = updateBuilder.Set("department_id", *payload.DepartmentID)
-		hasChanges = true
-	}
-	if payload.OfficeID != nil {
-		updateBuilder = updateBuilder.Set("office_id", *payload.OfficeID)
-		hasChanges = true
-	}
-	if payload.OtdelID != nil {
-		updateBuilder = updateBuilder.Set("otdel_id", *payload.OtdelID)
-		hasChanges = true
-	}
-	if payload.PhotoURL != nil {
-		updateBuilder = updateBuilder.Set("photo_url", *payload.PhotoURL)
-		hasChanges = true
-	}
-
-	if !hasChanges {
-		return r.FindUser(ctx, payload.ID)
-	}
-
-	updateBuilder = updateBuilder.Suffix("RETURNING id")
-	query, args, err := updateBuilder.ToSql()
+func (r *UserRepository) FindUserIDsByRoleID(ctx context.Context, roleID uint64) ([]uint64, error) {
+	query := `SELECT user_id FROM public.user_roles WHERE role_id = $1`
+	rows, err := r.storage.Query(ctx, query, roleID)
 	if err != nil {
+		r.logger.Error("Ошибка получения ID пользователей по ID роли", zap.Uint64("roleID", roleID), zap.Error(err))
 		return nil, err
 	}
+	defer rows.Close()
 
-	var updatedID uint64
-	err = r.storage.QueryRow(ctx, query, args...).Scan(&updatedID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperrors.ErrNotFound
+	var ids []uint64
+	for rows.Next() {
+		var id uint64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
 		}
-		// ...(обработка pgconn ошибок как в CreateUser)
-		if pgErr, ok := err.(*pgconn.PgError); ok {
-			switch pgErr.Code {
-			case "23505": // Конфликт уникального индекса
-				if strings.Contains(pgErr.ConstraintName, "users_email_key") {
-					return nil, apperrors.NewHttpError(http.StatusBadRequest, "Email уже используется", err, nil)
-				}
-				if strings.Contains(pgErr.ConstraintName, "users_phone_number_key") {
-					return nil, apperrors.NewHttpError(http.StatusBadRequest, "Номер телефона уже используется", err, nil)
-				}
-			case "23503": // Ошибка внешнего ключа
-				errorMessage := fmt.Sprintf("Неверный ID внешнего ключа: %s. Убедитесь, что связанные записи существуют.", pgErr.ConstraintName)
-				return nil, apperrors.NewHttpError(http.StatusBadRequest, errorMessage, err, nil)
-			}
-		}
-
-		return nil, err
+		ids = append(ids, id)
 	}
-	return r.FindUserByID(ctx, updatedID)
+	return ids, rows.Err()
 }
 
-func (r *UserRepository) DeleteUser(ctx context.Context, id uint64) error {
-	query := `UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL`
-	result, err := r.storage.Exec(ctx, query, id)
+func (r *UserRepository) GetRolesByUserIDs(ctx context.Context, userIDs []uint64) (map[uint64][]dto.ShortRoleDTO, error) {
+	if len(userIDs) == 0 {
+		return make(map[uint64][]dto.ShortRoleDTO), nil
+	}
+	query := `SELECT ur.user_id, r.id, r.name FROM roles r
+			  JOIN user_roles ur ON r.id = ur.role_id
+			  WHERE ur.user_id = ANY($1) ORDER BY ur.user_id, r.name`
+
+	rows, err := r.storage.Query(ctx, query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	userRolesMap := make(map[uint64][]dto.ShortRoleDTO)
+	for rows.Next() {
+		var userID uint64
+		var role dto.ShortRoleDTO
+		if err := rows.Scan(&userID, &role.ID, &role.Name); err != nil {
+			return nil, err
+		}
+		userRolesMap[userID] = append(userRolesMap[userID], role)
+	}
+	return userRolesMap, nil
+}
+
+func (r *UserRepository) GetRolesByUserID(ctx context.Context, userID uint64) ([]dto.ShortRoleDTO, error) {
+	query := `SELECT r.id, r.name FROM roles r
+			  JOIN user_roles ur ON r.id = ur.role_id
+			  WHERE ur.user_id = $1 ORDER BY r.name`
+	rows, err := r.storage.Query(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var roles []dto.ShortRoleDTO
+	for rows.Next() {
+		var role dto.ShortRoleDTO
+		if err := rows.Scan(&role.ID, &role.Name); err != nil {
+			return nil, err
+		}
+		roles = append(roles, role)
+	}
+	return roles, rows.Err()
+}
+
+func (r *UserRepository) FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error) {
+	if len(userIDs) == 0 {
+		return make(map[uint64]entities.User), nil
+	}
+	query := `SELECT ` + strings.Join(userSelectFields, ", ") + `
+			  FROM users u 
+			  JOIN statuses s ON u.status_id = s.id
+			  WHERE u.id = ANY($1) AND u.deleted_at IS NULL`
+	rows, err := r.storage.Query(ctx, query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	usersMap := make(map[uint64]entities.User)
+	for rows.Next() {
+		user, err := scanUserEntity(rows)
+		if err != nil {
+			return nil, err
+		}
+		usersMap[user.ID] = *user
+	}
+	return usersMap, rows.Err()
+}
+
+func (r *UserRepository) IsHeadExistsInDepartment(ctx context.Context, departmentID uint64, excludeUserID uint64) (bool, error) {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM users WHERE department_id = $1 AND is_head = TRUE AND id != $2 AND deleted_at IS NULL)`
+	err := r.storage.QueryRow(ctx, query, departmentID, excludeUserID).Scan(&exists)
+	if err != nil {
+		r.logger.Error("UserRepository.IsHeadExistsInDepartment: ошибка при проверке", zap.Error(err))
+		return false, err
+	}
+	return exists, nil
+}
+
+func (r *UserRepository) FindHeadByDepartment(ctx context.Context, departmentID uint64) (*entities.User, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select(userSelectFields...).
+		From("users u").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{
+			"u.department_id": departmentID,
+			"u.is_head":       true,
+			"u.deleted_at":    nil,
+		}).
+		Limit(1).
+		ToSql()
+	if err != nil {
+		return nil, err
+	}
+	row := r.storage.QueryRow(ctx, query, args...)
+	return scanUserEntity(row)
+}
+
+func (r *UserRepository) FindHeadByDepartmentInTx(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.User, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+
+	query, args, err := psql.Select(userSelectFields...).
+		From("users u").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{
+			"u.department_id": departmentID,
+			"u.is_head":       true,
+			"u.deleted_at":    nil,
+		}).
+		Limit(1).
+		ToSql()
+	if err != nil {
+		return nil, err
+	}
+	row := tx.QueryRow(ctx, query, args...)
+	return scanUserEntity(row)
+}
+
+func (r *UserRepository) SyncUserDirectPermissions(ctx context.Context, tx pgx.Tx, userID uint64, permissionIDs []uint64) error {
+	_, err := tx.Exec(ctx, "DELETE FROM user_permissions WHERE user_id = $1", userID)
 	if err != nil {
 		return err
 	}
-	if result.RowsAffected() == 0 {
-		return apperrors.ErrNotFound
+
+	if len(permissionIDs) == 0 {
+		return nil
 	}
-	return nil
+
+	rows := make([][]interface{}, len(permissionIDs))
+	for i, permID := range permissionIDs {
+		rows[i] = []interface{}{userID, permID}
+	}
+	_, err = tx.CopyFrom(ctx, pgx.Identifier{"user_permissions"}, []string{"user_id", "permission_id"}, pgx.CopyFromRows(rows))
+	return err
+}
+
+func (r *UserRepository) SyncUserDeniedPermissions(ctx context.Context, tx pgx.Tx, userID uint64, permissionIDs []uint64) error {
+	_, err := tx.Exec(ctx, "DELETE FROM user_permission_denials WHERE user_id = $1", userID)
+	if err != nil {
+		return err
+	}
+
+	if len(permissionIDs) == 0 {
+		return nil
+	}
+
+	rows := make([][]interface{}, len(permissionIDs))
+	for i, permID := range permissionIDs {
+		rows[i] = []interface{}{userID, permID}
+	}
+	_, err = tx.CopyFrom(ctx, pgx.Identifier{"user_permission_denials"}, []string{"user_id", "permission_id"}, pgx.CopyFromRows(rows))
+	return err
+}
+
+func (r *UserRepository) GetPermissionListsForUI(ctx context.Context, userID uint64) ([]uint64, []uint64, error) {
+	query := `
+		WITH all_perms AS (
+			SELECT id FROM permissions
+		),
+		user_final_perms AS (
+			SELECT p.id
+			FROM permissions p
+			LEFT JOIN role_permissions rp ON rp.permission_id = p.id
+			LEFT JOIN user_roles ur ON ur.role_id = rp.role_id AND ur.user_id = $1
+			LEFT JOIN user_permissions up ON up.permission_id = p.id AND up.user_id = $1
+			LEFT JOIN user_permission_denials upd ON upd.permission_id = p.id AND upd.user_id = $1
+			WHERE (ur.user_id IS NOT NULL OR up.user_id IS NOT NULL) AND upd.permission_id IS NULL
+		)
+		SELECT
+			(SELECT COALESCE(array_agg(id ORDER BY id), '{}') FROM user_final_perms) AS current_permission_ids,
+			(SELECT COALESCE(array_agg(id ORDER BY id), '{}') FROM all_perms WHERE id NOT IN (SELECT id FROM user_final_perms)) AS unavailable_permission_ids;
+	`
+	var currentIDs, unavailableIDs []uint64
+	err := r.storage.QueryRow(ctx, query, userID).Scan(&currentIDs, &unavailableIDs)
+	return currentIDs, unavailableIDs, err
 }

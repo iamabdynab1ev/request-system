@@ -99,7 +99,25 @@ func (c *OrderController) CreateOrder(ctx echo.Context) error {
 		)
 	}
 
-	// Шаг 2: Получаем файл из поля 'file' (он может отсутствовать, это нормально)
+	// Шаг 2: Парсим JSON в DTO
+	var createDTO dto.CreateOrderDTO
+	if err := json.Unmarshal([]byte(dataString), &createDTO); err != nil {
+		c.logger.Error("CreateOrder: некорректный JSON в поле 'data'", zap.Error(err))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(
+			http.StatusBadRequest, "Некорректный JSON в поле 'data'", err, nil),
+			c.logger,
+		)
+	}
+
+	// Шаг 3: ВАЛИДИРУЕМ DTO. Это самое важное изменение.
+	// Валидация происходит здесь, а не в сервисе.
+	if err := ctx.Validate(&createDTO); err != nil {
+		c.logger.Error("CreateOrder: ошибка валидации данных", zap.Error(err), zap.Any("dto", createDTO))
+		// utils.ErrorResponse уже умеет обрабатывать ошибки валидации
+		return utils.ErrorResponse(ctx, err, c.logger)
+	}
+
+	// Шаг 4: Получаем файл из поля 'file' (он может отсутствовать, это нормально)
 	file, err := ctx.FormFile("file")
 	if err != nil && err != http.ErrMissingFile {
 		c.logger.Error("CreateOrder: ошибка при чтении файла", zap.Error(err))
@@ -109,12 +127,12 @@ func (c *OrderController) CreateOrder(ctx echo.Context) error {
 		)
 	}
 
-	// Шаг 3: ВЫЗЫВАЕМ СЕРВИС с правильными параметрами (строка и файл)
-	// Важно, чтобы сигнатура в OrderServiceInterface была `CreateOrder(ctx, dataString, file)`
-	res, err := c.orderService.CreateOrder(reqCtx, dataString, file)
+	// Шаг 5: Вызываем сервис с правильными параметрами (подготовленный DTO и файл)
+	// Сигнатура метода в OrderServiceInterface должна быть `CreateOrder(ctx, createDTO, file)`
+	res, err := c.orderService.CreateOrder(reqCtx, createDTO, file)
 	if err != nil {
 		c.logger.Error("CreateOrder: сервис вернул ошибку", zap.Error(err))
-		// Мы возвращаем ошибку из сервиса напрямую, так как сервис теперь
+		// Возвращаем ошибку из сервиса напрямую, так как сервис теперь
 		// сам формирует правильный apperrors.HttpError.
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}

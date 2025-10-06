@@ -1,4 +1,3 @@
-// Файл: pkg/service/jwt.go
 package service
 
 import (
@@ -13,13 +12,12 @@ import (
 
 type JwtCustomClaim struct {
 	UserID         uint64 `json:"userID"`
-	RoleID         uint64 `json:"roleID"`
+	RoleID         uint64 `json:"roleID,omitempty"` // roleID может быть 0, поэтому omitempty
 	IsRefreshToken bool
 	jwt.RegisteredClaims
 }
 
 type JWTService interface {
-	// <<< ИЗМЕНЕНО: Функция теперь принимает время жизни токенов как аргументы
 	GenerateTokens(userID uint64, roleID uint64, accessTokenTTL, refreshTokenTTL time.Duration) (string, string, error)
 	ValidateToken(tokenString string) (*JwtCustomClaim, error)
 	ValidateRefreshToken(tokenString string) (uint64, error)
@@ -43,7 +41,6 @@ func NewJWTService(secretKey string, accessTokenExp, refreshTokenExp time.Durati
 	}
 }
 
-// <<< ИЗМЕНЕНО: Функция теперь использует переданные аргументы для установки времени жизни
 func (s *jwtService) GenerateTokens(userID uint64, roleID uint64, accessTokenTTL, refreshTokenTTL time.Duration) (string, string, error) {
 	accessTokenExp := time.Now().UTC().Add(accessTokenTTL)
 	refreshTokenExp := time.Now().UTC().Add(refreshTokenTTL)
@@ -51,7 +48,7 @@ func (s *jwtService) GenerateTokens(userID uint64, roleID uint64, accessTokenTTL
 
 	accessTokenClaims := &JwtCustomClaim{
 		UserID:         userID,
-		RoleID:         roleID,
+		RoleID:         roleID, // roleID может быть 0, это нормально
 		IsRefreshToken: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(accessTokenExp),
@@ -61,7 +58,7 @@ func (s *jwtService) GenerateTokens(userID uint64, roleID uint64, accessTokenTTL
 
 	refreshTokenClaims := &JwtCustomClaim{
 		UserID:         userID,
-		RoleID:         roleID,
+		RoleID:         roleID, // roleID может быть 0
 		IsRefreshToken: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(refreshTokenExp),
@@ -87,7 +84,6 @@ func (s *jwtService) GenerateTokens(userID uint64, roleID uint64, accessTokenTTL
 func (s *jwtService) ValidateToken(tokenString string) (*JwtCustomClaim, error) {
 	s.logger.Debug("ValidateToken: Получена строка токена для валидации", zap.String("receivedToken", tokenString))
 	token, err := jwt.ParseWithClaims(tokenString, &JwtCustomClaim{}, func(token *jwt.Token) (interface{}, error) {
-		s.logger.Debug("ValidateToken: Получена строка токена для валидации", zap.String("receivedToken", tokenString))
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, apperrors.ErrInvalidSigningMethod
 		}

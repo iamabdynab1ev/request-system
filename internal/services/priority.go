@@ -96,7 +96,6 @@ func (s *PriorityService) FindPriority(ctx context.Context, id uint64) (*dto.Pri
 	return s.repo.FindPriority(ctx, id)
 }
 
-// CreatePriority - ИСПРАВЛЕННЫЙ И УПРОЩЕННЫЙ МЕТОД
 func (s *PriorityService) CreatePriority(ctx context.Context, createDTO dto.CreatePriorityDTO) (*dto.PriorityDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -106,20 +105,14 @@ func (s *PriorityService) CreatePriority(ctx context.Context, createDTO dto.Crea
 		return nil, apperrors.ErrForbidden
 	}
 
-	// Добавлена логика генерации 'code', если он не был предоставлен клиентом.
 	if createDTO.Code == "" && createDTO.Name != "" {
-		// "Высокий приоритет" -> "ВЫСОКИЙ_ПРИОРИТЕТ"
-		// Для русского языка может понадобиться транслитерация, но это простой рабочий пример.
 		createDTO.Code = strings.ToUpper(strings.ReplaceAll(createDTO.Name, " ", "_"))
 		s.logger.Debug("Поле 'code' не было предоставлено, сгенерировано автоматически", zap.String("generated_code", createDTO.Code))
 	}
 
-	// Вся логика работы с файлами и иконками удалена.
-	// Просто вызываем метод репозитория.
 	return s.repo.CreatePriority(ctx, createDTO)
 }
 
-// UpdatePriority - ИСПРАВЛЕННЫЙ И УПРОЩЕННЫЙ МЕТОД
 func (s *PriorityService) UpdatePriority(ctx context.Context, id uint64, updateDTO dto.UpdatePriorityDTO) (*dto.PriorityDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -129,17 +122,14 @@ func (s *PriorityService) UpdatePriority(ctx context.Context, id uint64, updateD
 		return nil, apperrors.ErrForbidden
 	}
 
-	// Вся логика работы с файлами и иконками удалена.
-	// Можно добавить проверку существования записи перед обновлением для большей надежности.
 	if _, err := s.repo.FindPriority(ctx, id); err != nil {
 		s.logger.Warn("Попытка обновить несуществующий приоритет", zap.Uint64("id", id), zap.Error(err))
-		return nil, err // err здесь будет ErrNotFound
+		return nil, err
 	}
 
 	return s.repo.UpdatePriority(ctx, id, updateDTO)
 }
 
-// DeletePriority - ИСПРАВЛЕННЫЙ И УПРОЩЕННЫЙ МЕТОД
 func (s *PriorityService) DeletePriority(ctx context.Context, id uint64) error {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -149,6 +139,5 @@ func (s *PriorityService) DeletePriority(ctx context.Context, id uint64) error {
 		return apperrors.ErrForbidden
 	}
 
-	// Вся логика удаления файлов иконок удалена.
 	return s.repo.DeletePriority(ctx, id)
 }

@@ -9,6 +9,7 @@ import (
 	"request-system/config"
 	"request-system/internal/authz"
 	"request-system/internal/dto"
+	"request-system/internal/entities"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/filestorage"
@@ -40,6 +41,25 @@ func NewStatusService(
 	logger *zap.Logger,
 ) StatusServiceInterface {
 	return &StatusService{repo: repo, userRepo: userRepo, fileStorage: fileStorage, logger: logger}
+}
+
+func statusEntityToDTO(entity *entities.Status) *dto.StatusDTO {
+	if entity == nil {
+		return nil
+	}
+
+	var codeStr string
+
+	if entity.Code != nil {
+		codeStr = *entity.Code
+	}
+
+	return &dto.StatusDTO{
+		ID:   uint64(entity.ID),
+		Name: entity.Name,
+		Code: codeStr,
+		Type: entity.Type,
+	}
 }
 
 func (s *StatusService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
@@ -83,25 +103,21 @@ func (s *StatusService) GetStatuses(ctx context.Context, limit, offset uint64, s
 }
 
 func (s *StatusService) FindStatus(ctx context.Context, id uint64) (*dto.StatusDTO, error) {
-	authContext, err := s.buildAuthzContext(ctx)
+	// <<<--- ИСПРАВЛЕНИЕ: Вызываем метод, возвращающий сущность, и конвертируем в DTO ---
+	entity, err := s.repo.FindStatus(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if !authz.CanDo(authz.StatusesView, *authContext) {
-		return nil, apperrors.ErrForbidden
-	}
-	return s.repo.FindStatus(ctx, id)
+	return statusEntityToDTO(entity), nil
 }
 
 func (s *StatusService) FindByCode(ctx context.Context, code string) (*dto.StatusDTO, error) {
-	authContext, err := s.buildAuthzContext(ctx)
+	// <<<--- ИСПРАВЛЕНИЕ: Вызываем метод, возвращающий сущность, и конвертируем в DTO ---
+	entity, err := s.repo.FindByCode(ctx, code)
 	if err != nil {
 		return nil, err
 	}
-	if !authz.CanDo(authz.StatusesView, *authContext) {
-		return nil, apperrors.ErrForbidden
-	}
-	return s.repo.FindByCode(ctx, code)
+	return statusEntityToDTO(entity), nil
 }
 
 func (s *StatusService) CreateStatus(

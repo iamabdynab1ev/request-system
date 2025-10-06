@@ -13,8 +13,8 @@ import (
 )
 
 type AuthPermissionServiceInterface interface {
-	GetRolePermissionsNames(ctx context.Context, roleID uint64) ([]string, error)
-	InvalidateRolePermissionsCache(ctx context.Context, roleID uint64) error
+	GetAllUserPermissions(ctx context.Context, userID uint64) ([]string, error)
+	InvalidateUserPermissionsCache(ctx context.Context, userID uint64) error
 }
 
 type AuthPermissionService struct {
@@ -38,53 +38,46 @@ func NewAuthPermissionService(
 	}
 }
 
-func (s *AuthPermissionService) GetRolePermissionsNames(ctx context.Context, roleID uint64) ([]string, error) {
-	cacheKey := fmt.Sprintf("auth:permissions:role:%d", roleID)
-	var permissions []string
+func (s *AuthPermissionService) GetAllUserPermissions(ctx context.Context, userID uint64) ([]string, error) {
+	cacheKey := fmt.Sprintf("auth:permissions:user:%d", userID)
 
-	// 1. Попытка получить данные из Redis-кеша
-	cachedPermissionsJSON, errGet := s.cacheRepo.Get(ctx, cacheKey)
-	if errGet == nil {
-		// пытаемся распаковать из кеша
-		if err := json.Unmarshal([]byte(cachedPermissionsJSON), &permissions); err == nil {
-			s.logger.Debug("AuthPermissionService: Привилегии роли найдены в кеше", zap.Uint64("roleID", roleID))
+	cachedData, err := s.cacheRepo.Get(ctx, cacheKey)
+	if err == nil {
+		var permissions []string
+		if err := json.Unmarshal([]byte(cachedData), &permissions); err == nil {
+			s.logger.Debug("Permissions loaded from cache", zap.Uint64("userID", userID))
 			return permissions, nil
-		} else {
-			s.logger.Warn("AuthPermissionService: Ошибка при десериализации привилегий из кеша", zap.Error(err), zap.String("key", cacheKey), zap.Uint64("roleID", roleID))
 		}
-	} else {
-		s.logger.Debug("AuthPermissionService: Привилегии роли не найдены в кеше, запрос к БД", zap.Uint64("roleID", roleID), zap.Error(errGet))
+		s.logger.Warn("Failed to unmarshal cached permissions", zap.Error(err), zap.String("key", cacheKey))
 	}
 
-	// 2. Если данные не были в кеше или были повреждены, получаем их из базы данных
-	permissions, errDB := s.permissionRepo.GetPermissionsNamesByRoleID(ctx, roleID)
-	if errDB != nil {
-		s.logger.Error("AuthPermissionService: Не удалось получить привилегии для роли из БД", zap.Uint64("roleID", roleID), zap.Error(errDB))
+	s.logger.Debug("Cache miss. Loading permissions from DB", zap.Uint64("userID", userID))
+	permissions, err := s.permissionRepo.GetAllUserPermissionsNames(ctx, userID)
+	if err != nil {
+		s.logger.Error("Failed to get permissions from DB", zap.Uint64("userID", userID), zap.Error(err))
 		return nil, apperrors.ErrInternalServer
 	}
 
-	// 3. Кешируем полученные из БД данные обратно в Redis
-	if len(permissions) > 0 {
-		permissionsJSONBytes, errMarshal := json.Marshal(permissions)
-		if errMarshal != nil {
-			s.logger.Error("AuthPermissionService: Не удалось сериализовать привилегии для кеширования", zap.Uint64("roleID", roleID), zap.Error(errMarshal))
+	encoded, err := json.Marshal(permissions)
+	if err != nil {
+		s.logger.Error("Failed to marshal permissions", zap.Uint64("userID", userID), zap.Error(err))
+	} else {
+		if err := s.cacheRepo.Set(ctx, cacheKey, string(encoded), s.cacheTTL); err != nil {
+			s.logger.Error("Failed to cache permissions", zap.Uint64("userID", userID), zap.Error(err))
 		} else {
-			if errSet := s.cacheRepo.Set(ctx, cacheKey, string(permissionsJSONBytes), s.cacheTTL); errSet != nil {
-				s.logger.Error("AuthPermissionService: Не удалось сохранить привилегии роли в кеш", zap.Uint64("roleID", roleID), zap.Error(errSet))
-			} else {
-				s.logger.Debug("AuthPermissionService: Привилегии роли успешно закешированы", zap.Uint64("roleID", roleID))
-			}
+			s.logger.Debug("Permissions cached successfully", zap.Uint64("userID", userID))
 		}
 	}
+
 	return permissions, nil
 }
 
-func (s *AuthPermissionService) InvalidateRolePermissionsCache(ctx context.Context, roleID uint64) error {
-	cacheKey := fmt.Sprintf("auth:permissions:role:%d", roleID)
+func (s *AuthPermissionService) InvalidateUserPermissionsCache(ctx context.Context, userID uint64) error {
+	cacheKey := fmt.Sprintf("auth:permissions:user:%d", userID)
 	if err := s.cacheRepo.Del(ctx, cacheKey); err != nil {
-		s.logger.Error("AuthPermissionService: Ошибка инвалидации кеша привилегий для роли", zap.Uint64("roleID", roleID), zap.Error(err))
+		s.logger.Error("Failed to invalidate permission cache", zap.Uint64("userID", userID), zap.Error(err))
 		return err
 	}
-	s.logger.Info("AuthPermissionService: Кеш привилегий для роли инвалидирован", zap.Uint64("roleID", roleID))
+	s.logger.Info("Permission cache invalidated successfully", zap.Uint64("userID", userID))
 	return nil
 }

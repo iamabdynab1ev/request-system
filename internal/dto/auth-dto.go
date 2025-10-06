@@ -27,7 +27,6 @@ type ResetPasswordDTO struct {
 
 type AuthResponseDTO struct {
 	AccessToken string   `json:"accessToken"`
-	RoleName    string   `json:"role_name"`
 	Permissions []string `json:"permissions"`
 }
 

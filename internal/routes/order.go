@@ -38,6 +38,6 @@ func runOrderRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.L
 	orders.POST("", orderController.CreateOrder, authMW.AuthorizeAny(authz.OrdersCreate))
 	orders.GET("", orderController.GetOrders, authMW.AuthorizeAny(authz.OrdersView))
 	orders.GET("/:id", orderController.FindOrder, authMW.AuthorizeAny(authz.OrdersView))
-	orders.PUT("/:id", orderController.UpdateOrder, authMW.AuthorizeAny(authz.OrdersUpdate, authz.OrdersDelegate))
+	orders.PUT("/:id", orderController.UpdateOrder, authMW.AuthorizeAny(authz.OrdersUpdate))
 	orders.DELETE("/:id", orderController.DeleteOrder, authMW.AuthorizeAny(authz.OrdersDelete))
 }

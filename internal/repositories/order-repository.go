@@ -12,12 +12,11 @@ import (
 	"request-system/pkg/types"
 
 	"github.com/Masterminds/squirrel"
+	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
-
-// --- Глобальные переменные ---
 
 const (
 	orderTable           = "orders"
@@ -34,8 +33,6 @@ var (
 		"id": true, "created_at": true, "updated_at": true, "priority_id": true, "status_id": true, "duration": true,
 	}
 )
-
-// --- Интерфейс и Структура (без изменений) ---
 
 type OrderRepositoryInterface interface {
 	BeginTx(ctx context.Context) (pgx.Tx, error)
@@ -115,16 +112,12 @@ func (r *OrderRepository) Create(ctx context.Context, tx pgx.Tx, order *entities
 	return orderID, err
 }
 
-// ИЗМЕНЕН Update: ПЕРЕПИСАН на динамическую сборку, чтобы не обновлять лишние поля.
-// Это самый надежный способ.
 func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities.Order) error {
 	builder := squirrel.Update(orderTable).
 		PlaceholderFormat(squirrel.Dollar).
 		Set("updated_at", squirrel.Expr("NOW()")).
 		Where(squirrel.Eq{"id": order.ID, "deleted_at": nil})
 
-	// Динамически добавляем поля, которые пришли из сервиса.
-	// Сервис сам решает, что нужно обновлять, а репозиторий просто сохраняет.
 	builder = builder.Set("name", order.Name)
 	builder = builder.Set("address", order.Address)
 	builder = builder.Set("department_id", order.DepartmentID)
@@ -132,7 +125,7 @@ func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities
 	builder = builder.Set("branch_id", order.BranchID)
 	builder = builder.Set("office_id", order.OfficeID)
 	builder = builder.Set("equipment_id", order.EquipmentID)
-	builder = builder.Set("equipment_type_id", order.EquipmentTypeID) // <- Добавлено
+	builder = builder.Set("equipment_type_id", order.EquipmentTypeID)
 	builder = builder.Set("status_id", order.StatusID)
 	builder = builder.Set("priority_id", order.PriorityID)
 	builder = builder.Set("executor_id", order.ExecutorID)
@@ -154,7 +147,6 @@ func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities
 	return nil
 }
 
-// DeleteOrder и CountOrdersByOtdelID без изменений
 func (r *OrderRepository) DeleteOrder(ctx context.Context, orderID uint64) error {
 	query := `UPDATE orders SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
 	result, err := r.storage.Exec(ctx, query, orderID)
@@ -178,102 +170,119 @@ func (r *OrderRepository) CountOrdersByOtdelID(ctx context.Context, id uint64) (
 	return count, nil
 }
 
-// --- GetOrders (остается таким же, так как `orderFieldsWithAlias` мы обновили) ---
-
+// ЗАМЕНИ СТАРЫЙ МЕТОД ЭТИМ УЛУЧШЕННЫМ ВАРИАНТОМ
 func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.Order, uint64, error) {
-	allArgs := make([]interface{}, 0)
-	conditions := []string{"o.deleted_at IS NULL"}
-	placeholderNum := 1
+	// Используем squirrel для построения базового запроса
+	baseQuery := sq.Select(orderFieldsWithAlias).
+		From("orders o").
+		LeftJoin("users creator ON o.user_id = creator.id").
+		LeftJoin("users executor ON o.executor_id = executor.id").
+		Where(sq.Eq{"o.deleted_at": nil}).
+		PlaceholderFormat(sq.Dollar)
 
+	// Добавляем фильтр безопасности, если он есть
 	if securityFilter != "" {
-		allArgs = append(allArgs, securityArgs...)
-		tempFilter := securityFilter
-		tempFilter = strings.ReplaceAll(tempFilter, "department_id", "o.department_id")
-		tempFilter = strings.ReplaceAll(tempFilter, "user_id", "o.user_id")
-		tempFilter = strings.ReplaceAll(tempFilter, "executor_id", "o.executor_id")
-		for i := 0; i < len(securityArgs); i++ {
-			tempFilter = strings.Replace(tempFilter, "?", fmt.Sprintf("$%d", placeholderNum), 1)
-			placeholderNum++
-		}
-		conditions = append(conditions, tempFilter)
+		// squirrel автоматически обработает плейсхолдеры '?'
+		baseQuery = baseQuery.Where(securityFilter, securityArgs...)
 	}
 
-	if filter.Search != "" {
-		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
-		searchCondition := fmt.Sprintf("(o.name ILIKE $%d OR creator.fio ILIKE $%d OR executor.fio ILIKE $%d)", placeholderNum, placeholderNum+1, placeholderNum+2)
-		conditions = append(conditions, searchCondition)
-		allArgs = append(allArgs, searchPattern, searchPattern, searchPattern)
-		placeholderNum += 3
-	}
-
+	// Добавляем фильтры из запроса
 	for key, value := range filter.Filter {
 		if !orderAllowedFilterFields[key] {
 			continue
 		}
-		var values []string
-		switch v := value.(type) {
-		case []string:
-			values = v
-		case string:
-			values = strings.Split(v, ",")
-		default:
-			continue
-		}
-		if len(values) == 0 {
-			continue
-		}
-		dbField := "o." + key
-		if len(values) == 1 {
-			conditions = append(conditions, fmt.Sprintf("%s = $%d", dbField, placeholderNum))
-			allArgs = append(allArgs, values[0])
-			placeholderNum++
-		} else {
-			placeholders := make([]string, len(values))
-			for i, item := range values {
-				placeholders[i] = fmt.Sprintf("$%d", placeholderNum)
-				allArgs = append(allArgs, item)
-				placeholderNum++
-			}
-			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", dbField, strings.Join(placeholders, ",")))
-		}
+		// squirrel элегантно обрабатывает IN (...) для срезов/массивов
+		baseQuery = baseQuery.Where(sq.Eq{"o." + key: value})
 	}
 
-	whereClause := "WHERE " + strings.Join(conditions, " AND ")
-	fromClause := `FROM orders o LEFT JOIN users creator ON o.user_id = creator.id LEFT JOIN users executor ON o.executor_id = executor.id`
+	// Добавляем поиск
+	if filter.Search != "" {
+		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
+		searchCondition := sq.Or{
+			sq.ILike{"o.name": searchPattern},
+			sq.ILike{"creator.fio": searchPattern},
+			sq.ILike{"executor.fio": searchPattern},
+		}
+		baseQuery = baseQuery.Where(searchCondition)
+	}
 
-	countQuery := fmt.Sprintf("SELECT COUNT(o.id) %s %s", fromClause, whereClause)
+	// --- Сначала подсчитываем общее количество ---
+	countBuilder := sq.Select("COUNT(o.id)").
+		From("orders o").
+		LeftJoin("users creator ON o.user_id = creator.id").
+		LeftJoin("users executor ON o.executor_id = executor.id").
+		Where(sq.Eq{"o.deleted_at": nil}).
+		PlaceholderFormat(sq.Dollar)
+
+	// Применяем те же фильтры к запросу подсчета
+	if securityFilter != "" {
+		countBuilder = countBuilder.Where(securityFilter, securityArgs...)
+	}
+	for key, value := range filter.Filter {
+		if orderAllowedFilterFields[key] {
+			countBuilder = countBuilder.Where(sq.Eq{"o." + key: value})
+		}
+	}
+	if filter.Search != "" {
+		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
+		countBuilder = countBuilder.Where(sq.Or{
+			sq.ILike{"o.name": searchPattern},
+			sq.ILike{"creator.fio": searchPattern},
+			sq.ILike{"executor.fio": searchPattern},
+		})
+	}
+
+	countQuery, countArgs, err := countBuilder.ToSql()
+	if err != nil {
+		r.logger.Error("GetOrders: ошибка сборки запроса подсчета", zap.Error(err))
+		return nil, 0, err
+	}
+
 	var totalCount uint64
-	if err := r.storage.QueryRow(ctx, countQuery, allArgs...).Scan(&totalCount); err != nil {
-		r.logger.Error("ошибка подсчета заявок", zap.Error(err), zap.String("query", countQuery), zap.Any("args", allArgs))
+	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount); err != nil {
+		r.logger.Error("ошибка подсчета заявок", zap.Error(err), zap.String("query", countQuery), zap.Any("args", countArgs))
 		return nil, 0, err
 	}
 	if totalCount == 0 {
 		return []entities.Order{}, 0, nil
 	}
 
-	orderByClause := "ORDER BY o.id DESC"
+	// --- Теперь собираем основной запрос с сортировкой и пагинацией ---
+
+	// Сортировка
+	orderByClause := "o.id DESC" // Сортировка по умолчанию
 	if len(filter.Sort) > 0 {
 		var sortParts []string
 		for field, direction := range filter.Sort {
 			if orderAllowedSortFields[field] {
-				sortParts = append(sortParts, fmt.Sprintf("o.%s %s", field, direction))
+				// Безопасная проверка направления сортировки
+				dir := "ASC"
+				if strings.ToUpper(direction) == "DESC" {
+					dir = "DESC"
+				}
+				sortParts = append(sortParts, fmt.Sprintf("o.%s %s", field, dir))
 			}
 		}
 		if len(sortParts) > 0 {
-			orderByClause = "ORDER BY " + strings.Join(sortParts, ", ")
+			orderByClause = strings.Join(sortParts, ", ")
 		}
 	}
+	baseQuery = baseQuery.OrderBy(orderByClause)
 
-	limitClause := ""
+	// Пагинация
 	if filter.WithPagination {
-		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", placeholderNum, placeholderNum+1)
-		allArgs = append(allArgs, filter.Limit, filter.Offset)
+		baseQuery = baseQuery.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
 	}
 
-	mainQuery := fmt.Sprintf("SELECT %s %s %s %s %s", orderFieldsWithAlias, fromClause, whereClause, orderByClause, limitClause)
-	rows, err := r.storage.Query(ctx, mainQuery, allArgs...)
+	mainQuery, mainArgs, err := baseQuery.ToSql()
 	if err != nil {
-		r.logger.Error("ошибка получения списка заявок", zap.Error(err), zap.String("query", mainQuery), zap.Any("args", allArgs))
+		r.logger.Error("GetOrders: ошибка сборки основного запроса", zap.Error(err))
+		return nil, 0, err
+	}
+
+	rows, err := r.storage.Query(ctx, mainQuery, mainArgs...)
+	if err != nil {
+		r.logger.Error("ошибка получения списка заявок", zap.Error(err), zap.String("query", mainQuery), zap.Any("args", mainArgs))
 		return nil, 0, err
 	}
 	defer rows.Close()

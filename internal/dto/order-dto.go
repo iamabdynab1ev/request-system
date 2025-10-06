@@ -5,7 +5,7 @@ type CreateOrderDTO struct {
 	Address         string  `json:"address" validate:"omitempty,min=5"`
 	DepartmentID    uint64  `json:"department_id" validate:"required,gt=0"`
 	PriorityID      *uint64 `json:"priority_id,omitempty" validate:"omitempty,gt=0"`
-	ExecutorID      *uint64 `json:"executor_id,omitempty" validate:"omitempty,gt=0"`
+	ExecutorID      *uint64 `json:"executor_name,omitempty" validate:"omitempty,gt=0"`
 	OtdelID         *uint64 `json:"otdel_id,omitempty"`
 	BranchID        *uint64 `json:"branch_id,omitempty"`
 	OfficeID        *uint64 `json:"office_id,omitempty"`
@@ -65,7 +65,7 @@ type UpdateOrderDTO struct {
 	OfficeID        *uint64 `json:"office_id,omitempty"`
 	EquipmentID     *uint64 `json:"equipment_id,omitempty"`
 	EquipmentTypeID *uint64 `json:"equipment_type_id,omitempty" validate:"omitempty,gt=0"`
-	ExecutorID      *uint64 `json:"executor_id,omitempty" validate:"omitempty,gt=0"`
+	ExecutorID      *uint64 `json:"executor_name,omitempty" validate:"omitempty,gt=0"`
 	StatusID        *uint64 `json:"status_id,omitempty" validate:"omitempty,gt=0"`
 	PriorityID      *uint64 `json:"priority_id,omitempty" validate:"omitempty,gt=0"`
 	Duration        *string `json:"duration,omitempty" validate:"omitempty,datetime=2006-01-02T15:04:05Z07:00"`

@@ -28,3 +28,8 @@ type PermissionListResponseDTO struct {
 	List       []PermissionDTO `json:"list"`
 	TotalCount int64           `json:"total_count"`
 }
+
+type PermissionSource struct {
+	PermissionID uint64
+	Source       string
+}

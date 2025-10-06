@@ -4,7 +4,6 @@ package utils
 
 import (
 	"context"
-	"database/sql"
 
 	"request-system/pkg/contextkeys"
 	apperrors "request-system/pkg/errors"
@@ -32,11 +31,4 @@ func GetPermissionsMapFromCtx(ctx context.Context) (map[string]bool, error) {
 		return nil, apperrors.ErrForbidden
 	}
 	return permissions, nil
-}
-
-func NullInt32ToInt(ni sql.NullInt32) int {
-	if !ni.Valid {
-		return 0
-	}
-	return int(ni.Int32)
 }

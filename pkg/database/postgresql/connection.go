@@ -4,14 +4,11 @@ package postgresql
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"os"
-	"strconv"
 
-	// <<<--- ПРАВИЛЬНЫЕ ИМПОРТЫ ДЛЯ GOOSE ---
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib" // Драйвер pgx для database/sql
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 )
 
@@ -48,26 +45,8 @@ func runGooseMigrations(dsn string) {
 	log.Println("✅ Миграции Goose успешно применены.")
 }
 
-func ConnectDB() *pgxpool.Pool {
-	dbUser := getEnv("DB_USER", "postgres")
-	dbPassword := getEnv("DB_PASSWORD", "postgres")
-	dbHost := getEnv("DB_HOST", "localhost")
-	dbName := getEnv("DB_NAME", "request-system")
-	dbPortStr := getEnv("DB_PORT", "5432")
-
-	dbPort, err := strconv.Atoi(dbPortStr)
-	if err != nil {
-		log.Fatalf("Неверное значение порта в DB_PORT: %v", err)
-	}
-
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
-		dbUser, dbPassword, dbHost, dbPort, dbName)
-
-
-	//runGooseMigrations(dsn)
-
-
-	log.Printf("ℹ️ Попытка подключения к БД: %s", fmt.Sprintf("postgresql://%s:***@%s:%d/%s", dbUser, dbHost, dbPort, dbName))
+func ConnectDB(dsn string) *pgxpool.Pool {
+	log.Printf("ℹ️ Попытка подключения к БД для приложения: %s", dsn) // Логируем реальный DSN
 
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -83,6 +62,6 @@ func ConnectDB() *pgxpool.Pool {
 		log.Fatalf("Не удалось пинговать БД: %v", err)
 	}
 
-	log.Println("✅ Успешное подключение к PostgreSQL")
+	log.Println("✅ Успешное подключение к PostgreSQL для приложения")
 	return dbpool
 }

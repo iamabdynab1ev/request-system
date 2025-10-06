@@ -141,9 +141,8 @@ func (suite *OrderTestSuite) SetupSuite() {
 	loggedInUser, err := authService.Login(ctx, loginDTO)
 	assert.NoError(suite.T(), err, "Логин тестового пользователя не должен вызывать ошибок")
 	assert.NotNil(suite.T(), loggedInUser)
-
-	accessToken, _, err := jwtSvc.GenerateTokens(loggedInUser.ID, loggedInUser.RoleID, time.Hour, time.Hour)
-	assert.NoError(suite.T(), err)
+	accessToken, err := jwtSvc.GenerateAccessToken(loggedInUser.ID, loggedInUser.RoleID)	
+x	assert.NoError(suite.T(), err)
 	assert.NotEmpty(suite.T(), accessToken)
 
 	suite.TestUserToken = accessToken

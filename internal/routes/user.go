@@ -3,27 +3,26 @@ package routes
 import (
 	"request-system/internal/authz"
 	"request-system/internal/controllers"
-	"request-system/internal/repositories"
 	"request-system/internal/services"
 	"request-system/pkg/filestorage"
 	"request-system/pkg/middleware"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
 func runUserRouter(
 	secureGroup *echo.Group,
-	dbConn *pgxpool.Pool,
+	userService services.UserServiceInterface,
+	fileStorage filestorage.FileStorageInterface,
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
-	fileStorage filestorage.FileStorageInterface,
 ) {
-	userRepository := repositories.NewUserRepository(dbConn, logger)
-	statusRepository := repositories.NewStatusRepository(dbConn)
-	userService := services.NewUserService(userRepository, statusRepository, logger)
-	userCtrl := controllers.NewUserController(userService, fileStorage, logger)
+	userCtrl := controllers.NewUserController(
+		userService,
+		fileStorage,
+		logger,
+	)
 
 	users := secureGroup.Group("/user")
 

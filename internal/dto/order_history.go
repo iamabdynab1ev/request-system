@@ -2,10 +2,11 @@ package dto
 
 // TimelineEventDTO - наша обновленная структура ответа
 type TimelineEventDTO struct {
-	Lines     []string     `json:"lines"`
-	Comment   *string      `json:"comment,omitempty"`
-	Actor     ShortUserDTO `json:"actor"`
-	CreatedAt string       `json:"created_at"`
+	Lines      []string               `json:"lines"`
+	Comment    *string                `json:"comment,omitempty"`
+	Actor      ShortUserDTO           `json:"actor"`
+	CreatedAt  string                 `json:"created_at"`
+	Attachment *AttachmentResponseDTO `json:"attachment,omitempty"`
 }
 
 // CreateOrderHistoryDTO остается без изменений

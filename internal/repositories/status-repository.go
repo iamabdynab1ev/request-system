@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"request-system/internal/dto"
+	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// dbStatus - это временная структура для сканирования из БД
 type dbStatus struct {
 	ID        uint64
 	IconSmall sql.NullString
@@ -28,6 +30,7 @@ type dbStatus struct {
 	UpdatedAt sql.NullTime
 }
 
+// ToDTO конвертирует dbStatus в DTO для отправки клиенту
 func (db *dbStatus) ToDTO() dto.StatusDTO {
 	return dto.StatusDTO{
 		ID:        db.ID,
@@ -41,18 +44,46 @@ func (db *dbStatus) ToDTO() dto.StatusDTO {
 	}
 }
 
+// <<<--- НАЧАЛО: ИСПРАВЛЕННЫЙ КОНВЕРТЕР В СУЩНОСТЬ ---
+// ToEntity конвертирует dbStatus в entities.Status для использования внутри сервисов
+func (db *dbStatus) ToEntity() entities.Status {
+	var codePtr *string
+	if db.Code.Valid {
+		code := db.Code.String // Создаем временную переменную
+		codePtr = &code        // Берем адрес от нее
+	}
+	return entities.Status{
+		ID:   int(db.ID), // FIX 1: Приводим uint64 к int
+		Name: db.Name,
+		Code: codePtr, // FIX 2: Правильно создаем *string
+		Type: db.Type,
+	}
+}
+
+// <<<--- КОНЕЦ ИСПРАВЛЕНИЙ ---
+
 const (
 	statusTable  = "statuses"
 	statusFields = "id, icon_small, icon_big, name, type, code, created_at, updated_at"
 )
 
+// ИНТЕРФЕЙС - МИНИМАЛЬНЫЕ ИЗМЕНЕНИЯ, ЧТОБЫ ВСЕ РАБОТАЛО
 type StatusRepositoryInterface interface {
 	GetStatuses(ctx context.Context, limit, offset uint64, search string) ([]dto.StatusDTO, uint64, error)
-	FindStatus(ctx context.Context, id uint64) (*dto.StatusDTO, error)
-	FindByCode(ctx context.Context, code string) (*dto.StatusDTO, error)
+
+	// Методы для сервиса OrderService (возвращают СУЩНОСТИ)
+	FindStatus(ctx context.Context, id uint64) (*entities.Status, error)
+	FindStatusInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Status, error)
+	FindByCode(ctx context.Context, code string) (*entities.Status, error)
+	FindByCodeInTx(ctx context.Context, tx pgx.Tx, code string) (*entities.Status, error)
+
+	// Методы для контроллера статусов (возвращают DTO)
 	CreateStatus(ctx context.Context, dto dto.CreateStatusDTO, iconSmallPath, iconBigPath string) (*dto.StatusDTO, error)
 	UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO, iconSmallPath, iconBigPath *string) (*dto.StatusDTO, error)
 	DeleteStatus(ctx context.Context, id uint64) error
+
+	// Публичный метод FindStatusAsDTO для контроллера
+	FindStatusAsDTO(ctx context.Context, id uint64) (*dto.StatusDTO, error)
 }
 
 type statusRepository struct{ storage *pgxpool.Pool }
@@ -61,7 +92,20 @@ func NewStatusRepository(storage *pgxpool.Pool) StatusRepositoryInterface {
 	return &statusRepository{storage: storage}
 }
 
+func (r *statusRepository) scanRow(row pgx.Row) (*dbStatus, error) {
+	var dbRow dbStatus
+	err := row.Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	return &dbRow, nil
+}
+
 func (r *statusRepository) GetStatuses(ctx context.Context, limit, offset uint64, search string) ([]dto.StatusDTO, uint64, error) {
+	// Этот метод без изменений, он корректен
 	var total uint64
 	var args []interface{}
 	whereClause := ""
@@ -100,35 +144,67 @@ func (r *statusRepository) GetStatuses(ctx context.Context, limit, offset uint64
 	return statuses, total, rows.Err()
 }
 
-func (r *statusRepository) FindStatus(ctx context.Context, id uint64) (*dto.StatusDTO, error) {
+// --- МЕТОДЫ, ВОЗВРАЩАЮЩИЕ СУЩНОСТИ ДЛЯ ORDER SERVICE ---
+func (r *statusRepository) FindStatus(ctx context.Context, id uint64) (*entities.Status, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", statusFields, statusTable)
-	var dbRow dbStatus
-	err := r.storage.QueryRow(ctx, query, id).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+	row := r.storage.QueryRow(ctx, query, id)
+	dbRow, err := r.scanRow(row)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperrors.ErrNotFound
-		}
 		return nil, err
 	}
-	statusDTO := dbRow.ToDTO()
-	return &statusDTO, nil
+	entity := dbRow.ToEntity()
+	return &entity, nil
 }
 
-func (r *statusRepository) FindByCode(ctx context.Context, code string) (*dto.StatusDTO, error) {
+func (r *statusRepository) FindByCode(ctx context.Context, code string) (*entities.Status, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE code = $1 LIMIT 1", statusFields, statusTable)
-	var dbRow dbStatus
-	err := r.storage.QueryRow(ctx, query, code).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+	row := r.storage.QueryRow(ctx, query, code)
+	dbRow, err := r.scanRow(row)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperrors.ErrNotFound
-		}
 		return nil, err
 	}
-	statusDTO := dbRow.ToDTO()
-	return &statusDTO, nil
+	entity := dbRow.ToEntity()
+	return &entity, nil
+}
+
+func (r *statusRepository) FindStatusInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Status, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", statusFields, statusTable)
+	row := tx.QueryRow(ctx, query, id)
+	dbRow, err := r.scanRow(row)
+	if err != nil {
+		return nil, err
+	}
+	entity := dbRow.ToEntity()
+	return &entity, nil
+}
+
+func (r *statusRepository) FindByCodeInTx(ctx context.Context, tx pgx.Tx, code string) (*entities.Status, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE code = $1 LIMIT 1", statusFields, statusTable)
+	row := tx.QueryRow(ctx, query, code)
+	dbRow, err := r.scanRow(row)
+	if err != nil {
+		return nil, err
+	}
+	entity := dbRow.ToEntity()
+	return &entity, nil
+}
+
+// --- МЕТОДЫ, ВОЗВРАЩАЮЩИЕ DTO ДЛЯ ДРУГИХ ЧАСТЕЙ ПРИЛОЖЕНИЯ ---
+
+// FindStatusAsDTO - это старый FindStatus, возвращающий DTO. Используется в контроллере.
+func (r *statusRepository) FindStatusAsDTO(ctx context.Context, id uint64) (*dto.StatusDTO, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", statusFields, statusTable)
+	row := r.storage.QueryRow(ctx, query, id)
+	dbRow, err := r.scanRow(row)
+	if err != nil {
+		return nil, err
+	}
+	dto := dbRow.ToDTO()
+	return &dto, nil
 }
 
 func (r *statusRepository) CreateStatus(ctx context.Context, payload dto.CreateStatusDTO, iconSmallPath, iconBigPath string) (*dto.StatusDTO, error) {
+	// Этот метод без изменений, он корректен
 	query := fmt.Sprintf("INSERT INTO %s (name, type, code, icon_small, icon_big) VALUES($1, $2, $3, $4, $5) RETURNING %s", statusTable, statusFields)
 	var dbRow dbStatus
 	err := r.storage.QueryRow(ctx, query, payload.Name, payload.Type, payload.Code, iconSmallPath, iconBigPath).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
@@ -143,6 +219,7 @@ func (r *statusRepository) CreateStatus(ctx context.Context, payload dto.CreateS
 	return &statusDTO, nil
 }
 
+// <<<--- НАЧАЛО: ИСПРАВЛЕННЫЙ UpdateStatus ---
 func (r *statusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO, iconSmallPath, iconBigPath *string) (*dto.StatusDTO, error) {
 	var setClauses []string
 	var args []interface{}
@@ -173,8 +250,10 @@ func (r *statusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.
 		args = append(args, *iconBigPath)
 		argId++
 	}
+
+	// FIX 3: Если нет изменений, используем FindStatusAsDTO
 	if len(setClauses) == 0 {
-		return r.FindStatus(ctx, id)
+		return r.FindStatusAsDTO(ctx, id)
 	}
 
 	setClauses = append(setClauses, "updated_at = NOW()")
@@ -183,19 +262,20 @@ func (r *statusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d RETURNING %s", statusTable, setQuery, argId, statusFields)
 	args = append(args, id)
 
-	var dbRow dbStatus
-	err := r.storage.QueryRow(ctx, query, args...).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
+	row := r.storage.QueryRow(ctx, query, args...)
+	dbRow, err := r.scanRow(row)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperrors.ErrNotFound
-		}
 		return nil, err
 	}
+
 	statusDTO := dbRow.ToDTO()
 	return &statusDTO, nil
 }
 
+// <<<--- КОНЕЦ ИСПРАВЛЕНИЙ ---
+
 func (r *statusRepository) DeleteStatus(ctx context.Context, id uint64) error {
+	// Этот метод без изменений, он корректен
 	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", statusTable)
 	result, err := r.storage.Exec(ctx, query, id)
 	if err != nil {

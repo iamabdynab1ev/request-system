@@ -73,6 +73,5 @@ var (
 	ErrInvalidAuthHeader    = NewHttpError(http.StatusUnauthorized, "Недействительный заголовок авторизации", nil, nil)
 	ErrEmptyAuthHeader      = NewHttpError(http.StatusUnauthorized, "Отсутствует заголовок авторизации", nil, nil)
 
-	// Используем наш новый конструктор для этой ошибки
 	ErrChangePasswordWithToken = NewHttpErrorWithDetails(http.StatusAccepted, "Требуется смена пароля", nil, nil, nil)
 )
