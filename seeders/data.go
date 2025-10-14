@@ -111,6 +111,27 @@ var permissionsData = []struct {
 	{Name: "equipment_type:view", Description: "Просмотр типа оборудования"},
 	{Name: "equipment_type:update", Description: "Обновление типа оборудования"},
 	{Name: "equipment_type:delete", Description: "Удаление типа оборудования"},
+
+	// --- ТИПЫ ЗАЯВОК ---
+	{Name: "order_type:create", Description: "Создание типа заявки"},
+	{Name: "order_type:view", Description: "Просмотр типа заявки"},
+	{Name: "order_type:update", Description: "Обновление типа заявки"},
+	{Name: "order_type:delete", Description: "Удаление типа заявки"},
+
+	// --- ДОЛЖНОСТИ ---
+	{Name: "position:create", Description: "Создание должности"},
+	{Name: "position:view", Description: "Просмотр должности"},
+	{Name: "position:update", Description: "Обновление должности"},
+	{Name: "position:delete", Description: "Удаление должности"},
+
+	// --- ПРАВИЛА МАРШРУТИЗАЦИИ заявок ---
+	{Name: "order_rule:create", Description: "Создание правила маршрутизации"},
+	{Name: "order_rule:view", Description: "Просмотр правила маршрутизации"},
+	{Name: "order_rule:update", Description: "Обновление правила маршрутизации"},
+	{Name: "order_rule:delete", Description: "Удаление правила маршрутизации"},
+
+	// --- ОТЧЕТЫ ---
+	{Name: "report:view", Description: "Просмотр отчета"},
 }
 
 var statusesData = []struct {
@@ -143,10 +164,48 @@ var prioritiesData = []struct {
 }
 
 var rolesData = []entities.Role{
-	{Name: "Admin", Description: "ИБ"},
+	{Name: "Admin", Description: "ИБ - Управление доступом"},
 	{Name: "Developer", Description: "Разработчик системы"},
-	{Name: "User", Description: "Заявитель"},
+	{Name: "User", Description: "Заявитель (стандартный пользователь)"},
 	{Name: "Head of department", Description: "Руководитель департамента"},
-	{Name: "Executor", Description: "Исполнитель"},
-	{Name: "Viewing audit", Description: "Ревизор просмотра"},
+	{Name: "Executor", Description: "Исполнитель заявок"},
+	{Name: "Viewing audit", Description: "Ревизор (только просмотр)"},
+}
+
+var positionsData = []struct {
+	Name     string
+	Code     string
+	Level    int
+	StatusID int
+}{
+	// --- ДОЛЖНОСТИ ---
+
+	{Name: "Руководитель", Code: "HEAD", Level: 300, StatusID: 2},
+	{Name: "Заместитель руководителя", Code: "VICE_HEAD", Level: 290, StatusID: 2},
+
+	{Name: "Руководитель департамента", Code: "DEPARTMENT_HEAD", Level: 200, StatusID: 2},
+	{Name: "Заместитель руководителя департамента", Code: "DEPARTMENT_VICE_HEAD", Level: 190, StatusID: 2},
+
+	{Name: "Руководитель отдела", Code: "OTDEL_HEAD", Level: 100, StatusID: 2},
+	{Name: "Заместитель руководителя отдела", Code: "OTDEL_VICE_HEAD", Level: 90, StatusID: 2},
+
+	{Name: "Ведущий специалист", Code: "LEADING_SPECIALIST", Level: 80, StatusID: 2},
+	{Name: "Специалист", Code: "SPECIALIST", Level: 70, StatusID: 2},
+	{Name: "Младший специалист", Code: "JUNIOR_SPECIALIST", Level: 60, StatusID: 2},
+
+	{Name: "Администратор ИБ", Code: "SECURITY_ADMIN", Level: 1000, StatusID: 2},
+	{Name: "Разработчик", Code: "DEVELOPER", Level: 1000, StatusID: 2},
+	{Name: "Системный администратор", Code: "SYSTEM_ADMIN", Level: 1000, StatusID: 2},
+	{Name: "Тим лид", Code: "TEAM_LEAD", Level: 100, StatusID: 2},
+	{Name: "Сенёр специалист", Code: "SENIOR_SPECIALIST", Level: 80, StatusID: 2},
+	{Name: "Мидл специалист", Code: "MIDDLE_SPECIALIST", Level: 70, StatusID: 2},
+}
+
+var ordertypesData = []struct {
+	Name     string
+	Code     string
+	StatusID int
+}{
+	{Name: "Оборудование", Code: "EQUIPMENT", StatusID: 1},
+	{Name: "Административый", Code: "ADMINISTRATIVE", StatusID: 1},
 }

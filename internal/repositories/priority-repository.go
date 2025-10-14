@@ -28,6 +28,7 @@ type PriorityRepositoryInterface interface {
 	DeletePriority(ctx context.Context, id uint64) error
 	FindByCode(ctx context.Context, code string) (*entities.Priority, error)
 	FindByID(ctx context.Context, id uint64) (*entities.Priority, error)
+	FindByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Priority, error)
 }
 
 // Глобальные константы без полей иконок
@@ -235,5 +236,22 @@ func (r *PriorityRepository) FindByID(ctx context.Context, id uint64) (*entities
 		}
 		return nil, err
 	}
+	return &priority, nil
+}
+
+func (r *PriorityRepository) FindByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Priority, error) {
+	query := `SELECT id, name, code, rate FROM priorities WHERE id = $1 LIMIT 1`
+	var priority entities.Priority
+
+	// Используем QueryRow от транзакции `tx`, а не от `r.storage`
+	err := tx.QueryRow(ctx, query, id).Scan(&priority.ID, &priority.Name, &priority.Code, &priority.Rate)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		r.logger.Error("Ошибка при поиске Priority по ID в транзакции", zap.Uint64("id", id), zap.Error(err))
+		return nil, err
+	}
+
 	return &priority, nil
 }

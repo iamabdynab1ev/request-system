@@ -3,6 +3,8 @@ package entities
 import (
 	"database/sql"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type OrderHistory struct {
@@ -15,4 +17,6 @@ type OrderHistory struct {
 	Comment      sql.NullString `db:"comment"`
 	CreatedAt    time.Time      `db:"created_at"`
 	AttachmentID sql.NullInt64  `db:"attachment_id"`
+	Metadata     []byte         `db:"metadata"`
+	TxID         *uuid.UUID     `db:"tx_id"`
 }

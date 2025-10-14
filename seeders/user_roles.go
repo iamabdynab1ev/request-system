@@ -10,20 +10,21 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Вынесем эту функцию в отдельный файл, например, seeders/main.go
-// func SeedAll(db *pgxpool.Pool) { ... }
-
-// seedUsers создает двух пользователей: Admin (ИБ) и Тестовый Сотрудник
 func seedUsers(ctx context.Context, db *pgxpool.Pool) error {
 	log.Println("  - Создание пользователей...")
 
 	var statusID, branchID, departmentID uint64
+	var adminPositionID, employeePositionID uint64
 
-	// Получаем необходимые ID из справочников
+	// --- ШАГ 1: Получаем все необходимые ID из справочников одним махом ---
+
+	// Статус пользователя
 	err := db.QueryRow(ctx, "SELECT id FROM statuses WHERE code = 'ACTIVE' AND type = 2 LIMIT 1").Scan(&statusID)
 	if err != nil {
 		return fmt.Errorf("не найден статус 'ACTIVE' для пользователя: %w", err)
 	}
+
+	// Филиал и департамент (берем первые попавшиеся для теста)
 	err = db.QueryRow(ctx, "SELECT id FROM branches LIMIT 1").Scan(&branchID)
 	if err != nil {
 		return fmt.Errorf("не найден ни один филиал в справочнике: %w", err)
@@ -33,23 +34,37 @@ func seedUsers(ctx context.Context, db *pgxpool.Pool) error {
 		return fmt.Errorf("не найден ни один департамент в справочнике: %w", err)
 	}
 
-	// --- 1. Создание "Admin (ИБ)" ---
+	// ---> ВАЖНО: Получаем ID должностей, а не текстовые названия <---
+	err = db.QueryRow(ctx, "SELECT id FROM positions WHERE code = 'SECURITY_ADMIN' LIMIT 1").Scan(&adminPositionID)
+	if err != nil {
+		return fmt.Errorf("не найдена должность с кодом 'SECURITY_ADMIN': %w. Убедитесь, что сидер должностей запущен", err)
+	}
+	err = db.QueryRow(ctx, "SELECT id FROM positions WHERE code = 'DEVELOPER' LIMIT 1").Scan(&employeePositionID)
+	if err != nil {
+		return fmt.Errorf("не найдена должность с кодом 'DEVELOPER': %w. Убедитесь, что сидер должностей запущен", err)
+	}
+
+	// --- ШАГ 2: Создание "Admin (ИБ)" (если его нет) ---
 	emailAdmin := "admin-ib@arvand.tj"
 	var adminID uint64
-	var adminRoleID uint64 = 1 // Предполагаем, что у роли "Admin" ID=1
+	adminRoleID := uint64(1) // Роль "Admin"
 
 	err = db.QueryRow(ctx, "SELECT id FROM users WHERE email = $1", emailAdmin).Scan(&adminID)
 	if err == nil {
 		log.Println("    - Пользователь Admin (ИБ) уже существует.")
 	} else {
 		hashedPassword, _ := utils.HashPassword("992999999999")
-		query := `INSERT INTO users (fio, "position", email, phone_number, password, status_id, branch_id, department_id, is_head, must_change_password)
+		// ---> ИСПРАВЛЕННЫЙ ЗАПРОС: используем position_id <---
+		query := `INSERT INTO users (fio, email, phone_number, password, position_id, status_id, branch_id, department_id, is_head, must_change_password)
 				  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`
 
 		err = db.QueryRow(ctx, query,
-			"Администратор ИБ", "Администратор Информационной Безопасности",
-			emailAdmin, "992999999999", hashedPassword,
-			statusID, branchID, departmentID, false, false,
+			"Администратор ИБ",
+			emailAdmin,
+			"992999999999",
+			hashedPassword,
+			adminPositionID, // <-- ПРАВИЛЬНО: ID должности
+			statusID, branchID, departmentID, false, true,
 		).Scan(&adminID)
 		if err != nil {
 			return fmt.Errorf("ошибка создания пользователя Admin: %w", err)
@@ -63,21 +78,26 @@ func seedUsers(ctx context.Context, db *pgxpool.Pool) error {
 	}
 	log.Println("    - Роль 'Admin' назначена пользователю Admin (ИБ).")
 
-	// --- 2. Создание "Тестовый Сотрудник" ---
+	// --- ШАГ 3. Создание "Тестовый Сотрудник" (если его нет) ---
 	emailEmployee := "test.employee@example.com"
 	var employeeID uint64
-	employeeRoleIDs := []uint64{2, 3} // Роли "Сотрудник" и "Наблюдатель"
+	employeeRoleIDs := []uint64{1, 2, 3, 4, 5, 6} // Роли "Сотрудник" и "Наблюдатель"
 
 	err = db.QueryRow(ctx, "SELECT id FROM users WHERE email = $1", emailEmployee).Scan(&employeeID)
 	if err == nil {
 		log.Println("    - Пользователь Тестовый Сотрудник уже существует.")
 	} else {
 		hashedPassword, _ := utils.HashPassword("111222333")
-		query := `INSERT INTO users (fio, email, phone_number, password, position, status_id, branch_id, department_id, must_change_password) 
+		// ---> ИСПРАВЛЕННЫЙ ЗАПРОС: используем position_id <---
+		query := `INSERT INTO users (fio, email, phone_number, password, position_id, status_id, branch_id, department_id, must_change_password) 
 				  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true) RETURNING id`
 		err = db.QueryRow(ctx, query,
-			"Тестовый Сотрудник", emailEmployee, "111222333",
-			hashedPassword, "Тестировщик", statusID, branchID, departmentID,
+			"Тестовый Сотрудник",
+			emailEmployee,
+			"111222333",
+			hashedPassword,
+			employeePositionID, // <-- ПРАВИЛЬНО: ID должности
+			statusID, branchID, departmentID,
 		).Scan(&employeeID)
 		if err != nil {
 			return fmt.Errorf("ошибка создания тестового сотрудника: %w", err)

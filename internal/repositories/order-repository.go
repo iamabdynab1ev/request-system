@@ -3,6 +3,7 @@ package repositories
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
+	"request-system/pkg/utils"
 
 	"github.com/Masterminds/squirrel"
 	sq "github.com/Masterminds/squirrel"
@@ -20,18 +22,8 @@ import (
 
 const (
 	orderTable           = "orders"
-	orderFieldsWithAlias = "o.id, o.name, o.address, o.department_id, o.otdel_id, o.branch_id, o.office_id, o.equipment_id, o.equipment_type_id, o.status_id, o.priority_id, o.user_id, o.executor_id, o.duration, o.created_at, o.updated_at"
-	orderInsertFields    = "name, address, department_id, otdel_id, branch_id, office_id, equipment_id, equipment_type_id, status_id, priority_id, user_id, executor_id, duration"
-)
-
-var (
-	orderAllowedFilterFields = map[string]bool{
-		"department_id": true, "status_id": true, "priority_id": true,
-		"user_id": true, "executor_id": true, "branch_id": true, "office_id": true,
-	}
-	orderAllowedSortFields = map[string]bool{
-		"id": true, "created_at": true, "updated_at": true, "priority_id": true, "status_id": true, "duration": true,
-	}
+	orderFieldsWithAlias = "o.id, o.name, o.address, o.department_id, o.otdel_id, o.branch_id, o.office_id, o.equipment_id, o.equipment_type_id, o.order_type_id, o.status_id, o.priority_id, o.user_id, o.executor_id, o.duration, o.created_at, o.updated_at"
+	orderInsertFields    = "name, address, department_id, otdel_id, branch_id, office_id, equipment_id, equipment_type_id, order_type_id, status_id, priority_id, user_id, executor_id, duration"
 )
 
 type OrderRepositoryInterface interface {
@@ -53,17 +45,20 @@ func NewOrderRepository(storage *pgxpool.Pool, logger *zap.Logger) OrderReposito
 	return &OrderRepository{storage: storage, logger: logger}
 }
 
-// --- CRUD Методы ---
-
-// ИЗМЕНЕН scanOrder: Добавлено сканирование `EquipmentTypeID`
 func (r *OrderRepository) scanOrder(row pgx.Row) (*entities.Order, error) {
 	var order entities.Order
+	var (
+		otdelID, branchID, officeID         sql.NullInt64
+		equipmentID, equipmentTypeID        sql.NullInt64
+		executorID, priorityID, orderTypeID sql.NullInt64
+		address                             sql.NullString
+		duration                            sql.NullTime
+	)
+
 	err := row.Scan(
-		&order.ID, &order.Name, &order.Address,
-		&order.DepartmentID, &order.OtdelID, &order.BranchID, &order.OfficeID,
-		&order.EquipmentID, &order.EquipmentTypeID, // <- Добавлено новое поле
-		&order.StatusID, &order.PriorityID,
-		&order.CreatorID, &order.ExecutorID, &order.Duration,
+		&order.ID, &order.Name, &address, &order.DepartmentID, &otdelID, &branchID, &officeID,
+		&equipmentID, &equipmentTypeID, &orderTypeID, &order.StatusID, &priorityID,
+		&order.CreatorID, &executorID, &duration,
 		&order.CreatedAt, &order.UpdatedAt,
 	)
 	if err != nil {
@@ -72,6 +67,20 @@ func (r *OrderRepository) scanOrder(row pgx.Row) (*entities.Order, error) {
 		}
 		return nil, err
 	}
+	order.Address = utils.NullStringToStrPtr(address)
+	order.OtdelID = utils.NullInt64ToUint64Ptr(otdelID)
+	order.BranchID = utils.NullInt64ToUint64Ptr(branchID)
+	order.OfficeID = utils.NullInt64ToUint64Ptr(officeID)
+	order.EquipmentID = utils.NullInt64ToUint64Ptr(equipmentID)
+	order.EquipmentTypeID = utils.NullInt64ToUint64Ptr(equipmentTypeID)
+	order.ExecutorID = utils.NullInt64ToUint64Ptr(executorID)
+	order.PriorityID = utils.NullInt64ToUint64Ptr(priorityID)
+
+	order.OrderTypeID = utils.NullInt64ToUint64(orderTypeID)
+	if duration.Valid {
+		order.Duration = &duration.Time
+	}
+
 	return &order, nil
 }
 
@@ -79,17 +88,14 @@ func (r *OrderRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 	return r.storage.Begin(ctx)
 }
 
-// ИЗМЕНЕН FindByID: Использует правильную константу с алиасом
 func (r *OrderRepository) FindByID(ctx context.Context, orderID uint64) (*entities.Order, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s o WHERE o.id = $1 AND o.deleted_at IS NULL", orderFieldsWithAlias, orderTable)
 	row := r.storage.QueryRow(ctx, query, orderID)
 	return r.scanOrder(row)
 }
 
-// ИЗМЕНЕН Create: Добавлено поле `equipment_type_id` в INSERT
 func (r *OrderRepository) Create(ctx context.Context, tx pgx.Tx, order *entities.Order) (uint64, error) {
-	// Теперь у нас 13 полей для вставки, и 13 плейсхолдеров ($1...$13)
-	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
 		orderTable, orderInsertFields)
 
 	var orderID uint64
@@ -102,6 +108,7 @@ func (r *OrderRepository) Create(ctx context.Context, tx pgx.Tx, order *entities
 		order.OfficeID,
 		order.EquipmentID,
 		order.EquipmentTypeID,
+		order.OrderTypeID,
 		order.StatusID,
 		order.PriorityID,
 		order.CreatorID,
@@ -126,6 +133,7 @@ func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities
 	builder = builder.Set("office_id", order.OfficeID)
 	builder = builder.Set("equipment_id", order.EquipmentID)
 	builder = builder.Set("equipment_type_id", order.EquipmentTypeID)
+	builder = builder.Set("order_type_id", order.OrderTypeID)
 	builder = builder.Set("status_id", order.StatusID)
 	builder = builder.Set("priority_id", order.PriorityID)
 	builder = builder.Set("executor_id", order.ExecutorID)
@@ -172,54 +180,58 @@ func (r *OrderRepository) CountOrdersByOtdelID(ctx context.Context, id uint64) (
 
 // ЗАМЕНИ СТАРЫЙ МЕТОД ЭТИМ УЛУЧШЕННЫМ ВАРИАНТОМ
 func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.Order, uint64, error) {
-	// Используем squirrel для построения базового запроса
-	baseQuery := sq.Select(orderFieldsWithAlias).
+	baseQuery := sq.Select(
+		"o.id, o.name, o.address, o.department_id, o.otdel_id, o.branch_id, o.office_id, o.equipment_id, " +
+			"o.equipment_type_id, o.order_type_id, o.status_id, o.priority_id, o.user_id, o.executor_id, " +
+			"o.duration, o.created_at, o.updated_at, " +
+			"s.name AS status_name, p.name AS priority_name, " +
+			"creator.fio AS creator_fio, executor.fio AS executor_fio",
+	).
 		From("orders o").
 		LeftJoin("users creator ON o.user_id = creator.id").
 		LeftJoin("users executor ON o.executor_id = executor.id").
+		LeftJoin("statuses s ON o.status_id = s.id").
+		LeftJoin("priorities p ON o.priority_id = p.id").
 		Where(sq.Eq{"o.deleted_at": nil}).
 		PlaceholderFormat(sq.Dollar)
 
-	// Добавляем фильтр безопасности, если он есть
 	if securityFilter != "" {
-		// squirrel автоматически обработает плейсхолдеры '?'
 		baseQuery = baseQuery.Where(securityFilter, securityArgs...)
 	}
 
-	// Добавляем фильтры из запроса
+	// --- Фильтры ---
 	for key, value := range filter.Filter {
-		if !orderAllowedFilterFields[key] {
-			continue
+		switch key {
+		case "department_id", "status_id", "priority_id", "user_id", "executor_id", "branch_id", "office_id":
+			baseQuery = baseQuery.Where(sq.Eq{"o." + key: value})
 		}
-		// squirrel элегантно обрабатывает IN (...) для срезов/массивов
-		baseQuery = baseQuery.Where(sq.Eq{"o." + key: value})
 	}
 
-	// Добавляем поиск
+	// --- Поиск ---
 	if filter.Search != "" {
 		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
-		searchCondition := sq.Or{
+		baseQuery = baseQuery.Where(sq.Or{
 			sq.ILike{"o.name": searchPattern},
 			sq.ILike{"creator.fio": searchPattern},
 			sq.ILike{"executor.fio": searchPattern},
-		}
-		baseQuery = baseQuery.Where(searchCondition)
+		})
 	}
 
-	// --- Сначала подсчитываем общее количество ---
-	countBuilder := sq.Select("COUNT(o.id)").
-		From("orders o").
+	// --- Подсчёт totalCount ---
+	countBuilder := sq.Select("COUNT(o.id)").From("orders o").
 		LeftJoin("users creator ON o.user_id = creator.id").
 		LeftJoin("users executor ON o.executor_id = executor.id").
+		LeftJoin("statuses s ON o.status_id = s.id").
+		LeftJoin("priorities p ON o.priority_id = p.id").
 		Where(sq.Eq{"o.deleted_at": nil}).
 		PlaceholderFormat(sq.Dollar)
 
-	// Применяем те же фильтры к запросу подсчета
 	if securityFilter != "" {
 		countBuilder = countBuilder.Where(securityFilter, securityArgs...)
 	}
 	for key, value := range filter.Filter {
-		if orderAllowedFilterFields[key] {
+		switch key {
+		case "department_id", "status_id", "priority_id", "user_id", "executor_id", "branch_id", "office_id":
 			countBuilder = countBuilder.Where(sq.Eq{"o." + key: value})
 		}
 	}
@@ -247,19 +259,21 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 		return []entities.Order{}, 0, nil
 	}
 
-	// --- Теперь собираем основной запрос с сортировкой и пагинацией ---
-
-	// Сортировка
-	orderByClause := "o.id DESC" // Сортировка по умолчанию
+	// --- Сортировка ---
+	orderByClause := "o.id DESC"
 	if len(filter.Sort) > 0 {
 		var sortParts []string
 		for field, direction := range filter.Sort {
-			if orderAllowedSortFields[field] {
-				// Безопасная проверка направления сортировки
-				dir := "ASC"
-				if strings.ToUpper(direction) == "DESC" {
-					dir = "DESC"
-				}
+			dir := "ASC"
+			if strings.ToUpper(direction) == "DESC" {
+				dir = "DESC"
+			}
+			switch field {
+			case "status_name":
+				sortParts = append(sortParts, fmt.Sprintf("s.name %s", dir))
+			case "priority_name":
+				sortParts = append(sortParts, fmt.Sprintf("p.name %s", dir))
+			case "created_at", "updated_at", "duration", "id":
 				sortParts = append(sortParts, fmt.Sprintf("o.%s %s", field, dir))
 			}
 		}
@@ -269,7 +283,7 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 	}
 	baseQuery = baseQuery.OrderBy(orderByClause)
 
-	// Пагинация
+	// --- Пагинация ---
 	if filter.WithPagination {
 		baseQuery = baseQuery.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
 	}
@@ -285,15 +299,66 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 		r.logger.Error("ошибка получения списка заявок", zap.Error(err), zap.String("query", mainQuery), zap.Any("args", mainArgs))
 		return nil, 0, err
 	}
+	fields := rows.FieldDescriptions()
+	cols := make([]string, len(fields))
+	for i, fd := range fields {
+		cols[i] = string(fd.Name)
+	}
+
+	r.logger.Info("Колонки из SELECT:", zap.Strings("cols", cols))
+	r.logger.Info("Count колонок:", zap.Int("count", len(cols)))
 	defer rows.Close()
 
 	orders := make([]entities.Order, 0, filter.Limit)
 	for rows.Next() {
-		order, err := r.scanOrder(rows)
+		order, err := r.scanOrderWithRelations(rows)
 		if err != nil {
 			return nil, 0, err
 		}
 		orders = append(orders, *order)
 	}
 	return orders, totalCount, rows.Err()
+}
+
+func (r *OrderRepository) scanOrderWithRelations(row pgx.Row) (*entities.Order, error) {
+	var order entities.Order
+	var (
+		otdelID, branchID, officeID         sql.NullInt64
+		equipmentID, equipmentTypeID        sql.NullInt64
+		executorID, priorityID, orderTypeID sql.NullInt64
+		address                             sql.NullString
+		duration                            sql.NullTime
+	)
+
+	err := row.Scan(
+		// Старые 17 полей
+		&order.ID, &order.Name, &address, &order.DepartmentID, &otdelID, &branchID, &officeID,
+		&equipmentID, &equipmentTypeID, &orderTypeID, &order.StatusID, &priorityID,
+		&order.CreatorID, &executorID, &duration,
+		&order.CreatedAt, &order.UpdatedAt,
+		// Новые 4 поля из JOIN'ов
+		&order.StatusName, &order.PriorityName, &order.CreatorFIO, &order.ExecutorFIO,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+
+	// Код конвертации NULL-типов
+	order.Address = utils.NullStringToStrPtr(address)
+	order.OtdelID = utils.NullInt64ToUint64Ptr(otdelID)
+	order.BranchID = utils.NullInt64ToUint64Ptr(branchID)
+	order.OfficeID = utils.NullInt64ToUint64Ptr(officeID)
+	order.EquipmentID = utils.NullInt64ToUint64Ptr(equipmentID)
+	order.EquipmentTypeID = utils.NullInt64ToUint64Ptr(equipmentTypeID)
+	order.ExecutorID = utils.NullInt64ToUint64Ptr(executorID)
+	order.PriorityID = utils.NullInt64ToUint64Ptr(priorityID)
+	order.OrderTypeID = utils.NullInt64ToUint64(orderTypeID)
+	if duration.Valid {
+		order.Duration = &duration.Time
+	}
+
+	return &order, nil
 }

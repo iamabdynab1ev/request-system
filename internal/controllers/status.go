@@ -27,12 +27,18 @@ func (c *StatusController) GetStatuses(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 
-	res, err := c.statusService.GetStatuses(reqCtx, uint64(filter.Limit), uint64(filter.Offset), filter.Search)
+	res, err := c.statusService.GetStatuses(reqCtx, filter)
 	if err != nil {
-		return utils.ErrorResponse(ctx, err, c.logger) // добавляем логер
+		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
-	return utils.SuccessResponse(ctx, res.List, "Список статусов успешно получен", http.StatusOK, res.Pagination.TotalCount)
+	return utils.SuccessResponse(
+		ctx,
+		res.List,
+		"Список статусов успешно получен",
+		http.StatusOK,
+		res.Pagination.TotalCount,
+	)
 }
 
 func (c *StatusController) FindStatus(ctx echo.Context) error {
@@ -61,20 +67,15 @@ func (c *StatusController) FindByCode(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	code := ctx.Param("code")
 
-	res, err := c.statusService.FindByCode(reqCtx, code)
+	id, err := c.statusService.FindIDByCode(reqCtx, code)
 	if err != nil {
 		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Неверный код статуса",
-				err,
-				map[string]interface{}{"code": code},
-			),
+			apperrors.NewHttpError(http.StatusBadRequest, "Неверный код статуса", err, nil),
 			c.logger,
 		)
 	}
 
-	return utils.SuccessResponse(ctx, res, "Статус успешно найден", http.StatusOK)
+	return utils.SuccessResponse(ctx, map[string]any{"id": id}, "Статус найден", http.StatusOK)
 }
 
 func (c *StatusController) CreateStatus(ctx echo.Context) error {

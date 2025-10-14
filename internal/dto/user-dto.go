@@ -4,7 +4,7 @@ type CreateUserDTO struct {
 	Fio          string   `json:"fio" validate:"required"`
 	Email        string   `json:"email" validate:"email,omitempty"`
 	PhoneNumber  string   `json:"phone_number" validate:"required"`
-	Position     string   `json:"position" validate:"required"`
+	PositionID   uint64   `json:"position_id" validate:"required"`
 	StatusID     uint64   `json:"status_id" validate:"omitempty"`
 	RoleIDs      []uint64 `json:"role_ids" validate:"required,dive,gte=1"`
 	BranchID     uint64   `json:"branch_id" validate:"required"`
@@ -19,7 +19,7 @@ type UpdateUserDTO struct {
 	ID                  uint64    `json:"id" validate:"required"`
 	Fio                 *string   `json:"fio" validate:"omitempty"`
 	Email               *string   `json:"email" validate:"omitempty,email"`
-	Position            *string   `json:"position" validate:"omitempty"`
+	PositionID          *uint64   `json:"position_id" validate:"omitempty"`
 	PhoneNumber         *string   `json:"phone_number" validate:"omitempty"`
 	Password            *string   `json:"password" validate:"omitempty,min=6"`
 	StatusID            *uint64   `json:"status_id" validate:"omitempty"`
@@ -39,7 +39,7 @@ type UserDTO struct {
 	Fio                string              `json:"fio"`
 	Email              string              `json:"email"`
 	PhoneNumber        string              `json:"phone_number"`
-	Position           string              `json:"position"`
+	PositionID         *uint64             `json:"position_id"`
 	StatusID           uint64              `json:"status_id"`
 	BranchID           uint64              `json:"branch_id"`
 	DepartmentID       uint64              `json:"department_id"`

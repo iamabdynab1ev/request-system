@@ -24,12 +24,6 @@ const (
 	RolesUpdate = "role:update"
 	RolesDelete = "role:delete"
 
-	// ПРИВИЛЕГИИ (ПРАВА ДОСТУПА)
-	PermissionsCreate = "permission:create"
-	PermissionsUpdate = "permission:update"
-	PermissionsDelete = "permission:delete"
-	PermissionsView   = "permission:view"
-
 	// СПРАВОЧНИКИ (полный набор CRUD для каждого)
 	StatusesCreate = "status:create"
 	StatusesView   = "status:view"
@@ -71,6 +65,7 @@ const (
 	EquipmentTypesUpdate = "equipment_type:update"
 	EquipmentTypesDelete = "equipment_type:delete"
 
+	// --- ПОЛЯ ПРИ СОЗДАНИИ ---
 	OrdersCreateName            = "order:create:name"
 	OrdersCreateAddress         = "order:create:address"
 	OrdersCreateDepartmentID    = "order:create:department_id"
@@ -114,4 +109,30 @@ const (
 	OrdersUpdateInOfficeScope     = "order:update_in_office_scope"
 	OrdersUpdateInBranchScope     = "order:update_in_branch_scope"
 	OrdersUpdateInDepartmentScope = "order:update_in_department_scope"
+
+	// ПРИВИЛЕГИИ (ПРАВА ДОСТУПА)
+	PermissionsCreate = "permission:create"
+	PermissionsUpdate = "permission:update"
+	PermissionsDelete = "permission:delete"
+	PermissionsView   = "permission:view"
+
+	// МАРШРУТИЗАЦИЯ ЗАЯВОК
+	OrderRuleCreate = "order_rule:create"
+	OrderRuleUpdate = "order_rule:update"
+	OrderRuleDelete = "order_rule:delete"
+	OrderRuleView   = "order_rule:view"
+
+	// ДОЛЖНОСТИ
+	PositionsCreate = "position:create"
+	PositionsView   = "position:view"
+	PositionsUpdate = "position:update"
+	PositionsDelete = "position:delete"
+
+	// --- ТИПЫ ЗАЯВОК ---
+	OrderTypesCreate = "order_type:create"
+	OrderTypesView   = "order_type:view"
+	OrderTypesUpdate = "order_type:update"
+	OrderTypesDelete = "order_type:delete"
+	// ОТЧЕТЫ
+	ReportView = "report:view"
 )

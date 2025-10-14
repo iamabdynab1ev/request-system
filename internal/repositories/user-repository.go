@@ -27,7 +27,7 @@ const (
 
 var (
 	userSelectFields = []string{
-		"u.id", "u.fio", "u.email", "u.phone_number", "u.password", "u.position", "u.status_id", "s.code as status_code",
+		"u.id", "u.fio", "u.email", "u.phone_number", "u.password", "u.position_id", "u.status_id", "s.code as status_code",
 		"u.photo_url", "u.branch_id", "u.department_id", "u.office_id", "u.otdel_id",
 		"u.created_at", "u.updated_at", "u.deleted_at", "u.must_change_password", "u.is_head",
 	}
@@ -35,34 +35,41 @@ var (
 		"status_id":     "u.status_id",
 		"department_id": "u.department_id",
 		"branch_id":     "u.branch_id",
-		"position":      "u.position",
+		"position":      "u.position_id",
 	}
 	userAllowedSortFields = map[string]bool{"id": true, "fio": true, "created_at": true, "updated_at": true}
 )
 
 type UserRepositoryInterface interface {
+	// --- Основной CRUD ---
 	GetUsers(ctx context.Context, filter types.Filter) ([]entities.User, uint64, error)
 	FindUserByID(ctx context.Context, id uint64) (*entities.User, error)
-	FindUserByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.User, error) // Добавлен этот метод
+	FindUserByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.User, error)
 	CreateUser(ctx context.Context, tx pgx.Tx, user *entities.User) (uint64, error)
 	UpdateUser(ctx context.Context, tx pgx.Tx, payload dto.UpdateUserDTO) error
-	SyncUserRoles(ctx context.Context, tx pgx.Tx, userID uint64, roleIDs []uint64) error
 	DeleteUser(ctx context.Context, id uint64) error
+
+	// --- Методы для Аутентификации и Авторизации ---
 	FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error)
 	FindUserByPhone(ctx context.Context, phone string) (*entities.User, error)
 	UpdatePassword(ctx context.Context, userID uint64, newPasswordHash string) error
 	UpdatePasswordAndClearFlag(ctx context.Context, userID uint64, newPasswordHash string) error
-	FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error)
-	IsHeadExistsInDepartment(ctx context.Context, departmentID uint64, excludeUserID uint64) (bool, error)
-	FindUserIDsByRoleID(ctx context.Context, roleID uint64) ([]uint64, error)
+
+	// --- Методы для Работы с Ролями и Правами ---
+	SyncUserRoles(ctx context.Context, tx pgx.Tx, userID uint64, roleIDs []uint64) error
 	GetRolesByUserID(ctx context.Context, userID uint64) ([]dto.ShortRoleDTO, error)
 	GetRolesByUserIDs(ctx context.Context, userIDs []uint64) (map[uint64][]dto.ShortRoleDTO, error)
-	BeginTx(ctx context.Context) (pgx.Tx, error)
-	FindHeadByDepartment(ctx context.Context, departmentID uint64) (*entities.User, error)
-	FindHeadByDepartmentInTx(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.User, error)
+	FindUserIDsByRoleID(ctx context.Context, roleID uint64) ([]uint64, error)
 	SyncUserDirectPermissions(ctx context.Context, tx pgx.Tx, userID uint64, permissionIDs []uint64) error
 	SyncUserDeniedPermissions(ctx context.Context, tx pgx.Tx, userID uint64, permissionIDs []uint64) error
 	GetPermissionListsForUI(ctx context.Context, userID uint64) (currentIDs, unavailableIDs []uint64, err error)
+
+	// --- Методы-хелперы для Сервисов ---
+	BeginTx(ctx context.Context) (pgx.Tx, error)
+	FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error)
+	IsHeadExistsInDepartment(ctx context.Context, departmentID uint64, excludeUserID uint64) (bool, error)
+	FindHighestPositionInDepartment(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.Position, error)
+	FindActiveUsersByPositionCode(ctx context.Context, tx pgx.Tx, code string, departmentID uint64, otdelID *uint64) ([]entities.User, error)
 }
 
 type UserRepository struct {
@@ -84,7 +91,7 @@ func scanUserEntity(row pgx.Row) (*entities.User, error) {
 	var createdAt, updatedAt, deletedAt sql.NullTime
 	err := row.Scan(
 		&user.ID, &user.Fio, &user.Email, &user.PhoneNumber, &user.Password,
-		&user.Position, &user.StatusID, &user.StatusCode, &user.PhotoURL,
+		&user.PositionID, &user.StatusID, &user.StatusCode, &user.PhotoURL,
 		&user.BranchID, &user.DepartmentID, &user.OfficeID, &user.OtdelID,
 		&createdAt, &updatedAt, &deletedAt, &user.MustChangePassword, &user.IsHead,
 	)
@@ -107,14 +114,14 @@ func scanUserEntity(row pgx.Row) (*entities.User, error) {
 }
 
 func (r *UserRepository) CreateUser(ctx context.Context, tx pgx.Tx, entity *entities.User) (uint64, error) {
-	query := `INSERT INTO users (fio, email, phone_number, password, position, status_id, branch_id, 
+	query := `INSERT INTO users (fio, email, phone_number, password, position_id, status_id, branch_id, 
 								 department_id, office_id, otdel_id, photo_url, must_change_password, is_head,
 								 created_at, updated_at) 
 			  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`
 
 	var createdID uint64
 	err := tx.QueryRow(ctx, query,
-		entity.Fio, entity.Email, entity.PhoneNumber, entity.Password, entity.Position,
+		entity.Fio, entity.Email, entity.PhoneNumber, entity.Password, entity.PositionID,
 		entity.StatusID, entity.BranchID, entity.DepartmentID, entity.OfficeID,
 		entity.OtdelID, entity.PhotoURL, entity.MustChangePassword, entity.IsHead,
 		entity.CreatedAt, entity.UpdatedAt,
@@ -151,8 +158,8 @@ func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, payload dto.
 	if payload.PhoneNumber != nil {
 		builder = builder.Set("phone_number", *payload.PhoneNumber)
 	}
-	if payload.Position != nil {
-		builder = builder.Set("position", *payload.Position)
+	if payload.PositionID != nil {
+		builder = builder.Set("position_id", *payload.PositionID)
 	}
 	if payload.StatusID != nil {
 		builder = builder.Set("status_id", *payload.StatusID)
@@ -223,72 +230,85 @@ func (r *UserRepository) SyncUserRoles(ctx context.Context, tx pgx.Tx, userID ui
 
 func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter) ([]entities.User, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	countBuilder := psql.Select("COUNT(u.id)").From("users u").Where(sq.Eq{"u.deleted_at": nil})
-	selectBuilder := psql.Select(userSelectFields...).From("users u").Join("statuses s ON u.status_id = s.id").Where(sq.Eq{"u.deleted_at": nil})
 
+	// --- Count builder ---
+	countBuilder := psql.Select("COUNT(u.id)").From("users u").Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{"u.deleted_at": nil})
+
+	// --- Select builder ---
+	selectBuilder := psql.Select(userSelectFields...).From("users u").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{"u.deleted_at": nil})
+
+	// --- Фильтрация ---
+	for key, value := range filter.Filter {
+		column := "u." + key // допустим, имя поля совпадает с БД
+		if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
+			selectBuilder = selectBuilder.Where(sq.Eq{column: strings.Split(strVal, ",")})
+			countBuilder = countBuilder.Where(sq.Eq{column: strings.Split(strVal, ",")})
+		} else {
+			selectBuilder = selectBuilder.Where(sq.Eq{column: value})
+			countBuilder = countBuilder.Where(sq.Eq{column: value})
+		}
+	}
+
+	// --- Поиск по всем текстовым полям ---
 	if filter.Search != "" {
 		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
 		searchCondition := sq.Or{
 			sq.ILike{"u.fio": searchPattern},
 			sq.ILike{"u.email": searchPattern},
 			sq.ILike{"u.phone_number": searchPattern},
+			sq.ILike{"u.photo_url": searchPattern},
 		}
 		selectBuilder = selectBuilder.Where(searchCondition)
 		countBuilder = countBuilder.Where(searchCondition)
 	}
-	for key, value := range filter.Filter {
-		if dbColumn, ok := userAllowedFilterFields[key]; ok {
-			condition := sq.Eq{dbColumn: value}
-			if strVal, ok := value.(string); ok && strings.Contains(strVal, ",") {
-				condition = sq.Eq{dbColumn: strings.Split(strVal, ",")}
-			}
-			selectBuilder = selectBuilder.Where(condition)
-			countBuilder = countBuilder.Where(condition)
-		}
-	}
 
+	// --- Count query ---
 	countQuery, countArgs, err := countBuilder.ToSql()
 	if err != nil {
 		return nil, 0, err
 	}
 	var totalCount uint64
-	if err = r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount); err != nil {
+	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount); err != nil {
 		return nil, 0, err
 	}
 	if totalCount == 0 {
 		return []entities.User{}, 0, nil
 	}
 
+	// --- Сортировка ---
 	if len(filter.Sort) > 0 {
 		for field, direction := range filter.Sort {
-			if userAllowedSortFields[field] {
-				safeDirection := "ASC"
-				if strings.ToLower(direction) == "desc" {
-					safeDirection = "DESC"
-				}
-				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("u.%s %s", field, safeDirection))
+			safeDirection := "ASC"
+			if strings.ToUpper(direction) == "DESC" {
+				safeDirection = "DESC"
 			}
+			selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("u.%s %s", field, safeDirection))
 		}
 	} else {
 		selectBuilder = selectBuilder.OrderBy("u.id DESC")
 	}
 
+	// --- Пагинация ---
 	if filter.WithPagination {
 		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
 	}
 
-	mainQuery, mainArgs, err := selectBuilder.ToSql()
+	// --- Main query ---
+	query, args, err := selectBuilder.ToSql()
 	if err != nil {
 		return nil, 0, err
 	}
 
-	rows, err := r.storage.Query(ctx, mainQuery, mainArgs...)
+	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 
-	var users []entities.User
+	users := make([]entities.User, 0)
 	for rows.Next() {
 		user, err := scanUserEntity(rows)
 		if err != nil {
@@ -296,6 +316,7 @@ func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter) ([]e
 		}
 		users = append(users, *user)
 	}
+
 	return users, totalCount, rows.Err()
 }
 
@@ -489,45 +510,6 @@ func (r *UserRepository) IsHeadExistsInDepartment(ctx context.Context, departmen
 	return exists, nil
 }
 
-func (r *UserRepository) FindHeadByDepartment(ctx context.Context, departmentID uint64) (*entities.User, error) {
-	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	query, args, err := psql.Select(userSelectFields...).
-		From("users u").
-		Join("statuses s ON u.status_id = s.id").
-		Where(sq.Eq{
-			"u.department_id": departmentID,
-			"u.is_head":       true,
-			"u.deleted_at":    nil,
-		}).
-		Limit(1).
-		ToSql()
-	if err != nil {
-		return nil, err
-	}
-	row := r.storage.QueryRow(ctx, query, args...)
-	return scanUserEntity(row)
-}
-
-func (r *UserRepository) FindHeadByDepartmentInTx(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.User, error) {
-	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-
-	query, args, err := psql.Select(userSelectFields...).
-		From("users u").
-		Join("statuses s ON u.status_id = s.id").
-		Where(sq.Eq{
-			"u.department_id": departmentID,
-			"u.is_head":       true,
-			"u.deleted_at":    nil,
-		}).
-		Limit(1).
-		ToSql()
-	if err != nil {
-		return nil, err
-	}
-	row := tx.QueryRow(ctx, query, args...)
-	return scanUserEntity(row)
-}
-
 func (r *UserRepository) SyncUserDirectPermissions(ctx context.Context, tx pgx.Tx, userID uint64, permissionIDs []uint64) error {
 	_, err := tx.Exec(ctx, "DELETE FROM user_permissions WHERE user_id = $1", userID)
 	if err != nil {
@@ -585,4 +567,111 @@ func (r *UserRepository) GetPermissionListsForUI(ctx context.Context, userID uin
 	var currentIDs, unavailableIDs []uint64
 	err := r.storage.QueryRow(ctx, query, userID).Scan(&currentIDs, &unavailableIDs)
 	return currentIDs, unavailableIDs, err
+}
+
+func (r *UserRepository) FindHighestPositionInDepartment(ctx context.Context, tx pgx.Tx, departmentID uint64) (*entities.Position, error) {
+	query := `
+        SELECT p.id, p.name, p.code, p.level, p.status_id, p.created_at, p.updated_at
+        FROM positions p
+        JOIN users u ON u.position_id = p.id
+        WHERE u.department_id = $1 AND u.deleted_at IS NULL AND p.status_id = 2 -- Ищем только по активным должностям
+        ORDER BY p.level DESC
+        LIMIT 1
+    `
+	var pos entities.Position
+	var code sql.NullString
+	var createdAt, updatedAt sql.NullTime
+
+	err := tx.QueryRow(ctx, query, departmentID).Scan(&pos.Id, &pos.Name, &code, &pos.Level, &pos.StatusID, &createdAt, &updatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, fmt.Errorf("ошибка поиска высшей должности: %w", err)
+	}
+
+	if code.Valid {
+		pos.Code = &code.String
+	}
+	if createdAt.Valid {
+		pos.CreatedAt = &createdAt.Time
+	}
+	if updatedAt.Valid {
+		pos.UpdatedAt = &updatedAt.Time
+	}
+
+	return &pos, nil
+}
+
+func (r *UserRepository) FindActiveUsersByPosition(ctx context.Context, tx pgx.Tx, positionID uint64, departmentID uint64) ([]entities.User, error) {
+	// ВАЖНО: Убедитесь, что в таблице statuses код для активного юзера - "ACTIVE"
+	query := `SELECT ` + strings.Join(userSelectFields, ", ") + `
+        FROM users u 
+        JOIN statuses s ON u.status_id = s.id
+        WHERE u.position_id = $1 
+          AND u.department_id = $2 
+          AND s.code = 'ACTIVE' -- Используем код 'ACTIVE' из вашего сидера, не 'USER_ACTIVE'
+          AND u.deleted_at IS NULL
+        ORDER BY u.id`
+
+	rows, err := tx.Query(ctx, query, positionID, departmentID)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка запроса активных пользователей по должности: %w", err)
+	}
+	defer rows.Close()
+	users := make([]entities.User, 0)
+	for rows.Next() {
+		user, err := scanUserEntity(rows)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка сканирования пользователя при поиске по должности: %w", err)
+		}
+		users = append(users, *user)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("ошибка итерации по списку пользователей: %w", err)
+	}
+
+	return users, nil
+}
+
+func (r *UserRepository) FindActiveUsersByPositionCode(ctx context.Context, tx pgx.Tx, code string, departmentID uint64, otdelID *uint64) ([]entities.User, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+
+	builder := psql.Select(userSelectFields...).
+		From("users u").
+		Join("positions p ON u.position_id = p.id").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{
+			"p.code":          code,
+			"u.department_id": departmentID,
+			"s.code":          "ACTIVE",
+			"u.deleted_at":    nil,
+		}).
+		OrderBy("p.level DESC")
+
+	if otdelID != nil {
+		builder = builder.Where(sq.Eq{"u.otdel_id": *otdelID})
+	}
+
+	query, args, err := builder.ToSql()
+	if err != nil {
+		r.logger.Error("Ошибка сборки SQL для FindActiveUsersByPositionCode", zap.Error(err))
+		return nil, err
+	}
+	r.logger.Debug("Executing FindActiveUsersByPositionCode", zap.String("query", query), zap.Any("args", args))
+
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		r.logger.Error("Ошибка выполнения запроса FindActiveUsersByPositionCode", zap.Error(err))
+		return nil, err
+	}
+
+	users, err := pgx.CollectRows(rows, pgx.RowToStructByName[entities.User])
+	if err != nil {
+		r.logger.Error("Ошибка сканирования результатов в FindActiveUsersByPositionCode", zap.Error(err))
+		return nil, fmt.Errorf("ошибка сканирования юзеров по коду должности: %w", err)
+	}
+
+	return users, nil
 }

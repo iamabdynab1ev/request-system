@@ -62,16 +62,16 @@ func (s *UserService) GetUsers(ctx context.Context, filter types.Filter) ([]dto.
 		return nil, 0, apperrors.ErrForbidden
 	}
 
-	userEntities, totalCount, err := s.userRepository.GetUsers(ctx, filter)
+	users, totalCount, err := s.userRepository.GetUsers(ctx, filter)
 	if err != nil {
 		return nil, 0, err
 	}
-	if len(userEntities) == 0 {
+	if len(users) == 0 {
 		return []dto.UserDTO{}, 0, nil
 	}
 
-	userIDs := make([]uint64, len(userEntities))
-	for i, u := range userEntities {
+	userIDs := make([]uint64, len(users))
+	for i, u := range users {
 		userIDs[i] = u.ID
 	}
 
@@ -80,17 +80,21 @@ func (s *UserService) GetUsers(ctx context.Context, filter types.Filter) ([]dto.
 		return nil, 0, err
 	}
 
-	dtos := make([]dto.UserDTO, len(userEntities))
-	for i, entity := range userEntities {
-		userDTO := userEntityToUserDTO(&entity)
-		userDTO.RoleIDs = make([]uint64, 0)
-		if roles, ok := userRolesMap[entity.ID]; ok {
-			for _, role := range roles {
-				userDTO.RoleIDs = append(userDTO.RoleIDs, role.ID)
+	dtos := make([]dto.UserDTO, len(users))
+	for i, u := range users {
+		dto := userEntityToUserDTO(&u)
+		if roles, ok := userRolesMap[u.ID]; ok && len(roles) > 0 {
+			roleIDs := make([]uint64, len(roles))
+			for j, r := range roles {
+				roleIDs[j] = r.ID
 			}
+			dto.RoleIDs = roleIDs
+		} else {
+			dto.RoleIDs = []uint64{}
 		}
-		dtos[i] = *userDTO
+		dtos[i] = *dto
 	}
+
 	return dtos, totalCount, nil
 }
 
@@ -148,7 +152,7 @@ func (s *UserService) CreateUser(ctx context.Context, payload dto.CreateUserDTO)
 		}
 	}
 
-	activeStatus, err := s.statusRepository.FindByCode(ctx, constants.UserStatusActiveCode)
+	activeStatusID, err := s.statusRepository.FindIDByCode(ctx, constants.UserStatusActiveCode)
 	if err != nil {
 		return nil, apperrors.NewHttpError(http.StatusInternalServerError, "Ошибка конфигурации: статус 'ACTIVE' не найден.", err, nil)
 	}
@@ -164,8 +168,8 @@ func (s *UserService) CreateUser(ctx context.Context, payload dto.CreateUserDTO)
 		Email:              payload.Email,
 		PhoneNumber:        payload.PhoneNumber,
 		Password:           hashedPassword,
-		Position:           payload.Position,
-		StatusID:           uint64(activeStatus.ID),
+		PositionID:         payload.PositionID,
+		StatusID:           activeStatusID,
 		BranchID:           payload.BranchID,
 		DepartmentID:       payload.DepartmentID,
 		OfficeID:           payload.OfficeID,
@@ -348,7 +352,7 @@ func userEntityToUserDTO(entity *entities.User) *dto.UserDTO {
 		ID:                 entity.ID,
 		Fio:                entity.Fio,
 		Email:              entity.Email,
-		Position:           entity.Position,
+		PositionID:         &entity.PositionID,
 		PhoneNumber:        entity.PhoneNumber,
 		BranchID:           entity.BranchID,
 		DepartmentID:       entity.DepartmentID,

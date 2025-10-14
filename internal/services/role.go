@@ -123,11 +123,11 @@ func (s *RoleService) CreateRole(ctx context.Context, dto dto.CreateRoleDTO) (*d
 	if dto.StatusID != nil {
 		entity.StatusID = *dto.StatusID
 	} else {
-		defaultStatus, err := s.statusRepo.FindByCode(ctx, "ACTIVE")
+		activeStatusID, err := s.statusRepo.FindIDByCode(ctx, "ACTIVE")
 		if err != nil {
 			return nil, fmt.Errorf("не удалось найти статус ACTIVE: %w", err)
 		}
-		entity.StatusID = uint64(defaultStatus.ID)
+		entity.StatusID = activeStatusID
 	}
 
 	newRoleID, err := s.repo.CreateRoleInTx(ctx, tx, entity)

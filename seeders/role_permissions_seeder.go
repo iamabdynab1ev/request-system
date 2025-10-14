@@ -14,7 +14,8 @@ import (
 var allViewPermissions = []string{
 	"user:view", "role:view", "permission:view", "status:view", "priority:view",
 	"department:view", "otdel:view", "branch:view", "office:view",
-	"equipment:view", "equipment_type:view",
+	"equipment:view", "equipment_type:view", "order_type:view", "position:view",
+	"order_rule:view",
 }
 
 // rolePermissions - главная конфигурация прав для всех ролей в системе.
@@ -28,7 +29,10 @@ var rolePermissions = map[string][]string{
 
 	// --- 2. Developer (Разработчик системы - Полный доступ к данным) ---
 	"Developer": append([]string{
+		"order_rule:create", "order_rule:update", "order_rule:delete",
 		"scope:all", // Может управлять ВСЕМИ данными
+		// Управление должностями
+		"position:create", "position:update", "position:delete",
 
 		// Управление ВСЕМИ справочниками
 		"status:create", "status:update", "status:delete",
@@ -39,6 +43,9 @@ var rolePermissions = map[string][]string{
 		"office:create", "office:update", "office:delete",
 		"equipment:create", "equipment:update", "equipment:delete",
 		"equipment_type:create", "equipment_type:update", "equipment_type:delete",
+		// Управление ТИПАМИ ЗАЯВОК
+		"order_type:create", "order_type:update", "order_type:delete", "rule:view",
+		// Управление маршрутами заявок
 
 		// Полное управление Заявками
 		"order:create", "order:view", "order:update", "order:delete",
@@ -50,11 +57,15 @@ var rolePermissions = map[string][]string{
 		"order:update:branch_id", "order:update:office_id", "order:update:equipment_id",
 		"order:update:equipment_type_id", "order:update:executor_id", "order:update:status_id",
 		"order:update:priority_id", "order:update:duration", "order:update:comment", "order:update:reopen", "order:update:file",
+		// Полное управление Ролями
+		"role:create", "role:update", "role:delete",
+		// Полное управление Пользователями
+		"user:create", "user:update", "user:delete", "user:password:reset",
 
 		// Личные права
-		"profile:update", "password:update",
+		"profile:update", "password:update", "report:view",
 	}, allViewPermissions...),
-	
+
 	// --- 3. User (Заявитель) ---
 	"User": append([]string{
 		"scope:own", // Видит только свои заявки

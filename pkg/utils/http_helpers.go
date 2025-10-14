@@ -25,7 +25,7 @@ type HTTPResponse struct {
 }
 
 const (
-	DefaultLimit = 100
+	DefaultLimit = 200
 	MaxLimit     = 500
 )
 

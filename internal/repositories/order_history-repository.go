@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	// Убедись, что все импорты на месте
 	"request-system/internal/entities"
@@ -35,18 +36,32 @@ func NewOrderHistoryRepository(storage *pgxpool.Pool) OrderHistoryRepositoryInte
 
 // CreateInTx ...
 func (r *OrderHistoryRepository) CreateInTx(ctx context.Context, tx pgx.Tx, history *entities.OrderHistory, attachmentID *uint64) error {
-	query := `INSERT INTO order_history (order_id, user_id, event_type, old_value, new_value, comment, attachment_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`
-	_, err := tx.Exec(ctx, query, history.OrderID, history.UserID, history.EventType, history.OldValue, history.NewValue, history.Comment, attachmentID)
-	return err
+	query := `
+        INSERT INTO order_history (
+            order_id, user_id, event_type, old_value, new_value, 
+            comment, attachment_id, tx_id, metadata
+        ) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `
+
+	_, err := tx.Exec(ctx, query,
+		history.OrderID,
+		history.UserID,
+		history.EventType,
+		history.OldValue,
+		history.NewValue,
+		history.Comment,
+		attachmentID,
+		history.TxID,
+		history.Metadata,
+	)
+	// Добавим логгирование, чтобы точно видеть ошибку, если она будет
+	if err != nil {
+		return fmt.Errorf("ошибка при записи в order_history: %w", err)
+	}
+
+	return nil
 }
-
-// Файл: internal/repositories/order_history-repository.go
-
-// Файл: internal/repositories/order_history-repository.go
-
-// Файл: internal/repositories/order_history-repository.go
-
-// Файл: internal/repositories/order_history-repository.go
 
 func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint64) ([]OrderHistoryItem, error) {
 	query := `

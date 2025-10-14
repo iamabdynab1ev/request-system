@@ -1,3 +1,4 @@
+// Файл: internal/entities/position-entity.go
 package entities
 
 import (
@@ -5,8 +6,11 @@ import (
 )
 
 type Position struct {
-	Id   int    `json:"id"`
-	Name string `json:"name"`
+	Id       int     `json:"id"`
+	Name     string  `json:"name"`
+	Code     *string `json:"code"`
+	Level    int     `json:"level"`
+	StatusID int     `json:"status_id"`
 
-	types.BaseEntity
+	types.BaseEntity // Добавляем CreatedAt, UpdatedAt
 }

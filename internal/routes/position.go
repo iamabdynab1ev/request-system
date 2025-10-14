@@ -1,23 +1,33 @@
+// Файл: internal/routes/position.go
 package routes
 
 import (
 	"request-system/internal/controllers"
-	"request-system/internal/repositories"
 	"request-system/internal/services"
+	"request-system/pkg/middleware"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	// "request-system/internal/authz"
+
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
-func runPositionRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger) {
-	positionRepository := repositories.NewPositionRepository(dbConn)
-	positionService := services.NewPositionService(positionRepository, logger)
-	positionCtrl := controllers.NewPositionController(positionService, logger)
+// ---> ГЛАВНОЕ ИЗМЕНЕНИЕ: Принимаем SERVICE, а не dbConn <---
+func runPositionRouter(
+	secureGroup *echo.Group,
+	positionService services.PositionServiceInterface,
+	logger *zap.Logger,
+	authMW *middleware.AuthMiddleware,
+) {
+	// Сервис уже готов, просто создаем контроллер
+	posCtrl := controllers.NewPositionController(positionService, logger)
 
-	secureGroup.GET("/position", positionCtrl.GetPositions)
-	secureGroup.GET("/position/:id", positionCtrl.FindPosition)
-	secureGroup.POST("/position", positionCtrl.CreatePosition)
-	secureGroup.PUT("/position/:id", positionCtrl.UpdatePosition)
-	secureGroup.DELETE("/position/:id", positionCtrl.DeletePosition)
+	positions := secureGroup.Group("/position")
+	{
+		positions.POST("", posCtrl.Create, authMW.AuthorizeAny("position:create"))
+		positions.GET("", posCtrl.GetAll, authMW.AuthorizeAny("position:view"))
+		positions.GET("/:id", posCtrl.GetByID, authMW.AuthorizeAny("position:view"))
+		positions.PUT("/:id", posCtrl.Update, authMW.AuthorizeAny("position:update"))
+		positions.DELETE("/:id", posCtrl.Delete, authMW.AuthorizeAny("position:delete"))
+	}
 }

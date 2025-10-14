@@ -13,15 +13,16 @@ import (
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/filestorage"
+	"request-system/pkg/types"
 	"request-system/pkg/utils"
 
 	"go.uber.org/zap"
 )
 
 type StatusServiceInterface interface {
-	GetStatuses(ctx context.Context, limit uint64, offset uint64, search string) (*dto.PaginatedResponse[dto.StatusDTO], error)
+	GetStatuses(ctx context.Context, filter types.Filter) (*dto.PaginatedResponse[dto.StatusDTO], error)
 	FindStatus(ctx context.Context, id uint64) (*dto.StatusDTO, error)
-	FindByCode(ctx context.Context, code string) (*dto.StatusDTO, error)
+	FindIDByCode(ctx context.Context, code string) (uint64, error)
 	CreateStatus(ctx context.Context, createDTO dto.CreateStatusDTO, iconSmallHeader *multipart.FileHeader, iconBigHeader *multipart.FileHeader) (*dto.StatusDTO, error)
 	UpdateStatus(ctx context.Context, id uint64, updateDTO dto.UpdateStatusDTO, iconSmallHeader *multipart.FileHeader, iconBigHeader *multipart.FileHeader) (*dto.StatusDTO, error)
 	DeleteStatus(ctx context.Context, id uint64) error
@@ -78,27 +79,27 @@ func (s *StatusService) buildAuthzContext(ctx context.Context) (*authz.Context, 
 	return &authz.Context{Actor: actor, Permissions: permissionsMap, Target: nil}, nil
 }
 
-func (s *StatusService) GetStatuses(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.StatusDTO], error) {
-	authContext, err := s.buildAuthzContext(ctx)
+func (s *StatusService) GetStatuses(ctx context.Context, filter types.Filter) (*dto.PaginatedResponse[dto.StatusDTO], error) {
+	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if !authz.CanDo(authz.StatusesView, *authContext) {
+	if !authz.CanDo(authz.StatusesView, *authCtx) {
 		return nil, apperrors.ErrForbidden
 	}
 
-	statuses, total, err := s.repo.GetStatuses(ctx, limit, offset, search)
+	statuses, total, err := s.repo.GetStatuses(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
 
-	var currentPage uint64 = 1
-	if limit > 0 {
-		currentPage = (offset / limit) + 1
-	}
 	return &dto.PaginatedResponse[dto.StatusDTO]{
-		List:       statuses,
-		Pagination: dto.PaginationObject{TotalCount: total, Page: currentPage, Limit: limit},
+		List: statuses,
+		Pagination: dto.PaginationObject{
+			TotalCount: total,
+			Page:       uint64(filter.Page),
+			Limit:      uint64(filter.Limit),
+		},
 	}, nil
 }
 
@@ -111,13 +112,8 @@ func (s *StatusService) FindStatus(ctx context.Context, id uint64) (*dto.StatusD
 	return statusEntityToDTO(entity), nil
 }
 
-func (s *StatusService) FindByCode(ctx context.Context, code string) (*dto.StatusDTO, error) {
-	// <<<--- ИСПРАВЛЕНИЕ: Вызываем метод, возвращающий сущность, и конвертируем в DTO ---
-	entity, err := s.repo.FindByCode(ctx, code)
-	if err != nil {
-		return nil, err
-	}
-	return statusEntityToDTO(entity), nil
+func (s *StatusService) FindIDByCode(ctx context.Context, code string) (uint64, error) {
+	return s.repo.FindIDByCode(ctx, code)
 }
 
 func (s *StatusService) CreateStatus(
@@ -146,7 +142,6 @@ func (s *StatusService) CreateStatus(
 		}
 		defer file.Close()
 
-		// ИЗМЕНЕНИЕ ЗДЕСЬ
 		if err = utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
 			return nil, apperrors.NewHttpError(
 				http.StatusBadRequest,
@@ -156,7 +151,6 @@ func (s *StatusService) CreateStatus(
 			)
 		}
 
-		// И ИЗМЕНЕНИЕ ЗДЕСЬ
 		rules, _ := config.UploadContexts["icon_small"]
 		path, err := s.fileStorage.Save(file, iconSmallHeader.Filename, rules.PathPrefix)
 		if err != nil {
@@ -174,7 +168,6 @@ func (s *StatusService) CreateStatus(
 		}
 		defer file.Close()
 
-		// ИЗМЕНЕНИЕ ЗДЕСЬ
 		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
 			return nil, apperrors.NewHttpError(
 				http.StatusBadRequest,

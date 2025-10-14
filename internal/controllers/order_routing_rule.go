@@ -1,4 +1,4 @@
-// Файл: internal/controllers/position.go
+// Файл: internal/controllers/order_routing_rule.go
 package controllers
 
 import (
@@ -14,17 +14,17 @@ import (
 	"request-system/pkg/utils"
 )
 
-type PositionController struct {
-	service services.PositionServiceInterface
+type OrderRoutingRuleController struct {
+	service services.OrderRoutingRuleServiceInterface
 	logger  *zap.Logger
 }
 
-func NewPositionController(service services.PositionServiceInterface, logger *zap.Logger) *PositionController {
-	return &PositionController{service: service, logger: logger}
+func NewOrderRoutingRuleController(service services.OrderRoutingRuleServiceInterface, logger *zap.Logger) *OrderRoutingRuleController {
+	return &OrderRoutingRuleController{service: service, logger: logger}
 }
 
-func (c *PositionController) Create(ctx echo.Context) error {
-	var d dto.CreatePositionDTO
+func (c *OrderRoutingRuleController) Create(ctx echo.Context) error {
+	var d dto.CreateOrderRoutingRuleDTO
 	if err := ctx.Bind(&d); err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверные данные", err, nil), c.logger)
 	}
@@ -35,12 +35,12 @@ func (c *PositionController) Create(ctx echo.Context) error {
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
-	return utils.SuccessResponse(ctx, result, "Должность создана", http.StatusCreated)
+	return utils.SuccessResponse(ctx, result, "Правило создано", http.StatusCreated)
 }
 
-func (c *PositionController) Update(ctx echo.Context) error {
+func (c *OrderRoutingRuleController) Update(ctx echo.Context) error {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	var d dto.UpdatePositionDTO
+	var d dto.UpdateOrderRoutingRuleDTO
 	if err := ctx.Bind(&d); err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверные данные", err, nil), c.logger)
 	}
@@ -51,31 +51,31 @@ func (c *PositionController) Update(ctx echo.Context) error {
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
-	return utils.SuccessResponse(ctx, result, "Должность обновлена", http.StatusOK)
+	return utils.SuccessResponse(ctx, result, "Правило обновлено", http.StatusOK)
 }
 
-func (c *PositionController) Delete(ctx echo.Context) error {
+func (c *OrderRoutingRuleController) Delete(ctx echo.Context) error {
 	id, _ := strconv.Atoi(ctx.Param("id"))
 	if err := c.service.Delete(ctx.Request().Context(), id); err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
-	return utils.SuccessResponse(ctx, struct{}{}, "Должность удалена", http.StatusOK)
+	return utils.SuccessResponse(ctx, struct{}{}, "Правило удалено", http.StatusOK)
 }
 
-func (c *PositionController) GetByID(ctx echo.Context) error {
+func (c *OrderRoutingRuleController) GetByID(ctx echo.Context) error {
 	id, _ := strconv.Atoi(ctx.Param("id"))
 	result, err := c.service.GetByID(ctx.Request().Context(), id)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
-	return utils.SuccessResponse(ctx, result, "Должность найдена", http.StatusOK)
+	return utils.SuccessResponse(ctx, result, "Правило найдено", http.StatusOK)
 }
 
-func (c *PositionController) GetAll(ctx echo.Context) error {
+func (c *OrderRoutingRuleController) GetAll(ctx echo.Context) error {
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 	result, err := c.service.GetAll(ctx.Request().Context(), uint64(filter.Limit), uint64(filter.Offset), filter.Search)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
-	return utils.SuccessResponse(ctx, result.List, "Список должностей получен", http.StatusOK, result.Pagination.TotalCount)
+	return utils.SuccessResponse(ctx, result.List, "Список правил получен", http.StatusOK, result.Pagination.TotalCount)
 }

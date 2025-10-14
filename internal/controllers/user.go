@@ -41,11 +41,14 @@ func (c *UserController) errorResponse(ctx echo.Context, err error) error {
 
 func (c *UserController) GetUsers(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
+
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
+
 	res, totalCount, err := c.userService.GetUsers(reqCtx, filter)
 	if err != nil {
 		return c.errorResponse(ctx, err)
 	}
+
 	return utils.SuccessResponse(ctx, res, "Пользователи успешно получены", http.StatusOK, totalCount)
 }
 

@@ -1,25 +1,26 @@
-// Файл: internal/dto/position-dto.go
+// Файл: internal/dto/order-type-dto.go
+
 package dto
 
-type CreatePositionDTO struct {
+// CreateOrderTypeDTO используется для создания нового типа заявки.
+type CreateOrderTypeDTO struct {
 	Name     string  `json:"name" validate:"required"`
 	Code     *string `json:"code" validate:"omitempty,uppercase,min=2"`
-	Level    int     `json:"level" validate:"required"`
 	StatusID int     `json:"status_id" validate:"required"`
 }
 
-type UpdatePositionDTO struct {
+// UpdateOrderTypeDTO используется для обновления существующего типа заявки.
+type UpdateOrderTypeDTO struct {
 	Name     *string `json:"name,omitempty" validate:"omitempty,min=1"`
 	Code     *string `json:"code,omitempty" validate:"omitempty,uppercase"`
-	Level    *int    `json:"level,omitempty"`
 	StatusID *int    `json:"status_id,omitempty"`
 }
 
-type PositionResponseDTO struct {
+// OrderTypeResponseDTO используется для отправки данных о типе заявки клиенту.
+type OrderTypeResponseDTO struct {
 	ID        uint64 `json:"id"`
 	Name      string `json:"name"`
 	Code      string `json:"code,omitempty"`
-	Level     int    `json:"level"`
 	StatusID  int    `json:"status_id"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at,omitempty"`

@@ -29,6 +29,18 @@ import (
 	"request-system/pkg/utils"
 )
 
+type CustomValidator struct {
+	validator *validator.Validate
+}
+
+func NewValidator(v *validator.Validate) echo.Validator {
+	return &CustomValidator{validator: v}
+}
+
+func (cv *CustomValidator) Validate(i interface{}) error {
+	return cv.validator.Struct(i)
+}
+
 func main() {
 	// 1. КОНФИГ
 	cfg := config.New() // Загружает конфиг, включая DATABASE_URL из .env

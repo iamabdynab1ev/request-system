@@ -1,135 +1,163 @@
+// Файл: internal/repositories/position-repository.go
 package repositories
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
-	"time"
-
-	"request-system/internal/dto"
-	apperrors "request-system/pkg/errors"
+	"net/http"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"request-system/internal/entities"
+	apperrors "request-system/pkg/errors"
 )
 
 const (
 	positionTable  = "positions"
-	positionFields = "id, name, created_at, updated_at"
+	positionFields = "id, name, code, level, status_id, created_at, updated_at"
 )
 
 type PositionRepositoryInterface interface {
-	GetPositions(ctx context.Context, limit uint64, offset uint64) (interface{}, uint64, error)
-	FindPosition(ctx context.Context, id uint64) (*dto.PositionDTO, error)
-	CreatePosition(ctx context.Context, dto dto.CreatePositionDTO) error
-	UpdatePosition(ctx context.Context, id uint64, dto dto.UpdatePositionDTO) error
-	DeletePosition(ctx context.Context, id uint64) error
+	Create(ctx context.Context, tx pgx.Tx, p *entities.Position) (int, error)
+	Update(ctx context.Context, tx pgx.Tx, p *entities.Position) error
+	Delete(ctx context.Context, tx pgx.Tx, id int) error
+	FindByID(ctx context.Context, id int) (*entities.Position, error)
+	GetAll(ctx context.Context, limit, offset uint64, search string) ([]*entities.Position, uint64, error)
+	FindNextInHierarchy(ctx context.Context, tx pgx.Tx, currentLevel int, departmentID uint64) (*entities.Position, error)
 }
 
-type PositionRepository struct {
-	storage *pgxpool.Pool
-}
+type positionRepository struct{ storage *pgxpool.Pool }
 
 func NewPositionRepository(storage *pgxpool.Pool) PositionRepositoryInterface {
-	return &PositionRepository{
-		storage: storage,
-	}
+	return &positionRepository{storage: storage}
 }
 
-func (r *PositionRepository) GetPositions(ctx context.Context, limit uint64, offset uint64) (interface{}, uint64, error) {
-	data, total, err := FetchDataAndCount(ctx, r.storage, Params{
-		Table:     "positions",
-		Columns:   "positions.*",
-		WithPg:    true,
-		Limit:     limit,
-		Offset:    offset,
-		Relations: []Join{},
-		Filter:    map[string]interface{}{},
-	})
-
-	return data, total, err
-}
-
-func (r *PositionRepository) FindPosition(ctx context.Context, id uint64) (*dto.PositionDTO, error) {
-	query := fmt.Sprintf(`
-		SELECT 
-			%s	
-		FROM %s	
-		WHERE id = $1		
-	`, positionFields, positionTable)
-
-	var position dto.PositionDTO
-	var createdAt *time.Time
-	var updatedAt *time.Time
-
-	err := r.storage.QueryRow(ctx, query, id).Scan(
-		&position.ID,
-		&position.Name,
-		&createdAt,
-		&updatedAt,
-	)
+func (r *positionRepository) scanRow(row pgx.Row) (*entities.Position, error) {
+	var p entities.Position
+	var code sql.NullString
+	err := row.Scan(&p.Id, &p.Name, &code, &p.Level, &p.StatusID, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
 		}
-		return nil, err
+		return nil, fmt.Errorf("ошибка сканирования positions: %w", err)
 	}
-
-	if createdAt != nil {
-		position.CreatedAt = createdAt.Format("2006-01-02, 15:04:05")
+	if code.Valid {
+		p.Code = &code.String
 	}
-
-	if updatedAt != nil {
-		position.UpdatedAt = updatedAt.Format("2006-01-02, 15:04:05")
-	}
-	return &position, nil
+	return &p, nil
 }
 
-func (r *PositionRepository) CreatePosition(ctx context.Context, dto dto.CreatePositionDTO) error {
-	query := fmt.Sprintf(`
-        INSERT INTO %s (name)
-		VALUES ($1)
-    `, positionTable)
-
-	_, err := r.storage.Exec(ctx, query,
-		dto.Name,
-	)
+func (r *positionRepository) Create(ctx context.Context, tx pgx.Tx, p *entities.Position) (int, error) {
+	query := `INSERT INTO positions (name, code, level, status_id) VALUES ($1, $2, $3, $4) RETURNING id`
+	var id int
+	err := tx.QueryRow(ctx, query, p.Name, p.Code, p.Level, p.StatusID).Scan(&id)
 	if err != nil {
-		return err
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return 0, fmt.Errorf("должность с таким кодом уже существует: %w", apperrors.ErrConflict)
+		}
+		return 0, fmt.Errorf("ошибка создания positions: %w", err)
 	}
-	return nil
+	return id, nil
 }
 
-func (r *PositionRepository) UpdatePosition(ctx context.Context, id uint64, dto dto.UpdatePositionDTO) error {
-	query := fmt.Sprintf(`
-		UPDATE %s
-		SET name = $1, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2
-	`, positionTable)
-
-	result, err := r.storage.Exec(ctx, query, dto.Name, id)
+func (r *positionRepository) Update(ctx context.Context, tx pgx.Tx, p *entities.Position) error {
+	query := `UPDATE positions SET name = $1, code = $2, level = $3, status_id = $4, updated_at = NOW() WHERE id = $5`
+	result, err := tx.Exec(ctx, query, p.Name, p.Code, p.Level, p.StatusID, p.Id)
 	if err != nil {
-		return fmt.Errorf("update position: %w", err)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("должность с таким кодом уже существует: %w", apperrors.ErrConflict)
+		}
+		return fmt.Errorf("ошибка обновления positions: %w", err)
 	}
-
-	rowsAffected := result.RowsAffected()
-	if rowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-
-	return nil
-}
-
-func (r *PositionRepository) DeletePosition(ctx context.Context, id uint64) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", positionTable)
-
-	result, err := r.storage.Exec(ctx, query, id)
-	if err != nil {
-		return err
-	}
-
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
 	}
-
 	return nil
+}
+
+func (r *positionRepository) Delete(ctx context.Context, tx pgx.Tx, id int) error {
+	query := `DELETE FROM positions WHERE id = $1`
+	result, err := tx.Exec(ctx, query, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return apperrors.NewHttpError(http.StatusBadRequest, "Должность используется и не может быть удалена", err, nil)
+		}
+		return fmt.Errorf("ошибка удаления positions: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+func (r *positionRepository) FindByID(ctx context.Context, id int) (*entities.Position, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", positionFields, positionTable)
+	row := r.storage.QueryRow(ctx, query, id)
+	return r.scanRow(row)
+}
+
+func (r *positionRepository) GetAll(ctx context.Context, limit, offset uint64, search string) ([]*entities.Position, uint64, error) {
+	// ... (эта функция очень похожа на GetAll из order_type_repository, можете скопировать или я могу прислать)
+	var total uint64
+	var args []interface{}
+	whereClause := ""
+
+	if search != "" {
+		whereClause = "WHERE name ILIKE $1 OR code ILIKE $1"
+		args = append(args, "%"+search+"%")
+	}
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", positionTable, whereClause)
+	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []*entities.Position{}, 0, nil
+	}
+
+	queryArgs := append(args, limit, offset)
+	query := fmt.Sprintf("SELECT %s FROM %s %s ORDER BY level DESC, name ASC LIMIT $%d OFFSET $%d",
+		positionFields, positionTable, whereClause, len(args)+1, len(args)+2)
+
+	rows, err := r.storage.Query(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	positions := make([]*entities.Position, 0, limit)
+	for rows.Next() {
+		pos, err := r.scanRow(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		positions = append(positions, pos)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return positions, total, nil
+}
+
+func (r *positionRepository) FindNextInHierarchy(ctx context.Context, tx pgx.Tx, currentLevel int, departmentID uint64) (*entities.Position, error) {
+	query := `
+        SELECT p.id, p.name, p.code, p.level, p.status_id, p.created_at, p.updated_at
+        FROM positions p
+        WHERE p.level < $1 AND p.status_id = 2 AND EXISTS ( -- Ищем только активные должности
+            SELECT 1 FROM users u 
+            WHERE u.position_id = p.id AND u.department_id = $2 AND u.deleted_at IS NULL
+        )
+        ORDER BY p.level DESC
+        LIMIT 1
+    `
+	row := tx.QueryRow(ctx, query, currentLevel, departmentID)
+	return r.scanRow(row) // Ваш scanRow уже возвращает *entities.Position, это правильно
 }

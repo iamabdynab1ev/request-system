@@ -143,7 +143,7 @@ func (ctrl *AuthController) Me(c echo.Context) error {
 		Phone:        user.PhoneNumber,
 		FIO:          user.Fio,
 		PhotoURL:     user.PhotoURL,
-		Position:     user.Position,
+		PositionID:   user.PositionID,
 		BranchID:     user.BranchID,
 		DepartmentID: user.DepartmentID,
 		OfficeID:     user.OfficeID,

@@ -31,27 +31,21 @@ func NewOrderController(
 	}
 }
 
-// GetOrders и FindOrder - без изменений.
 func (c *OrderController) GetOrders(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
-	// <<<--- НАЧАЛО ИЗМЕНЕНИЙ ---
-	c.logger.Debug("--- PARSING FILTER ---",
-		zap.String("raw_query", ctx.Request().URL.RawQuery)) // Логируем исходную строку запроса
-
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
-
-	// ВОТ САМАЯ ВАЖНАЯ СТРОКА ДЛЯ ДИАГНОСТИКИ:
-	c.logger.Debug("Parsed filter object", zap.Any("filter_struct", filter))
-	// <<<--- КОНЕЦ ИЗМЕНЕНИЙ ---
+	c.logger.Debug("Разобран фильтр из запроса", zap.Any("filter_struct", filter))
 
 	orderListResponse, err := c.orderService.GetOrders(reqCtx, filter)
 	if err != nil {
-		c.logger.Error("GetOrders: ошибка при получении списка заявок", zap.Error(err))
+		c.logger.Error("Ошибка при получении списка заявок", zap.Error(err))
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(
 			http.StatusInternalServerError, "Не удалось получить список заявок", err, nil,
 		), c.logger)
 	}
+
+	c.logger.Info("Список заявок успешно получен", zap.Int("количество", len(orderListResponse.List)))
 
 	return utils.SuccessResponse(
 		ctx,
@@ -82,14 +76,9 @@ func (c *OrderController) FindOrder(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, order, "Заявка успешно найдена", http.StatusOK)
 }
 
-// --- >>> НАЧАЛО ИСПРАВЛЕННОЙ ЛОГИКИ <<< ---
-
-// CreateOrder - ПОЛНОСТЬЮ ПЕРЕПИСАН.
-// Теперь он корректно работает с form-data, как вы и хотели.
 func (c *OrderController) CreateOrder(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
-	// Шаг 1: Получаем JSON-данные из поля 'data'
 	dataString := ctx.FormValue("data")
 	if dataString == "" {
 		c.logger.Warn("CreateOrder: поле 'data' в form-data обязательно")
@@ -99,7 +88,6 @@ func (c *OrderController) CreateOrder(ctx echo.Context) error {
 		)
 	}
 
-	// Шаг 2: Парсим JSON в DTO
 	var createDTO dto.CreateOrderDTO
 	if err := json.Unmarshal([]byte(dataString), &createDTO); err != nil {
 		c.logger.Error("CreateOrder: некорректный JSON в поле 'data'", zap.Error(err))
@@ -109,15 +97,11 @@ func (c *OrderController) CreateOrder(ctx echo.Context) error {
 		)
 	}
 
-	// Шаг 3: ВАЛИДИРУЕМ DTO. Это самое важное изменение.
-	// Валидация происходит здесь, а не в сервисе.
 	if err := ctx.Validate(&createDTO); err != nil {
 		c.logger.Error("CreateOrder: ошибка валидации данных", zap.Error(err), zap.Any("dto", createDTO))
-		// utils.ErrorResponse уже умеет обрабатывать ошибки валидации
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
-	// Шаг 4: Получаем файл из поля 'file' (он может отсутствовать, это нормально)
 	file, err := ctx.FormFile("file")
 	if err != nil && err != http.ErrMissingFile {
 		c.logger.Error("CreateOrder: ошибка при чтении файла", zap.Error(err))
@@ -127,13 +111,9 @@ func (c *OrderController) CreateOrder(ctx echo.Context) error {
 		)
 	}
 
-	// Шаг 5: Вызываем сервис с правильными параметрами (подготовленный DTO и файл)
-	// Сигнатура метода в OrderServiceInterface должна быть `CreateOrder(ctx, createDTO, file)`
 	res, err := c.orderService.CreateOrder(reqCtx, createDTO, file)
 	if err != nil {
 		c.logger.Error("CreateOrder: сервис вернул ошибку", zap.Error(err))
-		// Возвращаем ошибку из сервиса напрямую, так как сервис теперь
-		// сам формирует правильный apperrors.HttpError.
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
@@ -145,8 +125,6 @@ func (c *OrderController) CreateOrder(ctx echo.Context) error {
 	)
 }
 
-// UpdateOrder - ПОЛНОСТЬЮ ПЕРЕПИСАН.
-// Сохраняет старую логику работы с form-data.
 func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	orderID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
@@ -158,9 +136,8 @@ func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 		)
 	}
 
-	// Шаг 1: Получаем JSON из поля 'data' и парсим его в DTO
 	dataString := ctx.FormValue("data")
-	var updateDTO dto.UpdateOrderDTO // Начинаем с пустого DTO
+	var updateDTO dto.UpdateOrderDTO
 
 	if dataString != "" {
 		if err := json.Unmarshal([]byte(dataString), &updateDTO); err != nil {
@@ -171,22 +148,18 @@ func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 			)
 		}
 	} else {
-		// Эта часть нужна, если вы вдруг захотите отправить чистое JSON-тело без файла,
-		// но лучше придерживаться одного формата - form-data.
 		c.logger.Warn("UpdateOrder: поле 'data' не было предоставлено. Обновление не будет содержать данных.")
 	}
 
-	// Шаг 2: Валидируем данные DTO
 	if err := ctx.Validate(&updateDTO); err != nil {
 		c.logger.Error("UpdateOrder: ошибка валидации данных", zap.Error(err))
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
-	// Шаг 3: Получаем файл (он может отсутствовать)
-	var fileHeader *multipart.FileHeader // Объявляем переменную для файла
+	var fileHeader *multipart.FileHeader
 	file, err := ctx.FormFile("file")
 	if err != nil {
-		if err != http.ErrMissingFile { // Если ошибка - это не "файл отсутствует", то это реальная проблема
+		if err != http.ErrMissingFile {
 			c.logger.Error("UpdateOrder: ошибка при чтении файла", zap.Error(err))
 			return utils.ErrorResponse(ctx, apperrors.NewHttpError(
 				http.StatusBadRequest, "Ошибка чтения файла", err, nil),
@@ -194,10 +167,9 @@ func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 			)
 		}
 	} else {
-		fileHeader = file // Если файл есть, присваиваем его переменной
+		fileHeader = file
 	}
 
-	// Шаг 4: Вызываем сервис
 	updatedOrder, err := c.orderService.UpdateOrder(reqCtx, orderID, updateDTO, fileHeader)
 	if err != nil {
 		c.logger.Error("Ошибка при обновлении заявки", zap.Uint64("orderID", orderID), zap.Error(err))
@@ -207,7 +179,6 @@ func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, updatedOrder, "Заявка успешно обновлена", http.StatusOK)
 }
 
-// DeleteOrder - без изменений.
 func (c *OrderController) DeleteOrder(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	orderID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)

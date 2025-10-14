@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -66,7 +67,6 @@ func StringPointerToNullString(s *string) sql.NullString {
 	return sql.NullString{String: *s, Valid: true}
 }
 
-// StringToNullString конвертирует string в sql.NullString
 func StringToNullString(s string) sql.NullString {
 	if s == "" {
 		return sql.NullString{Valid: false}
@@ -74,10 +74,6 @@ func StringToNullString(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: true}
 }
 
-// <<<--- НАЧАЛО: НОВЫЕ ХЕЛПЕРЫ ДЛЯ ЧИСЕЛ ---
-
-// NullInt64ToUint64 конвертирует sql.NullInt64 в uint64.
-// Полезно, когда из БД приходит ID, который может быть NULL.
 func NullInt64ToUint64(n sql.NullInt64) uint64 {
 	if !n.Valid {
 		return 0
@@ -85,11 +81,41 @@ func NullInt64ToUint64(n sql.NullInt64) uint64 {
 	return uint64(n.Int64)
 }
 
-// NullInt32ToInt конвертирует sql.NullInt32 в int.
-// Эта функция решает вашу вторую ошибку компиляции.
 func NullInt32ToInt(n sql.NullInt32) int {
 	if !n.Valid {
-		return 0 // или другое значение по умолчанию
+		return 0
 	}
 	return int(n.Int32)
+}
+
+func NullInt64ToUint64Ptr(n sql.NullInt64) *uint64 {
+	if !n.Valid {
+		return nil
+	}
+	v := uint64(n.Int64)
+	return &v
+}
+
+func NullStringToStrPtr(n sql.NullString) *string {
+	if !n.Valid {
+		return nil
+	}
+	return &n.String
+}
+
+func ParseUint64Slice(s []string) ([]uint64, error) {
+	if len(s) == 0 {
+		return nil, nil
+	}
+
+	result := make([]uint64, 0, len(s))
+	for _, v := range s {
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, id)
+	}
+
+	return result, nil
 }

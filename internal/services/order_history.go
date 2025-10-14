@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"request-system/internal/authz"
 	"request-system/internal/dto"
@@ -39,117 +40,104 @@ func NewOrderHistoryService(
 }
 
 func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID uint64) ([]dto.TimelineEventDTO, error) {
-	userID, err := utils.GetUserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	actor, err := s.userRepo.FindUserByID(ctx, userID)
-	if err != nil {
-		return nil, apperrors.ErrUserNotFound
-	}
+	// 1. Проверка прав
+	userID, _ := utils.GetUserIDFromCtx(ctx)
+	permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
+	actor, _ := s.userRepo.FindUserByID(ctx, userID)
+
 	order, err := s.orderRepo.FindByID(ctx, orderID)
 	if err != nil {
 		return nil, err
 	}
+
 	authContext := authz.Context{Actor: actor, Permissions: permissionsMap, Target: order}
 	if !authz.CanDo(authz.OrdersView, authContext) {
 		return nil, apperrors.ErrForbidden
 	}
 
-	rawEvents, err := s.repo.FindByOrderID(ctx, orderID)
+	// 2. Получаем все события через OrderHistoryRepository
+	historyEvents, err := s.repo.FindByOrderID(ctx, orderID)
 	if err != nil {
 		return nil, err
 	}
-	if len(rawEvents) == 0 {
+	if len(historyEvents) == 0 {
 		return []dto.TimelineEventDTO{}, nil
 	}
 
+	// --- 3. ИСПРАВЛЕННАЯ ГРУППИРОВКА ПО ВРЕМЕНИ ---
+
 	var timeline []dto.TimelineEventDTO
-	i := 0
-	for i < len(rawEvents) {
-		currentEvent := rawEvents[i]
-		eventDTO := dto.TimelineEventDTO{
-			Actor: dto.ShortUserDTO{
-				ID:  currentEvent.UserID,
-				Fio: utils.NullStringToString(currentEvent.ActorFio),
-			},
-			CreatedAt: currentEvent.CreatedAt.Format("02.01.2006 / 15:04"),
-			Lines:     []string{},
-		}
 
-		j := i
-		for j < len(rawEvents) && rawEvents[j].UserID == currentEvent.UserID && rawEvents[j].CreatedAt.Unix() == currentEvent.CreatedAt.Unix() {
-			event := rawEvents[j]
-			var line string
+	currentBlock := dto.TimelineEventDTO{
+		Lines:     []string{},
+		Actor:     dto.ShortUserDTO{ID: historyEvents[0].UserID, Fio: utils.NullStringToString(historyEvents[0].ActorFio)},
+		CreatedAt: historyEvents[0].CreatedAt.Format("02.01.2006 / 15:04"),
+	}
+	addEventToBlock(&currentBlock, historyEvents[0]) // Добавляем первое событие
 
-			// <<<--- НАЧАЛО: ИСПРАВЛЕНИЯ ДЛЯ SQL.NULLSTRING ---
-			if event.EventType == "COMMENT" {
-				if event.Comment.Valid && event.Comment.String != "" {
-					comment := event.Comment.String
-					eventDTO.Comment = &comment
-				}
-			} else {
-				switch event.EventType {
-				case "CREATE":
-					line = fmt.Sprintf("Создана заявка: «%s»", order.Name)
-				case "STATUS_CHANGE":
-					if event.NewValue.Valid {
-						line = fmt.Sprintf("Статус изменен на: «%s»", event.NewValue.String)
-					}
-				case "DELEGATION":
-					if event.NewValue.Valid {
-						line = fmt.Sprintf("Назначен исполнитель: %s", event.NewValue.String)
-					}
-				case "ATTACHMENT_ADDED":
-					if event.NewValue.Valid {
-						line = fmt.Sprintf(`Прикреплен файл: %s`, event.NewValue.String)
-					}
+	for i := 1; i < len(historyEvents); i++ {
+		event := historyEvents[i]
+		prevEvent := historyEvents[i-1]
 
-				case "DEPARTMENT_CHANGE":
-					if event.Comment.Valid {
-						line = event.Comment.String
-					}
-				case "DURATION_CHANGE":
-					if event.NewValue.Valid {
-						line = fmt.Sprintf("Срок выполнения: %s", event.NewValue.String)
-					}
-				case "PRIORITY_CHANGE":
-					if event.NewValue.Valid {
-						line = fmt.Sprintf("Приоритет изменен на: %s", event.NewValue.String)
-					}
-				case "NAME_CHANGE":
-					if event.NewValue.Valid {
-						line = fmt.Sprintf("Название заявки изменено на: «%s»", event.NewValue.String)
-					}
-				case "ADDRESS_CHANGE":
-					if event.NewValue.Valid {
-						line = fmt.Sprintf("Адрес заявки изменен на: «%s»", event.NewValue.String)
-					}
-				}
-				if line != "" {
-					eventDTO.Lines = append(eventDTO.Lines, line)
-				}
+		// --- НОВОЕ, УПРОЩЕННОЕ УСЛОВИЕ ГРУППИРОВКИ ---
+		// Группируем ВСЕ события (включая комментарии), если они произошли
+		// почти одновременно (< 1 секунды) и у них один автор.
+		if event.UserID == prevEvent.UserID && event.CreatedAt.Sub(prevEvent.CreatedAt) < time.Second {
+			// Добавляем событие в ТЕКУЩИЙ блок
+			addEventToBlock(&currentBlock, event)
+		} else {
+			// ИНАЧЕ, это новое событие, создаем новый блок
+			timeline = append(timeline, currentBlock) // Завершаем старый блок
+
+			currentBlock = dto.TimelineEventDTO{ // Создаем новый
+				Lines:     []string{},
+				Actor:     dto.ShortUserDTO{ID: event.UserID, Fio: utils.NullStringToString(event.ActorFio)},
+				CreatedAt: event.CreatedAt.Format("02.01.2006 / 15:04"),
 			}
-			// <<<--- КОНЕЦ ИСПРАВЛЕНИЙ ---
-			if event.Attachment != nil {
-				eventDTO.Attachment = &dto.AttachmentResponseDTO{
-					ID:       event.Attachment.ID,
-					FileName: event.Attachment.FileName,
-					FileSize: event.Attachment.FileSize,
-					FileType: event.Attachment.FileType,
-					URL:      event.Attachment.FilePath,
-				}
-			}
-			j++
+			addEventToBlock(&currentBlock, event)
 		}
-
-		timeline = append(timeline, eventDTO)
-		i = j
 	}
 
+	timeline = append(timeline, currentBlock) // Добавляем самый последний блок
+
 	return timeline, nil
+}
+
+// ПОЛНОСТЬЮ ЗАМЕНИ СВОЙ addEventToBlock НА ЭТОТ
+func addEventToBlock(block *dto.TimelineEventDTO, event repositories.OrderHistoryItem) {
+	if event.EventType == "COMMENT" && event.Comment.Valid {
+		comment := event.Comment.String
+		block.Comment = &comment
+	} else if event.NewValue.Valid {
+		var line string
+		switch event.EventType {
+		case "CREATE":
+			line = fmt.Sprintf("Создана заявка: «%s»", event.NewValue.String)
+		case "DELEGATION":
+			// !!! ИСПРАВЛЕНО: Теперь строка уже содержит "Назначено на:", поэтому просто используем ее
+			line = event.NewValue.String
+		case "STATUS_CHANGE":
+			line = fmt.Sprintf("Статус изменен на: «%s»", event.NewValue.String)
+		case "PRIORITY_CHANGE":
+			line = fmt.Sprintf("Установлен приоритет: «%s»", event.NewValue.String)
+		case "ATTACHMENT_ADDED":
+			line = fmt.Sprintf("Прикреплен файл: %s", event.NewValue.String)
+		case "DURATION_CHANGE":
+			line = fmt.Sprintf("Установлено время выполнения до: %s", event.NewValue.String)
+		}
+		if line != "" {
+			block.Lines = append(block.Lines, line)
+		}
+	}
+
+	// Логика добавления вложения (остается без изменений)
+	if event.Attachment != nil {
+		block.Attachment = &dto.AttachmentResponseDTO{
+			ID:       event.Attachment.ID,
+			FileName: event.Attachment.FileName,
+			FileSize: event.Attachment.FileSize,
+			FileType: event.Attachment.FileType,
+			URL:      event.Attachment.FilePath,
+		}
+	}
 }

@@ -31,16 +31,11 @@ func NewPermissionController(
 func (c *PermissionController) GetPermissions(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
-	limit, _ := strconv.ParseUint(ctx.QueryParam("limit"), 10, 64)
-	offset, _ := strconv.ParseUint(ctx.QueryParam("offset"), 10, 64)
-	search := ctx.QueryParam("search")
+	// Используем общий парсер фильтров и пагинации
+	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 
-	if limit == 0 {
-		limit = 100 // Устанавливаем лимит по умолчанию
-	}
-
-	// ----- ИСПРАВЛЕНО ЗДЕСЬ -----
-	permissions, total, err := c.permService.GetPermissions(reqCtx, limit, offset, search)
+	// Вызываем сервис с limit и offset из filter
+	permissions, total, err := c.permService.GetPermissions(reqCtx, uint64(filter.Limit), uint64(filter.Offset), filter.Search)
 	if err != nil {
 		c.logger.Error("GetPermissions: ошибка получения списка привилегий", zap.Error(err))
 		return utils.ErrorResponse(ctx,
@@ -54,18 +49,8 @@ func (c *PermissionController) GetPermissions(ctx echo.Context) error {
 		)
 	}
 
-	// Собираем PaginatedResponse DTO для ответа
-	var currentPage uint64 = 1
-	if limit > 0 {
-		currentPage = (offset / limit) + 1
-	}
-
-	response := &dto.PaginatedResponse[dto.PermissionDTO]{
-		List:       permissions,
-		Pagination: dto.PaginationObject{TotalCount: total, Page: currentPage, Limit: limit},
-	}
-
-	return utils.SuccessResponse(ctx, response, "Список привилегий успешно получен", http.StatusOK)
+	// Возвращаем с общей функцией SuccessResponse
+	return utils.SuccessResponse(ctx, permissions, "Список привилегий успешно получен", http.StatusOK, total)
 }
 
 func (c *PermissionController) FindPermission(ctx echo.Context) error {

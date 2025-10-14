@@ -37,7 +37,7 @@ type UserProfileDTO struct {
 	FIO          string  `json:"fio"`
 	RoleName     string  `json:"-"`
 	PhotoURL     *string `json:"photo_url,omitempty"`
-	Position     string  `json:"position"`
+	PositionID   uint64  `json:"position_id"`
 	BranchID     uint64  `json:"branch_id"`
 	DepartmentID uint64  `json:"department_id"`
 	OfficeID     *uint64 `json:"office_id,omitempty"`

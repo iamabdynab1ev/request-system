@@ -39,8 +39,20 @@ func SeedAll(db *pgxpool.Pool) {
 	if err := seedRolePermissions(ctx, db); err != nil {
 		log.Fatalf("Ошибка наполнения Связей Ролей и Прав: %v", err)
 	}
+	if err := seedPositions(ctx, db); err != nil {
+		log.Fatalf("Ошибка наполнения Должностей (Positions): %v", err)
+	}
 	if err := seedUsers(ctx, db); err != nil {
 		log.Fatalf("Ошибка наполнения Пользователей (Users): %v", err)
+	}
+	if err := seedOperationalUsers(ctx, db); err != nil {
+		log.Fatalf("Ошибка наполнения Пользователей Операционного Департамента: %v", err)
+	}
+	if err := seedITUsers(ctx, db); err != nil {
+		log.Fatalf("Ошибка наполнения Пользователей IT-Департамента: %v", err)
+	}
+	if err := seedOrderTypes(ctx, db); err != nil {
+		log.Fatalf("Ошибка наполнения Типов Заказов: %v", err)
 	}
 	log.Println("✅ Наполнение базы начальными данными успешно завершено!")
 }
