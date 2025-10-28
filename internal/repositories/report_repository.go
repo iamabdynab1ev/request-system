@@ -3,160 +3,118 @@ package repositories
 import (
 	"context"
 	"fmt"
-	"strings"
 
-	entity "request-system/internal/entities" // <-- Используй псевдоним
+	"request-system/internal/entities"
 
-	// Удобный SQL-билдер, если есть в проекте
+	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ReportRepository определяет интерфейс для репозитория отчетов.
-type ReportRepository interface {
-	GetHistoryReport(ctx context.Context, filter entity.ReportFilter) ([]entity.HistoryReportItem, uint64, error)
+type ReportRepositoryInterface interface {
+	GetReport(ctx context.Context, filter entities.ReportFilter) ([]entities.ReportItem, uint64, error)
 }
 
-// reportRepository реализует ReportRepository.
 type reportRepository struct {
 	db *pgxpool.Pool
 }
 
-// NewReportRepository создает новый экземпляр репозитория.
-func NewReportRepository(db *pgxpool.Pool) ReportRepository {
+func NewReportRepository(db *pgxpool.Pool) ReportRepositoryInterface {
 	return &reportRepository{db: db}
 }
 
-// queryBuilder - утилита для построения запроса.
-type queryBuilder struct {
-	conditions []string
-	args       []interface{}
-	paramIndex int
-}
+func (r *reportRepository) GetReport(ctx context.Context, filter entities.ReportFilter) ([]entities.ReportItem, uint64, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
-func (b *queryBuilder) Add(condition string, arg interface{}) {
-	b.paramIndex++
-	b.conditions = append(b.conditions, fmt.Sprintf(condition, b.paramIndex))
-	b.args = append(b.args, arg)
-}
+	// 1. Создаем ОБЩУЮ БАЗУ для обоих запросов (FROM, JOIN, WHERE)
+	baseSelect := psql.Select().
+		From("orders o").
+		LeftJoin("users creator ON o.user_id = creator.id").
+		LeftJoin("users executor ON o.executor_id = executor.id").
+		LeftJoin("order_types ot ON o.order_type_id = ot.id").
+		LeftJoin("priorities p ON o.priority_id = p.id").
+		LeftJoin("statuses s ON o.status_id = s.id").
+		Where(sq.Eq{"o.deleted_at": nil})
 
-// filterFunc - тип функции-фильтра.
-type filterFunc func(b *queryBuilder, filter entity.ReportFilter)
-
-var filterRegistry = []filterFunc{
-	func(b *queryBuilder, f entity.ReportFilter) {
-		if len(f.OrderIDs) > 0 {
-			b.Add("h.order_id = ANY($%d)", f.OrderIDs)
-		}
-	},
-	func(b *queryBuilder, f entity.ReportFilter) {
-		if len(f.UserIDs) > 0 {
-			b.Add("h.user_id = ANY($%d)", f.UserIDs)
-		}
-	},
-	func(b *queryBuilder, f entity.ReportFilter) {
-		if len(f.EventTypes) > 0 {
-			b.Add("h.event_type = ANY($%d)", f.EventTypes)
-		}
-	},
-	func(b *queryBuilder, f entity.ReportFilter) {
-		if f.DateFrom != nil {
-			b.Add("h.created_at >= $%d", f.DateFrom)
-		}
-	},
-	func(b *queryBuilder, f entity.ReportFilter) {
-		if f.DateTo != nil {
-			b.Add("h.created_at <= $%d", f.DateTo)
-		}
-	},
-	func(b *queryBuilder, f entity.ReportFilter) {
-		if f.MetadataJSON != "" {
-			b.Add("h.metadata @> $%d::jsonb", f.MetadataJSON)
-		}
-	},
-}
-
-// GetHistoryReport - основной метод, который выполняет два запроса: COUNT и SELECT.
-func (r *reportRepository) GetHistoryReport(ctx context.Context, filter entity.ReportFilter) ([]entity.HistoryReportItem, uint64, error) {
-	// 1. Применяем фильтры
-	filterQb := queryBuilder{}
-	for _, applyFilter := range filterRegistry {
-		applyFilter(&filterQb, filter)
+	// 2. Применяем к этой базе все фильтры
+	if filter.DateFrom != nil {
+		baseSelect = baseSelect.Where(sq.GtOrEq{"o.created_at": filter.DateFrom})
+	}
+	if filter.DateTo != nil {
+		baseSelect = baseSelect.Where(sq.LtOrEq{"o.created_at": filter.DateTo})
+	}
+	if len(filter.ExecutorIDs) > 0 {
+		baseSelect = baseSelect.Where(sq.Eq{"o.executor_id": filter.ExecutorIDs})
+	}
+	if len(filter.OrderTypeIDs) > 0 {
+		baseSelect = baseSelect.Where(sq.Eq{"o.order_type_id": filter.OrderTypeIDs})
+	}
+	if len(filter.PriorityIDs) > 0 {
+		baseSelect = baseSelect.Where(sq.Eq{"o.priority_id": filter.PriorityIDs})
 	}
 
-	// 2. Делаем запрос для подсчета totalCount (быстрый, без JOIN'ов)
-	countQuery := "SELECT COUNT(h.id) FROM order_history h"
-	if len(filterQb.conditions) > 0 {
-		countQuery += " WHERE " + strings.Join(filterQb.conditions, " AND ")
-	}
-
-	var totalCount uint64
-	err := r.db.QueryRow(ctx, countQuery, filterQb.args...).Scan(&totalCount)
+	// 3. Строим и выполняем COUNT-запрос
+	countBuilder := baseSelect.Columns("COUNT(o.id)")
+	countQuery, countArgs, err := countBuilder.ToSql()
 	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка подсчета записей в отчете: %w", err)
+		return nil, 0, fmt.Errorf("ошибка сборки COUNT-запроса: %w", err)
+	}
+	var totalCount uint64
+	if err = r.db.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount); err != nil {
+		return nil, 0, fmt.Errorf("ошибка выполнения COUNT-запроса: %w", err)
 	}
 	if totalCount == 0 {
-		return []entity.HistoryReportItem{}, 0, nil
+		return []entities.ReportItem{}, 0, nil
 	}
 
-	// 3. Строим основной, "богатый" запрос с JOIN'ами
-	baseQuery := `
-		SELECT 
-			h.id, h.order_id, o.name AS order_name, h.user_id, u.fio AS user_name,
-			h.event_type, h.old_value, h.new_value, h.comment, h.metadata, h.created_at
-		FROM 
-			order_history h
-		LEFT JOIN 
-			orders o ON h.order_id = o.id
-		LEFT JOIN 
-			users u ON h.user_id = u.id
-	`
-	finalQuery := baseQuery
-	if len(filterQb.conditions) > 0 {
-		finalQuery += " WHERE " + strings.Join(filterQb.conditions, " AND ")
-	}
+	// 4. Достраиваем основной запрос, добавляя КОЛОНКИ и СОРТИРОВКУ
+	mainBuilder := baseSelect.Columns(
+		"o.id", "creator.fio", "o.created_at", "ot.name", "p.name", "s.name", "o.name", "executor.fio",
+		"(SELECT MIN(h.created_at) FROM order_history h WHERE h.order_id = o.id AND h.event_type = 'DELEGATION')",
+		"o.completed_at",
+		"CASE WHEN o.resolution_time_seconds IS NOT NULL THEN ROUND(o.resolution_time_seconds::numeric / 3600, 2) ELSE NULL END",
+		`CASE 
+			WHEN o.completed_at IS NOT NULL AND o.duration IS NOT NULL AND o.completed_at <= o.duration THEN 'Выполнен'
+			WHEN o.completed_at IS NOT NULL AND o.duration IS NOT NULL AND o.completed_at > o.duration THEN 'Не выполнен'
+			WHEN o.duration IS NOT NULL AND NOW() > o.duration AND s.code != 'CLOSED' THEN 'Просрочен'
+			ELSE '-' 
+		 END`,
+		"(SELECT h.comment FROM order_history h WHERE h.order_id = o.id AND h.event_type = 'COMMENT' ORDER BY h.created_at DESC LIMIT 1)",
+	).OrderBy("o.id DESC")
 
-	sortOrder := "DESC"
-	if strings.ToUpper(filter.SortOrder) == "ASC" {
-		sortOrder = "ASC"
-	}
-	finalQuery += fmt.Sprintf(" ORDER BY h.created_at %s, h.id %s", sortOrder, sortOrder)
-
-	limit := 100
+	// 5. Добавляем ПАГИНАЦИЮ
 	if filter.PerPage > 0 {
-		limit = filter.PerPage
-	}
-	offset := 0
-	if filter.Page > 1 {
-		offset = (filter.Page - 1) * limit
+		mainBuilder = mainBuilder.Limit(uint64(filter.PerPage)).Offset(uint64((filter.Page - 1) * filter.PerPage))
 	}
 
-	argsForQuery := append(filterQb.args, limit, offset)
-	finalQuery += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(filterQb.args)+1, len(filterQb.args)+2)
-
-	// 4. Выполняем основной запрос
-	rows, err := r.db.Query(ctx, finalQuery, argsForQuery...)
+	// 6. Выполняем основной запрос
+	sql, args, err := mainBuilder.ToSql()
 	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка выполнения основного запроса отчета: %w", err)
+		return nil, 0, fmt.Errorf("ошибка сборки основного запроса: %w", err)
+	}
+	rows, err := r.db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка выполнения основного запроса: %w", err)
 	}
 	defer rows.Close()
 
-	// 5. Сканируем результаты
-	var results []entity.HistoryReportItem
+	// 7. Сканируем результаты
+	var reportItems []entities.ReportItem
 	for rows.Next() {
-		var item entity.HistoryReportItem
+		var item entities.ReportItem
 		err := rows.Scan(
-			&item.ID, &item.OrderID, &item.OrderName, &item.UserID, &item.UserName,
-			&item.EventType, &item.OldValue, &item.NewValue, &item.Comment,
-			&item.Metadata, &item.CreatedAt,
+			&item.OrderID, &item.CreatorFio, &item.CreatedAt, &item.OrderTypeName,
+			&item.PriorityName, &item.StatusName, &item.OrderName, &item.ExecutorFio,
+			&item.DelegatedAt, &item.CompletedAt, &item.ResolutionHours,
+			&item.SLAStatus, &item.Comment,
 		)
 		if err != nil {
-			return nil, 0, fmt.Errorf("ошибка сканирования строки отчета: %w", err)
+			return nil, 0, fmt.Errorf("ошибка сканирования строки: %w", err)
 		}
-		results = append(results, item)
+		reportItems = append(reportItems, item)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, 0, err
 	}
 
-	return results, totalCount, nil
+	return reportItems, totalCount, nil
 }

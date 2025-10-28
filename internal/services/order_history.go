@@ -3,141 +3,190 @@ package services
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
-	"request-system/internal/authz"
+	"go.uber.org/zap"
+
 	"request-system/internal/dto"
 	"request-system/internal/repositories"
-	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
-
-	"go.uber.org/zap"
 )
 
 type OrderHistoryServiceInterface interface {
-	GetTimelineByOrderID(ctx context.Context, orderID uint64) ([]dto.TimelineEventDTO, error)
+	GetTimelineByOrderID(ctx context.Context, orderID uint64, limitStr, offsetStr string) ([]dto.TimelineEventDTO, error)
 }
 
 type OrderHistoryService struct {
-	repo      repositories.OrderHistoryRepositoryInterface
-	userRepo  repositories.UserRepositoryInterface
-	orderRepo repositories.OrderRepositoryInterface
-	logger    *zap.Logger
+	repo         repositories.OrderHistoryRepositoryInterface
+	orderService OrderServiceInterface
+	userRepo     repositories.UserRepositoryInterface
+	logger       *zap.Logger
 }
 
 func NewOrderHistoryService(
 	repo repositories.OrderHistoryRepositoryInterface,
+	orderService OrderServiceInterface,
 	userRepo repositories.UserRepositoryInterface,
-	orderRepo repositories.OrderRepositoryInterface,
 	logger *zap.Logger,
 ) OrderHistoryServiceInterface {
 	return &OrderHistoryService{
-		repo:      repo,
-		userRepo:  userRepo,
-		orderRepo: orderRepo,
-		logger:    logger,
+		repo:         repo,
+		orderService: orderService,
+		userRepo:     userRepo,
+		logger:       logger,
 	}
 }
 
-func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID uint64) ([]dto.TimelineEventDTO, error) {
-	// 1. Проверка прав
-	userID, _ := utils.GetUserIDFromCtx(ctx)
-	permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
-	actor, _ := s.userRepo.FindUserByID(ctx, userID)
-
-	order, err := s.orderRepo.FindByID(ctx, orderID)
+func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID uint64, limitStr, offsetStr string) ([]dto.TimelineEventDTO, error) {
+	_, err := s.orderService.FindOrderByID(ctx, orderID)
 	if err != nil {
+		s.logger.Error("Доступ к истории запрещен", zap.Uint64("orderID", orderID), zap.Error(err))
 		return nil, err
 	}
 
-	authContext := authz.Context{Actor: actor, Permissions: permissionsMap, Target: order}
-	if !authz.CanDo(authz.OrdersView, authContext) {
-		return nil, apperrors.ErrForbidden
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	offset, _ := strconv.Atoi(offsetStr)
+	if offset < 0 {
+		offset = 0
 	}
 
-	// 2. Получаем все события через OrderHistoryRepository
-	historyEvents, err := s.repo.FindByOrderID(ctx, orderID)
-	if err != nil {
-		return nil, err
+	historyEvents, err := s.repo.FindByOrderID(ctx, orderID, uint64(limit), uint64(offset))
+	if err != nil || len(historyEvents) == 0 {
+		return []dto.TimelineEventDTO{}, err
 	}
-	if len(historyEvents) == 0 {
-		return []dto.TimelineEventDTO{}, nil
-	}
-
-	// --- 3. ИСПРАВЛЕННАЯ ГРУППИРОВКА ПО ВРЕМЕНИ ---
 
 	var timeline []dto.TimelineEventDTO
 
-	currentBlock := dto.TimelineEventDTO{
+	currentBlock := &dto.TimelineEventDTO{
 		Lines:     []string{},
-		Actor:     dto.ShortUserDTO{ID: historyEvents[0].UserID, Fio: utils.NullStringToString(historyEvents[0].ActorFio)},
+		Actor:     getActorFromEvent(historyEvents[0], s, ctx, historyEvents),
 		CreatedAt: historyEvents[0].CreatedAt.Format("02.01.2006 / 15:04"),
 	}
-	addEventToBlock(&currentBlock, historyEvents[0]) // Добавляем первое событие
+	addEventToBlock(ctx, currentBlock, historyEvents[0], s)
 
 	for i := 1; i < len(historyEvents); i++ {
 		event := historyEvents[i]
 		prevEvent := historyEvents[i-1]
 
-		// --- НОВОЕ, УПРОЩЕННОЕ УСЛОВИЕ ГРУППИРОВКИ ---
-		// Группируем ВСЕ события (включая комментарии), если они произошли
-		// почти одновременно (< 1 секунды) и у них один автор.
-		if event.UserID == prevEvent.UserID && event.CreatedAt.Sub(prevEvent.CreatedAt) < time.Second {
-			// Добавляем событие в ТЕКУЩИЙ блок
-			addEventToBlock(&currentBlock, event)
+		if event.UserID == prevEvent.UserID && event.CreatedAt.Sub(prevEvent.CreatedAt) < 5*time.Second {
+			addEventToBlock(ctx, currentBlock, event, s)
 		} else {
-			// ИНАЧЕ, это новое событие, создаем новый блок
-			timeline = append(timeline, currentBlock) // Завершаем старый блок
-
-			currentBlock = dto.TimelineEventDTO{ // Создаем новый
+			timeline = append(timeline, *currentBlock)
+			currentBlock = &dto.TimelineEventDTO{
 				Lines:     []string{},
-				Actor:     dto.ShortUserDTO{ID: event.UserID, Fio: utils.NullStringToString(event.ActorFio)},
+				Actor:     getActorFromEvent(event, s, ctx, historyEvents),
 				CreatedAt: event.CreatedAt.Format("02.01.2006 / 15:04"),
 			}
-			addEventToBlock(&currentBlock, event)
+			addEventToBlock(ctx, currentBlock, event, s)
 		}
 	}
 
-	timeline = append(timeline, currentBlock) // Добавляем самый последний блок
-
+	timeline = append(timeline, *currentBlock)
+	s.logger.Info("Таймлайн сформирован", zap.Int("blocks", len(timeline)))
 	return timeline, nil
 }
 
-// ПОЛНОСТЬЮ ЗАМЕНИ СВОЙ addEventToBlock НА ЭТОТ
-func addEventToBlock(block *dto.TimelineEventDTO, event repositories.OrderHistoryItem) {
-	if event.EventType == "COMMENT" && event.Comment.Valid {
-		comment := event.Comment.String
-		block.Comment = &comment
-	} else if event.NewValue.Valid {
-		var line string
-		switch event.EventType {
-		case "CREATE":
-			line = fmt.Sprintf("Создана заявка: «%s»", event.NewValue.String)
-		case "DELEGATION":
-			// !!! ИСПРАВЛЕНО: Теперь строка уже содержит "Назначено на:", поэтому просто используем ее
-			line = event.NewValue.String
-		case "STATUS_CHANGE":
-			line = fmt.Sprintf("Статус изменен на: «%s»", event.NewValue.String)
-		case "PRIORITY_CHANGE":
-			line = fmt.Sprintf("Установлен приоритет: «%s»", event.NewValue.String)
-		case "ATTACHMENT_ADDED":
-			line = fmt.Sprintf("Прикреплен файл: %s", event.NewValue.String)
-		case "DURATION_CHANGE":
-			line = fmt.Sprintf("Установлено время выполнения до: %s", event.NewValue.String)
-		}
-		if line != "" {
-			block.Lines = append(block.Lines, line)
+func getActorFromEvent(event repositories.OrderHistoryItem, s *OrderHistoryService, ctx context.Context, allEvents []repositories.OrderHistoryItem) dto.ShortUserDTO {
+	user, err := s.userRepo.FindUserByID(ctx, event.UserID)
+	var fio string
+	if err == nil && user != nil {
+		fio = user.Fio
+	} else {
+		fio = "Неизвестный пользователь"
+	}
+
+	var role string
+	var creatorID uint64
+	for _, e := range allEvents {
+		if e.EventType == "CREATE" {
+			creatorID = e.UserID
+			break
 		}
 	}
 
-	// Логика добавления вложения (остается без изменений)
-	if event.Attachment != nil {
-		block.Attachment = &dto.AttachmentResponseDTO{
-			ID:       event.Attachment.ID,
-			FileName: event.Attachment.FileName,
-			FileSize: event.Attachment.FileSize,
-			FileType: event.Attachment.FileType,
-			URL:      event.Attachment.FilePath,
+	if event.UserID == creatorID {
+		role = "creator"
+	} else {
+
+		isDelegator := false
+		for _, e := range allEvents {
+			if e.UserID == event.UserID && e.EventType == "DELEGATION" {
+				isDelegator = true
+				break
+			}
+		}
+		if isDelegator {
+			role = "delegator"
+		} else {
+			role = "executor"
+		}
+	}
+
+	return dto.ShortUserDTO{ID: event.UserID, Fio: fio, Role: role}
+}
+
+func addEventToBlock(ctx context.Context, block *dto.TimelineEventDTO, event repositories.OrderHistoryItem, s *OrderHistoryService) {
+	fieldMap := map[string]string{"OTDEL_CHANGE": "Отдел", "NAME_CHANGE": "Имя заявки", "ADDRESS_CHANGE": "Адрес"}
+
+	if event.EventType == "COMMENT" && event.Comment.Valid {
+		block.Comment = &event.Comment.String
+	}
+
+	if event.NewValue.Valid || event.EventType == "CREATE" || event.EventType == "COMMENT" {
+		var line string
+		newValue := utils.NullStringToString(event.NewValue)
+
+		switch event.EventType {
+		case "CREATE":
+			line = fmt.Sprintf("Создана заявка: «%s»", newValue)
+		case "DELEGATION":
+			if event.Comment.Valid {
+				line = event.Comment.String
+			}
+		case "ATTACHMENT_ADD":
+			line = fmt.Sprintf("Прикреплен файл: %s", newValue)
+
+			if event.Attachment != nil {
+				block.Attachment = &dto.AttachmentResponseDTO{
+					ID:       event.Attachment.ID,
+					FileName: event.Attachment.FileName,
+					URL:      "/uploads/" + event.Attachment.FilePath,
+				}
+			}
+		case "STATUS_CHANGE":
+			newID, _ := strconv.ParseUint(newValue, 10, 64)
+			if newStatus, err := s.orderService.GetStatusByID(ctx, newID); err == nil {
+				line = fmt.Sprintf("Установлен статус: «%s»", newStatus.Name)
+			}
+		case "PRIORITY_CHANGE":
+			newID, _ := strconv.ParseUint(newValue, 10, 64)
+			if newPriority, err := s.orderService.GetPriorityByID(ctx, newID); err == nil {
+				line = fmt.Sprintf("Установлен приоритет: «%s»", newPriority.Name)
+			}
+
+		case "DURATION_CHANGE":
+			parsedTime, err := time.Parse(time.RFC3339, newValue)
+			if err == nil {
+				line = fmt.Sprintf("Установлен срок выполнения: %s", parsedTime.Format("02.01.2006 15:04"))
+			} else {
+				line = fmt.Sprintf("Срок выполнения изменен на: %s", newValue)
+			}
+
+		case "COMMENT":
+			line = fmt.Sprintf("Добавлен комментарий: %s", newValue)
+		default:
+			if humanField, ok := fieldMap[event.EventType]; ok {
+				oldValue := utils.NullStringToString(event.OldValue)
+				line = fmt.Sprintf("Изменено поле '%s': «%s» -> «%s»", humanField, oldValue, newValue)
+			}
+		}
+
+		if line != "" {
+			block.Lines = append(block.Lines, line)
 		}
 	}
 }

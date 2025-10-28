@@ -2,6 +2,9 @@
 package controllers
 
 import (
+	"bytes"
+	"encoding/json"
+	"io/ioutil"
 	"net/http"
 	"strconv"
 
@@ -40,17 +43,26 @@ func (c *OrderRoutingRuleController) Create(ctx echo.Context) error {
 
 func (c *OrderRoutingRuleController) Update(ctx echo.Context) error {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	var d dto.UpdateOrderRoutingRuleDTO
-	if err := ctx.Bind(&d); err != nil {
-		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверные данные", err, nil), c.logger)
+	rawBody, err := ioutil.ReadAll(ctx.Request().Body)
+	if err != nil {
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Не удалось прочитать тело запроса", err, nil), c.logger)
 	}
+	var d dto.UpdateOrderRoutingRuleDTO
+	if err := json.Unmarshal(rawBody, &d); err != nil {
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверные данные в формате JSON", err, nil), c.logger)
+	}
+
+	ctx.Request().Body = ioutil.NopCloser(bytes.NewBuffer(rawBody))
+
 	if err := ctx.Validate(&d); err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
-	result, err := c.service.Update(ctx.Request().Context(), id, d)
+
+	result, err := c.service.Update(ctx.Request().Context(), id, d, rawBody)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
+
 	return utils.SuccessResponse(ctx, result, "Правило обновлено", http.StatusOK)
 }
 

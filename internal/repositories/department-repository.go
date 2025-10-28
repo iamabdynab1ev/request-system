@@ -22,7 +22,7 @@ const departmentTable = "departments"
 
 var (
 	departmentAllowedFilterFields = map[string]string{"status_id": "d.status_id"}
-	departmentAllowedSortFields   = map[string]string{"id": "d.id", "name": "d.name", "created_at": "d.created_at"}
+	departmentAllowedSortFields   = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true, "status_id": true}
 )
 
 type DepartmentRepositoryInterface interface {
@@ -99,39 +99,78 @@ func (r *DepartmentRepository) CountDepartments(ctx context.Context, filter type
 }
 
 func (r *DepartmentRepository) GetDepartments(ctx context.Context, filter types.Filter) ([]entities.Department, uint64, error) {
-	total, err := r.CountDepartments(ctx, filter, "d")
-	if err != nil || total == 0 {
-		return []entities.Department{}, total, err
-	}
-	whereClause, args := r.buildFilterQuery(filter, "d")
-	orderByClause := "ORDER BY d.id DESC"
-	if len(filter.Sort) > 0 {
-		sorts := []string{}
-		for field, direction := range filter.Sort {
-			if dbField, ok := departmentAllowedSortFields[field]; ok {
-				order := "ASC"
-				if strings.ToLower(direction) == "desc" {
-					order = "DESC"
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+
+	// --- 1. БАЗОВЫЙ ЗАПРОС ---
+	baseBuilder := psql.Select().From(departmentTable + " AS d")
+
+	// --- 2. ФИЛЬТРАЦИЯ ---
+	if len(filter.Filter) > 0 {
+		for key, value := range filter.Filter {
+			if dbColumn, ok := departmentAllowedFilterFields[key]; ok {
+				if items, ok := value.(string); ok && strings.Contains(items, ",") {
+					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: strings.Split(items, ",")})
+				} else {
+					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: value})
 				}
-				sorts = append(sorts, fmt.Sprintf("%s %s", dbField, order))
 			}
 		}
-		if len(sorts) > 0 {
-			orderByClause = "ORDER BY " + strings.Join(sorts, ", ")
+	}
+
+	if filter.Search != "" {
+		baseBuilder = baseBuilder.Where(sq.ILike{"d.name": "%" + filter.Search + "%"})
+	}
+
+	// --- 3. ПОДСЧЕТ ОБЩЕГО КОЛИЧЕСТВА ---
+	countBuilder := baseBuilder.Columns("COUNT(d.id)")
+	countQuery, countArgs, err := countBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
+	var total uint64
+	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []entities.Department{}, 0, nil
+	}
+
+	// --- 4. ВЫБОРКА + СОРТИРОВКА + ПАГИНАЦИЯ ---
+	selectBuilder := baseBuilder.Columns("d.id, d.name, d.status_id, d.created_at, d.updated_at")
+
+	if len(filter.Sort) > 0 {
+		for field, direction := range filter.Sort {
+			// Проверяем "белый список"
+			if _, ok := departmentAllowedSortFields[field]; ok {
+				safeDirection := "ASC"
+				if strings.ToUpper(direction) == "DESC" {
+					safeDirection = "DESC"
+				}
+				// Безопасно добавляем сортировку, используя `field` напрямую.
+				// Это безопасно, т.к. мы проверили его по "белому списку".
+				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("d.%s %s", field, safeDirection))
+			}
 		}
+	} else {
+		selectBuilder = selectBuilder.OrderBy("d.id DESC")
 	}
-	limitClause := ""
-	argCounter := len(args) + 1
+
 	if filter.WithPagination {
-		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", argCounter, argCounter+1)
-		args = append(args, filter.Limit, filter.Offset)
+		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
 	}
-	query := fmt.Sprintf(`SELECT d.id, d.name, d.status_id, d.created_at, d.updated_at FROM %s d %s %s %s`, departmentTable, whereClause, orderByClause, limitClause)
+
+	// --- 5. ВЫПОЛНЕНИЕ ---
+	query, args, err := selectBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
+
 	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
+
 	departments := make([]entities.Department, 0)
 	for rows.Next() {
 		dept, err := scanDepartment(rows)
@@ -140,6 +179,7 @@ func (r *DepartmentRepository) GetDepartments(ctx context.Context, filter types.
 		}
 		departments = append(departments, *dept)
 	}
+
 	return departments, total, rows.Err()
 }
 

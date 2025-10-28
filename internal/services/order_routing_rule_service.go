@@ -1,25 +1,26 @@
-// Файл: internal/services/order_routing_rule_service.go
 package services
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 
 	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	"request-system/internal/repositories"
+	"request-system/pkg/constants"
 	apperrors "request-system/pkg/errors"
-
-	"github.com/jackc/pgx/v5"
-	"go.uber.org/zap"
+	"request-system/pkg/utils"
 )
 
 type OrderRoutingRuleServiceInterface interface {
 	Create(ctx context.Context, d dto.CreateOrderRoutingRuleDTO) (*dto.OrderRoutingRuleResponseDTO, error)
-	Update(ctx context.Context, id int, d dto.UpdateOrderRoutingRuleDTO) (*dto.OrderRoutingRuleResponseDTO, error)
+	Update(ctx context.Context, id int, d dto.UpdateOrderRoutingRuleDTO, rawBody []byte) (*dto.OrderRoutingRuleResponseDTO, error)
 	Delete(ctx context.Context, id int) error
 	GetByID(ctx context.Context, id int) (*dto.OrderRoutingRuleResponseDTO, error)
 	GetAll(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.OrderRoutingRuleResponseDTO], error)
@@ -28,6 +29,7 @@ type OrderRoutingRuleServiceInterface interface {
 type OrderRoutingRuleService struct {
 	repo          repositories.OrderRoutingRuleRepositoryInterface
 	userRepo      repositories.UserRepositoryInterface
+	positionRepo  repositories.PositionRepositoryInterface // <-- ДОБАВЛЕНО
 	orderTypeRepo repositories.OrderTypeRepositoryInterface
 	txManager     repositories.TxManagerInterface
 	logger        *zap.Logger
@@ -36,87 +38,98 @@ type OrderRoutingRuleService struct {
 func NewOrderRoutingRuleService(
 	r repositories.OrderRoutingRuleRepositoryInterface,
 	u repositories.UserRepositoryInterface,
+	p repositories.PositionRepositoryInterface, // <-- ДОБАВЛЕНО
 	tm repositories.TxManagerInterface,
 	l *zap.Logger,
-	otr repositories.OrderTypeRepositoryInterface, // <<< ДОБАВЛЕНО
+	otr repositories.OrderTypeRepositoryInterface,
 ) OrderRoutingRuleServiceInterface {
 	return &OrderRoutingRuleService{
 		repo:          r,
 		userRepo:      u,
+		positionRepo:  p, // <-- ДОБАВЛЕНО
 		txManager:     tm,
 		logger:        l,
-		orderTypeRepo: otr, // <<< ДОБАВЛЕНО
+		orderTypeRepo: otr,
 	}
 }
 
-func toRuleResponseDTO(e *entities.OrderRoutingRule) *dto.OrderRoutingRuleResponseDTO {
-	if e == nil {
-		return nil
+func (s *OrderRoutingRuleService) toResponseDTO(ctx context.Context, entity *entities.OrderRoutingRule) (*dto.OrderRoutingRuleResponseDTO, error) {
+	if entity == nil {
+		return nil, nil
 	}
-	return &dto.OrderRoutingRuleResponseDTO{
-		ID:           uint64(e.ID),
-		RuleName:     e.RuleName,
-		OrderTypeID:  e.OrderTypeID,
-		DepartmentID: e.DepartmentID,
-		OtdelID:      e.OtdelID,
-		PositionID:   e.PositionID,
-		StatusID:     e.StatusID,
-		CreatedAt:    e.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:    e.UpdatedAt.Format(time.RFC3339),
-	}
-}
 
-// services/order_routing_rule_service.go
+	response := &dto.OrderRoutingRuleResponseDTO{
+		ID:           uint64(entity.ID),
+		RuleName:     entity.RuleName,
+		OrderTypeID:  entity.OrderTypeID,
+		DepartmentID: entity.DepartmentID,
+		OtdelID:      entity.OtdelID,
+		PositionID:   entity.PositionID,
+		StatusID:     entity.StatusID,
+		CreatedAt:    entity.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:    entity.UpdatedAt.Format(time.RFC3339),
+	}
+
+	if entity.PositionID != nil {
+		pos, err := s.positionRepo.FindByID(ctx, nil, uint64(*entity.PositionID))
+		if err == nil && pos.Type != nil {
+			response.PositionType = *pos.Type
+			if name, ok := constants.PositionTypeNames[constants.PositionType(*pos.Type)]; ok {
+				response.PositionTypeName = name
+			}
+		}
+	}
+
+	return response, nil
+}
 
 func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderRoutingRuleDTO) (*dto.OrderRoutingRuleResponseDTO, error) {
 	authContext, err := buildAuthzContext(ctx, s.userRepo)
 	if err != nil {
 		return nil, err
 	}
-	if !authz.CanDo("order_rule:create", *authContext) {
+	if !authz.CanDo(authz.OrderRuleCreate, *authContext) {
 		return nil, apperrors.ErrForbidden
 	}
 
-	// ВАЖНО: убедись, что твой OrderTypeID в DTO - это *int.
-	// Если это int, то проверка `d.OrderTypeID == nil` не сработает.
-	// Для простоты я буду считать, что `OrderTypeID *int` (указатель).
-	if d.OrderTypeID == nil {
-		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Поле 'order_type_id' обязательно", nil, nil)
+	var depID, otdelID *uint64
+	if d.DepartmentID != nil {
+		v := uint64(*d.DepartmentID)
+		depID = &v
+	}
+	if d.OtdelID != nil {
+		v := uint64(*d.OtdelID)
+		otdelID = &v
 	}
 
-	assignToPosID := &d.PositionID
+	positions, err := s.positionRepo.FindByTypeAndOrg(ctx, nil, d.PositionType, depID, otdelID)
+	if err != nil {
+		return nil, err
+	}
+	if len(positions) == 0 {
+		errMsg := fmt.Sprintf("Не найдено ни одной должности с типом '%s'", d.PositionType)
+		if depID != nil {
+			errMsg += fmt.Sprintf(" в департаменте ID %d", *depID)
+		}
+		if otdelID != nil {
+			errMsg += fmt.Sprintf(" и отделе ID %d", *otdelID)
+		}
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, errMsg, nil, nil)
+	}
+
+	foundPositionID := positions[0].ID
+	positionID := int(foundPositionID)
 
 	rule := &entities.OrderRoutingRule{
 		RuleName:     d.RuleName,
 		OrderTypeID:  d.OrderTypeID,
 		DepartmentID: d.DepartmentID,
 		OtdelID:      d.OtdelID,
-		PositionID:   assignToPosID,
+		PositionID:   &positionID,
 		StatusID:     d.StatusID,
 	}
-
 	var newID int
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		// <<<----- НАЧАЛО НОВОГО БЛОКА ПРОВЕРКИ ----->>>
-
-		// 1. Проверяем, не существует ли уже правило для данного типа заявки.
-		exists, err := s.repo.ExistsByOrderTypeID(ctx, tx, *d.OrderTypeID)
-		if err != nil {
-			s.logger.Error("Ошибка при проверке существования правила", zap.Error(err))
-			return err // Возвращаем внутреннюю ошибку, если проверка не удалась
-		}
-		if exists {
-			// 2. Если правило уже есть, возвращаем красивую и понятную ошибку клиенту.
-			return apperrors.NewHttpError(
-				http.StatusConflict, // 409 Conflict - подходящий статус
-				"Для данного типа заявки правило маршрутизации уже существует. Вы можете его отредактировать, но не создавать новое.",
-				nil, nil,
-			)
-		}
-
-		// <<<----- КОНЕЦ НОВОГО БЛОКА ПРОВЕРКИ ----->>>
-
-		// 3. Если всё в порядке, создаем новое правило.
 		id, errTx := s.repo.Create(ctx, tx, rule)
 		if errTx != nil {
 			return errTx
@@ -125,13 +138,6 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 		return nil
 	})
 	if err != nil {
-		// Ошибка уже может быть нашего типа HttpError, просто возвращаем ее.
-		var httpErr *apperrors.HttpError
-		if errors.As(err, &httpErr) {
-			return nil, httpErr
-		}
-		// Иначе, это внутренняя ошибка.
-		s.logger.Error("Не удалось создать правило маршрутизации", zap.Error(err))
 		return nil, err
 	}
 
@@ -139,15 +145,16 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 	if err != nil {
 		return nil, err
 	}
-	return toRuleResponseDTO(created), nil
+
+	return s.toResponseDTO(ctx, created)
 }
 
-func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.UpdateOrderRoutingRuleDTO) (*dto.OrderRoutingRuleResponseDTO, error) {
+func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.UpdateOrderRoutingRuleDTO, rawBody []byte) (*dto.OrderRoutingRuleResponseDTO, error) {
 	authContext, err := buildAuthzContext(ctx, s.userRepo)
 	if err != nil {
 		return nil, err
 	}
-	if !authz.CanDo("rule:update", *authContext) {
+	if !authz.CanDo(authz.OrderRuleUpdate, *authContext) {
 		return nil, apperrors.ErrForbidden
 	}
 
@@ -156,23 +163,38 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 		return nil, err
 	}
 
-	if d.RuleName != nil {
-		existing.RuleName = *d.RuleName
+	// Сначала применяем все простые поля через патчер
+	if err := utils.ApplyPatchFinal(existing, d, rawBody); err != nil {
+		return nil, err
 	}
-	if d.OrderTypeID != nil {
-		existing.OrderTypeID = d.OrderTypeID
-	}
-	if d.DepartmentID != nil {
-		existing.DepartmentID = d.DepartmentID
-	}
-	if d.OtdelID != nil {
-		existing.OtdelID = d.OtdelID
-	}
-	if d.PositionID != nil {
-		existing.PositionID = d.PositionID
-	}
-	if d.StatusID != nil {
-		existing.StatusID = *d.StatusID
+
+	// Отдельно обрабатываем сложную логику для position_type
+	if utils.WasFieldSent("position_type", rawBody) {
+		if d.PositionType.Valid && d.PositionType.String != "" {
+			var depID, otdelID *uint64
+			if existing.DepartmentID != nil {
+				v := uint64(*existing.DepartmentID)
+				depID = &v
+			}
+			if existing.OtdelID != nil {
+				v := uint64(*existing.OtdelID)
+				otdelID = &v
+			}
+
+			positions, err := s.positionRepo.FindByTypeAndOrg(ctx, nil, d.PositionType.String, depID, otdelID)
+			if err != nil {
+				return nil, err
+			}
+			if len(positions) == 0 {
+				return nil, apperrors.NewHttpError(http.StatusBadRequest, "Должность с указанным типом не найдена в рамках оргструктуры правила", nil, nil)
+			}
+
+			positionID := int(positions[0].ID)
+			existing.PositionID = &positionID
+		} else {
+			// Если пришел {"position_type": null}
+			existing.PositionID = nil
+		}
 	}
 
 	now := time.Now()
@@ -185,25 +207,12 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 		return nil, err
 	}
 
-	return toRuleResponseDTO(existing), nil
-}
-
-func (s *OrderRoutingRuleService) Delete(ctx context.Context, id int) error {
-	authContext, err := buildAuthzContext(ctx, s.userRepo)
+	updated, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		return err
-	}
-	if !authz.CanDo(authz.OrderRuleDelete, *authContext) {
-		return apperrors.ErrForbidden
+		return nil, err
 	}
 
-	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		return s.repo.Delete(ctx, tx, id)
-	})
-	if err != nil {
-		s.logger.Error("Ошибка удаления правила маршрутизации", zap.Int("id", id), zap.Error(err))
-	}
-	return err
+	return s.toResponseDTO(ctx, updated)
 }
 
 func (s *OrderRoutingRuleService) GetByID(ctx context.Context, id int) (*dto.OrderRoutingRuleResponseDTO, error) {
@@ -220,7 +229,7 @@ func (s *OrderRoutingRuleService) GetByID(ctx context.Context, id int) (*dto.Ord
 		return nil, err
 	}
 
-	return toRuleResponseDTO(entity), nil
+	return s.toResponseDTO(ctx, entity)
 }
 
 func (s *OrderRoutingRuleService) GetAll(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.OrderRoutingRuleResponseDTO], error) {
@@ -237,63 +246,13 @@ func (s *OrderRoutingRuleService) GetAll(ctx context.Context, limit, offset uint
 		return nil, err
 	}
 
-	if total == 0 {
-		return &dto.PaginatedResponse[dto.OrderRoutingRuleResponseDTO]{
-			List:       []dto.OrderRoutingRuleResponseDTO{},
-			Pagination: dto.PaginationObject{TotalCount: total},
-		}, nil
-	}
-
 	dtos := make([]dto.OrderRoutingRuleResponseDTO, 0, len(entities))
-
-	// Собираем все order_type_id (типа int) в map для уникальности
-	orderTypeIDsMap := make(map[int]struct{})
 	for _, e := range entities {
-		if e.OrderTypeID != nil {
-			orderTypeIDsMap[*e.OrderTypeID] = struct{}{}
+		responseDTO, err := s.toResponseDTO(ctx, e)
+		if err != nil {
+			return nil, err
 		}
-	}
-
-	// `map[order_type_id] -> "CODE"` для быстрого доступа
-	typeCodesMap := make(map[uint64]string)
-	if len(orderTypeIDsMap) > 0 {
-		// Конвертируем map ключей в срез uint64 для запроса в БД
-		idsToFetch := make([]uint64, 0, len(orderTypeIDsMap))
-		for id := range orderTypeIDsMap {
-			idsToFetch = append(idsToFetch, uint64(id))
-		}
-
-		// Вызываем новый метод `FindCodesByIDs`
-		codesMap, _ := s.orderTypeRepo.FindCodesByIDs(ctx, idsToFetch)
-		if codesMap != nil {
-			typeCodesMap = codesMap
-		}
-	}
-
-	// Итерируем по сущностям и обогащаем DTO
-	for _, e := range entities {
-		dto := toRuleResponseDTO(e)
-
-		var orderTypeCode string
-		if e.OrderTypeID != nil {
-			// Ищем код в нашей карте, приводя тип `*int` к `uint64`
-			orderTypeCode = typeCodesMap[uint64(*e.OrderTypeID)]
-		}
-
-		// Ищем код в реестре `ValidationRegistry`, который находится в том же пакете
-		validationRules, ok := ValidationRegistry[orderTypeCode]
-		if ok {
-			requiredFields := make([]string, 0, len(validationRules))
-			for _, vr := range validationRules {
-				requiredFields = append(requiredFields, vr.FieldName)
-			}
-			dto.RequiredFields = requiredFields
-		} else {
-			// Всегда возвращаем пустой срез, а не null
-			dto.RequiredFields = []string{}
-		}
-
-		dtos = append(dtos, *dto)
+		dtos = append(dtos, *responseDTO)
 	}
 
 	var currentPage uint64 = 1
@@ -305,4 +264,20 @@ func (s *OrderRoutingRuleService) GetAll(ctx context.Context, limit, offset uint
 		List:       dtos,
 		Pagination: dto.PaginationObject{TotalCount: total, Page: currentPage, Limit: limit},
 	}, nil
+}
+
+func (s *OrderRoutingRuleService) Delete(ctx context.Context, id int) error {
+	authContext, err := buildAuthzContext(ctx, s.userRepo)
+	if err != nil {
+		return err
+	}
+	if !authz.CanDo(authz.OrderRuleDelete, *authContext) {
+		return apperrors.ErrForbidden
+	}
+
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		return s.repo.Delete(ctx, tx, id)
+	})
+
+	return err
 }

@@ -33,3 +33,16 @@ type PermissionSource struct {
 	PermissionID uint64
 	Source       string
 }
+type UIPermissionDetailDTO struct {
+	ID          uint64 `json:"id" db:"id"`
+	Name        string `json:"name" db:"name"`
+	Description string `json:"description" db:"description"`
+	Source      string `json:"source,omitempty" db:"source"`
+	Status      string `json:"status,omitempty" db:"status"`
+}
+
+// Это финальная структура, которую вернет наш новый эндпоинт
+type UIPermissionsResponseDTO struct {
+	HasAccess []UIPermissionDetailDTO `json:"has_access"`
+	NoAccess  []UIPermissionDetailDTO `json:"no_access"`
+}

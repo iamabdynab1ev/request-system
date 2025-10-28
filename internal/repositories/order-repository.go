@@ -1,39 +1,35 @@
-// Файл: internal/repositories/order_repository.go
 package repositories
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 
-	"request-system/internal/entities"
-	apperrors "request-system/pkg/errors"
-	"request-system/pkg/types"
-	"request-system/pkg/utils"
-
-	"github.com/Masterminds/squirrel"
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"request-system/internal/entities"
+	apperrors "request-system/pkg/errors"
+	"request-system/pkg/types"
 )
 
 const (
-	orderTable           = "orders"
-	orderFieldsWithAlias = "o.id, o.name, o.address, o.department_id, o.otdel_id, o.branch_id, o.office_id, o.equipment_id, o.equipment_type_id, o.order_type_id, o.status_id, o.priority_id, o.user_id, o.executor_id, o.duration, o.created_at, o.updated_at"
-	orderInsertFields    = "name, address, department_id, otdel_id, branch_id, office_id, equipment_id, equipment_type_id, order_type_id, status_id, priority_id, user_id, executor_id, duration"
+	orderTable        = "orders"
+	orderFields       = "id, name, department_id, otdel_id, priority_id, status_id, branch_id, office_id, equipment_id, user_id, executor_id, duration, address, created_at, updated_at, deleted_at, equipment_type_id, order_type_id, completed_at, resolution_time_seconds, first_response_time_seconds, is_first_contact_resolution"
+	orderInsertFields = "name, address, department_id, otdel_id, branch_id, office_id, equipment_id, equipment_type_id, order_type_id, status_id, priority_id, user_id, executor_id, duration"
 )
 
 type OrderRepositoryInterface interface {
 	BeginTx(ctx context.Context) (pgx.Tx, error)
 	FindByID(ctx context.Context, orderID uint64) (*entities.Order, error)
-	GetOrders(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.Order, uint64, error)
 	Create(ctx context.Context, tx pgx.Tx, order *entities.Order) (uint64, error)
+	GetOrders(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.Order, uint64, error)
 	Update(ctx context.Context, tx pgx.Tx, order *entities.Order) error
 	DeleteOrder(ctx context.Context, orderID uint64) error
-	CountOrdersByOtdelID(ctx context.Context, id uint64) (int, error)
+	CountOrdersByOtdelID(ctx context.Context, id uint64) (uint64, error)
 }
 
 type OrderRepository struct {
@@ -47,19 +43,12 @@ func NewOrderRepository(storage *pgxpool.Pool, logger *zap.Logger) OrderReposito
 
 func (r *OrderRepository) scanOrder(row pgx.Row) (*entities.Order, error) {
 	var order entities.Order
-	var (
-		otdelID, branchID, officeID         sql.NullInt64
-		equipmentID, equipmentTypeID        sql.NullInt64
-		executorID, priorityID, orderTypeID sql.NullInt64
-		address                             sql.NullString
-		duration                            sql.NullTime
-	)
-
 	err := row.Scan(
-		&order.ID, &order.Name, &address, &order.DepartmentID, &otdelID, &branchID, &officeID,
-		&equipmentID, &equipmentTypeID, &orderTypeID, &order.StatusID, &priorityID,
-		&order.CreatorID, &executorID, &duration,
-		&order.CreatedAt, &order.UpdatedAt,
+		&order.ID, &order.Name, &order.DepartmentID, &order.OtdelID, &order.PriorityID, &order.StatusID,
+		&order.BranchID, &order.OfficeID, &order.EquipmentID, &order.CreatorID, &order.ExecutorID,
+		&order.Duration, &order.Address, &order.CreatedAt, &order.UpdatedAt, &order.DeletedAt,
+		&order.EquipmentTypeID, &order.OrderTypeID, &order.CompletedAt, &order.ResolutionTimeSeconds,
+		&order.FirstResponseTimeSeconds, &order.IsFirstContactResolution,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -67,20 +56,6 @@ func (r *OrderRepository) scanOrder(row pgx.Row) (*entities.Order, error) {
 		}
 		return nil, err
 	}
-	order.Address = utils.NullStringToStrPtr(address)
-	order.OtdelID = utils.NullInt64ToUint64Ptr(otdelID)
-	order.BranchID = utils.NullInt64ToUint64Ptr(branchID)
-	order.OfficeID = utils.NullInt64ToUint64Ptr(officeID)
-	order.EquipmentID = utils.NullInt64ToUint64Ptr(equipmentID)
-	order.EquipmentTypeID = utils.NullInt64ToUint64Ptr(equipmentTypeID)
-	order.ExecutorID = utils.NullInt64ToUint64Ptr(executorID)
-	order.PriorityID = utils.NullInt64ToUint64Ptr(priorityID)
-
-	order.OrderTypeID = utils.NullInt64ToUint64(orderTypeID)
-	if duration.Valid {
-		order.Duration = &duration.Time
-	}
-
 	return &order, nil
 }
 
@@ -89,7 +64,7 @@ func (r *OrderRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 }
 
 func (r *OrderRepository) FindByID(ctx context.Context, orderID uint64) (*entities.Order, error) {
-	query := fmt.Sprintf("SELECT %s FROM %s o WHERE o.id = $1 AND o.deleted_at IS NULL", orderFieldsWithAlias, orderTable)
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1 AND deleted_at IS NULL", orderFields, orderTable)
 	row := r.storage.QueryRow(ctx, query, orderID)
 	return r.scanOrder(row)
 }
@@ -99,6 +74,12 @@ func (r *OrderRepository) Create(ctx context.Context, tx pgx.Tx, order *entities
 		orderTable, orderInsertFields)
 
 	var orderID uint64
+	r.logger.Info("РЕПОЗИТОРИЙ: Данные для записи в `orders`",
+		zap.Uint64("creator_id", order.CreatorID),
+		zap.Any("executor_id", order.ExecutorID),
+		zap.String("name", order.Name),
+	)
+
 	err := tx.QueryRow(ctx, query,
 		order.Name,
 		order.Address,
@@ -115,15 +96,19 @@ func (r *OrderRepository) Create(ctx context.Context, tx pgx.Tx, order *entities
 		order.ExecutorID,
 		order.Duration,
 	).Scan(&orderID)
-
-	return orderID, err
+	if err != nil {
+		r.logger.Error("ОШИБКА INSERT В orders", zap.Error(err))
+		return 0, err
+	}
+	r.logger.Info("Заявка создана в БД", zap.Uint64("orderID", orderID))
+	return orderID, nil
 }
 
 func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities.Order) error {
-	builder := squirrel.Update(orderTable).
-		PlaceholderFormat(squirrel.Dollar).
-		Set("updated_at", squirrel.Expr("NOW()")).
-		Where(squirrel.Eq{"id": order.ID, "deleted_at": nil})
+	builder := sq.Update(orderTable).
+		PlaceholderFormat(sq.Dollar).
+		Set("updated_at", sq.Expr("NOW()")).
+		Where(sq.Eq{"id": order.ID, "deleted_at": nil})
 
 	builder = builder.Set("name", order.Name)
 	builder = builder.Set("address", order.Address)
@@ -141,17 +126,19 @@ func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities
 
 	sql, args, err := builder.ToSql()
 	if err != nil {
+		r.logger.Error("Ошибка сборки UPDATE запроса для заявки", zap.Error(err))
 		return fmt.Errorf("ошибка сборки UPDATE запроса для заявки: %w", err)
 	}
-
 	result, err := tx.Exec(ctx, sql, args...)
 	if err != nil {
+		r.logger.Error("Ошибка выполнения UPDATE запроса", zap.Error(err), zap.String("sql", sql), zap.Any("args", args))
 		return err
 	}
 	if result.RowsAffected() == 0 {
+		r.logger.Warn("Заявка не найдена для обновления", zap.Uint64("orderID", order.ID))
 		return apperrors.ErrNotFound
 	}
-
+	r.logger.Info("Заявка обновлена в БД", zap.Uint64("orderID", order.ID))
 	return nil
 }
 
@@ -159,89 +146,57 @@ func (r *OrderRepository) DeleteOrder(ctx context.Context, orderID uint64) error
 	query := `UPDATE orders SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
 	result, err := r.storage.Exec(ctx, query, orderID)
 	if err != nil {
+		r.logger.Error("Ошибка при удалении заявки", zap.Uint64("orderID", orderID), zap.Error(err))
 		return err
 	}
 	if result.RowsAffected() == 0 {
+		r.logger.Warn("Заявка не найдена для удаления", zap.Uint64("orderID", orderID))
 		return apperrors.ErrNotFound
 	}
+	r.logger.Info("Заявка удалена", zap.Uint64("orderID", orderID))
 	return nil
 }
 
-func (r *OrderRepository) CountOrdersByOtdelID(ctx context.Context, id uint64) (int, error) {
-	var count int
+func (r *OrderRepository) CountOrdersByOtdelID(ctx context.Context, id uint64) (uint64, error) {
+	var count uint64
 	query := "SELECT COUNT(id) FROM orders WHERE otdel_id = $1 AND deleted_at IS NULL"
 	err := r.storage.QueryRow(ctx, query, id).Scan(&count)
 	if err != nil {
-		r.logger.Error("ошибка подсчета заявок в отделе", zap.Uint64("otdelID", id), zap.Error(err))
+		r.logger.Error("Ошибка подсчета заявок по отделу", zap.Uint64("otdelID", id), zap.Error(err))
 		return 0, err
 	}
+	r.logger.Debug("Подсчет заявок по отделу", zap.Uint64("otdelID", id), zap.Uint64("count", count))
 	return count, nil
 }
 
-// ЗАМЕНИ СТАРЫЙ МЕТОД ЭТИМ УЛУЧШЕННЫМ ВАРИАНТОМ
 func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.Order, uint64, error) {
-	baseQuery := sq.Select(
-		"o.id, o.name, o.address, o.department_id, o.otdel_id, o.branch_id, o.office_id, o.equipment_id, " +
-			"o.equipment_type_id, o.order_type_id, o.status_id, o.priority_id, o.user_id, o.executor_id, " +
-			"o.duration, o.created_at, o.updated_at, " +
-			"s.name AS status_name, p.name AS priority_name, " +
-			"creator.fio AS creator_fio, executor.fio AS executor_fio",
-	).
-		From("orders o").
-		LeftJoin("users creator ON o.user_id = creator.id").
-		LeftJoin("users executor ON o.executor_id = executor.id").
-		LeftJoin("statuses s ON o.status_id = s.id").
-		LeftJoin("priorities p ON o.priority_id = p.id").
-		Where(sq.Eq{"o.deleted_at": nil}).
-		PlaceholderFormat(sq.Dollar)
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
+	selectBuilder := psql.Select(orderFields).From(orderTable + " AS o").Where(sq.Eq{"o.deleted_at": nil})
+	countBuilder := psql.Select("COUNT(o.id)").From(orderTable + " AS o").Where(sq.Eq{"o.deleted_at": nil})
+
+	// Применяем securityFilter с правильными placeholders
 	if securityFilter != "" {
-		baseQuery = baseQuery.Where(securityFilter, securityArgs...)
-	}
-
-	// --- Фильтры ---
-	for key, value := range filter.Filter {
-		switch key {
-		case "department_id", "status_id", "priority_id", "user_id", "executor_id", "branch_id", "office_id":
-			baseQuery = baseQuery.Where(sq.Eq{"o." + key: value})
+		// Заменяем ? на $1, $2 и т.д.
+		placeholderCount := len(securityArgs)
+		newSecurityFilter := securityFilter
+		for i := 0; i < placeholderCount; i++ {
+			newSecurityFilter = strings.Replace(newSecurityFilter, "?", fmt.Sprintf("$%d", i+1), 1)
 		}
+		selectBuilder = selectBuilder.Where(newSecurityFilter, securityArgs...)
+		countBuilder = countBuilder.Where(newSecurityFilter, securityArgs...)
 	}
 
-	// --- Поиск ---
-	if filter.Search != "" {
-		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
-		baseQuery = baseQuery.Where(sq.Or{
-			sq.ILike{"o.name": searchPattern},
-			sq.ILike{"creator.fio": searchPattern},
-			sq.ILike{"executor.fio": searchPattern},
-		})
-	}
-
-	// --- Подсчёт totalCount ---
-	countBuilder := sq.Select("COUNT(o.id)").From("orders o").
-		LeftJoin("users creator ON o.user_id = creator.id").
-		LeftJoin("users executor ON o.executor_id = executor.id").
-		LeftJoin("statuses s ON o.status_id = s.id").
-		LeftJoin("priorities p ON o.priority_id = p.id").
-		Where(sq.Eq{"o.deleted_at": nil}).
-		PlaceholderFormat(sq.Dollar)
-
-	if securityFilter != "" {
-		countBuilder = countBuilder.Where(securityFilter, securityArgs...)
-	}
 	for key, value := range filter.Filter {
-		switch key {
-		case "department_id", "status_id", "priority_id", "user_id", "executor_id", "branch_id", "office_id":
-			countBuilder = countBuilder.Where(sq.Eq{"o." + key: value})
-		}
+		clause := sq.Eq{"o." + key: value}
+		selectBuilder = selectBuilder.Where(clause)
+		countBuilder = countBuilder.Where(clause)
 	}
+
 	if filter.Search != "" {
-		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
-		countBuilder = countBuilder.Where(sq.Or{
-			sq.ILike{"o.name": searchPattern},
-			sq.ILike{"creator.fio": searchPattern},
-			sq.ILike{"executor.fio": searchPattern},
-		})
+		clause := sq.ILike{"o.name": "%" + filter.Search + "%"}
+		selectBuilder = selectBuilder.Where(clause)
+		countBuilder = countBuilder.Where(clause)
 	}
 
 	countQuery, countArgs, err := countBuilder.ToSql()
@@ -252,113 +207,47 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 
 	var totalCount uint64
 	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount); err != nil {
-		r.logger.Error("ошибка подсчета заявок", zap.Error(err), zap.String("query", countQuery), zap.Any("args", countArgs))
+		r.logger.Error("Ошибка подсчета заявок", zap.Error(err), zap.String("query", countQuery), zap.Any("args", countArgs))
 		return nil, 0, err
 	}
 	if totalCount == 0 {
+		r.logger.Info("Заявки не найдены", zap.Any("filter", filter))
 		return []entities.Order{}, 0, nil
 	}
 
-	// --- Сортировка ---
-	orderByClause := "o.id DESC"
-	if len(filter.Sort) > 0 {
-		var sortParts []string
-		for field, direction := range filter.Sort {
-			dir := "ASC"
-			if strings.ToUpper(direction) == "DESC" {
-				dir = "DESC"
-			}
-			switch field {
-			case "status_name":
-				sortParts = append(sortParts, fmt.Sprintf("s.name %s", dir))
-			case "priority_name":
-				sortParts = append(sortParts, fmt.Sprintf("p.name %s", dir))
-			case "created_at", "updated_at", "duration", "id":
-				sortParts = append(sortParts, fmt.Sprintf("o.%s %s", field, dir))
-			}
-		}
-		if len(sortParts) > 0 {
-			orderByClause = strings.Join(sortParts, ", ")
-		}
-	}
-	baseQuery = baseQuery.OrderBy(orderByClause)
-
-	// --- Пагинация ---
+	selectBuilder = selectBuilder.OrderBy("o.created_at DESC")
 	if filter.WithPagination {
-		baseQuery = baseQuery.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
+		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
 	}
 
-	mainQuery, mainArgs, err := baseQuery.ToSql()
+	mainQuery, mainArgs, err := selectBuilder.ToSql()
 	if err != nil {
 		r.logger.Error("GetOrders: ошибка сборки основного запроса", zap.Error(err))
 		return nil, 0, err
 	}
 
+	r.logger.Debug("Выполнение запроса GetOrders", zap.String("query", mainQuery), zap.Any("args", mainArgs))
 	rows, err := r.storage.Query(ctx, mainQuery, mainArgs...)
 	if err != nil {
-		r.logger.Error("ошибка получения списка заявок", zap.Error(err), zap.String("query", mainQuery), zap.Any("args", mainArgs))
+		r.logger.Error("Ошибка получения списка заявок", zap.Error(err), zap.String("query", mainQuery), zap.Any("args", mainArgs))
 		return nil, 0, err
 	}
-	fields := rows.FieldDescriptions()
-	cols := make([]string, len(fields))
-	for i, fd := range fields {
-		cols[i] = string(fd.Name)
-	}
-
-	r.logger.Info("Колонки из SELECT:", zap.Strings("cols", cols))
-	r.logger.Info("Count колонок:", zap.Int("count", len(cols)))
 	defer rows.Close()
 
 	orders := make([]entities.Order, 0, filter.Limit)
 	for rows.Next() {
-		order, err := r.scanOrderWithRelations(rows)
+		order, err := r.scanOrder(rows)
 		if err != nil {
+			r.logger.Error("Ошибка сканирования строки", zap.Error(err))
 			return nil, 0, err
 		}
 		orders = append(orders, *order)
 	}
-	return orders, totalCount, rows.Err()
-}
-
-func (r *OrderRepository) scanOrderWithRelations(row pgx.Row) (*entities.Order, error) {
-	var order entities.Order
-	var (
-		otdelID, branchID, officeID         sql.NullInt64
-		equipmentID, equipmentTypeID        sql.NullInt64
-		executorID, priorityID, orderTypeID sql.NullInt64
-		address                             sql.NullString
-		duration                            sql.NullTime
-	)
-
-	err := row.Scan(
-		// Старые 17 полей
-		&order.ID, &order.Name, &address, &order.DepartmentID, &otdelID, &branchID, &officeID,
-		&equipmentID, &equipmentTypeID, &orderTypeID, &order.StatusID, &priorityID,
-		&order.CreatorID, &executorID, &duration,
-		&order.CreatedAt, &order.UpdatedAt,
-		// Новые 4 поля из JOIN'ов
-		&order.StatusName, &order.PriorityName, &order.CreatorFIO, &order.ExecutorFIO,
-	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperrors.ErrNotFound
-		}
-		return nil, err
+	if err := rows.Err(); err != nil {
+		r.logger.Error("Ошибка итерации строк", zap.Error(err))
+		return nil, 0, err
 	}
 
-	// Код конвертации NULL-типов
-	order.Address = utils.NullStringToStrPtr(address)
-	order.OtdelID = utils.NullInt64ToUint64Ptr(otdelID)
-	order.BranchID = utils.NullInt64ToUint64Ptr(branchID)
-	order.OfficeID = utils.NullInt64ToUint64Ptr(officeID)
-	order.EquipmentID = utils.NullInt64ToUint64Ptr(equipmentID)
-	order.EquipmentTypeID = utils.NullInt64ToUint64Ptr(equipmentTypeID)
-	order.ExecutorID = utils.NullInt64ToUint64Ptr(executorID)
-	order.PriorityID = utils.NullInt64ToUint64Ptr(priorityID)
-	order.OrderTypeID = utils.NullInt64ToUint64(orderTypeID)
-	if duration.Valid {
-		order.Duration = &duration.Time
-	}
-
-	return &order, nil
+	r.logger.Info("Заявки получены", zap.Int("count", len(orders)), zap.Uint64("total_count", totalCount))
+	return orders, totalCount, nil
 }

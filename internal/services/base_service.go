@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 
@@ -29,7 +30,7 @@ func (s *BaseService) CheckPermission(ctx context.Context, permission string) (u
 		s.logger.Error("Пользователь не авторизован", zap.Error(err))
 		return 0, apperrors.ErrUnauthorized
 	}
-	claims, err := utils.GetClaimsFromContext(ctx)
+	claims, err := utils.GetClaimsFromContext[dto.UserClaims](ctx)
 	if err != nil {
 		s.logger.Error("Ошибка получения claims", zap.Error(err))
 		return 0, apperrors.ErrUnauthorized

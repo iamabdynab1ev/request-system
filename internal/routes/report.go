@@ -18,8 +18,5 @@ func runReportRouter(
 ) {
 	reportController := controllers.NewReportController(reportService, logger)
 
-	reports := secureGroup.Group("/reports")
-	{
-		reports.GET("/history", reportController.GetHistoryReport, authMW.AuthorizeAny(authz.ReportView))
-	}
+	secureGroup.GET("/report", reportController.GetReport, authMW.AuthorizeAny(authz.ReportView))
 }

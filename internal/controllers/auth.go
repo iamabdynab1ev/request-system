@@ -1,13 +1,16 @@
 package controllers
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
+	"request-system/config"
 	"request-system/internal/dto"
 	"request-system/internal/services"
 	"request-system/pkg/contextkeys"
 	apperrors "request-system/pkg/errors"
+	"request-system/pkg/filestorage"
 	"request-system/pkg/service"
 	"request-system/pkg/utils"
 
@@ -19,6 +22,7 @@ type AuthController struct {
 	authService           services.AuthServiceInterface
 	authPermissionService services.AuthPermissionServiceInterface
 	jwtSvc                service.JWTService
+	fileStorage           filestorage.FileStorageInterface
 	logger                *zap.Logger
 }
 
@@ -26,12 +30,14 @@ func NewAuthController(
 	authService services.AuthServiceInterface,
 	authPermissionService services.AuthPermissionServiceInterface,
 	jwtSvc service.JWTService,
+	fileStorage filestorage.FileStorageInterface,
 	logger *zap.Logger,
 ) *AuthController {
 	return &AuthController{
 		authService:           authService,
 		authPermissionService: authPermissionService,
 		jwtSvc:                jwtSvc,
+		fileStorage:           fileStorage,
 		logger:                logger,
 	}
 }
@@ -131,26 +137,14 @@ func (ctrl *AuthController) Me(c echo.Context) error {
 		ctrl.logger.Error("Не удалось получить userID из контекста в защищенном маршруте")
 		return utils.ErrorResponse(c, apperrors.ErrUnauthorized, ctrl.logger)
 	}
-	user, err := ctrl.authService.GetUserByID(c.Request().Context(), userID)
+
+	userProfile, err := ctrl.authService.GetUserByID(c.Request().Context(), userID)
 	if err != nil {
-		ctrl.logger.Error("Ошибка получения пользователя по ID", zap.Uint64("userID", userID), zap.Error(err))
+		ctrl.logger.Error("Ошибка получения профиля пользователя по ID", zap.Uint64("userID", userID), zap.Error(err))
 		return utils.ErrorResponse(c, err, ctrl.logger)
 	}
 
-	response := dto.UserProfileDTO{
-		ID:           user.ID,
-		Email:        user.Email,
-		Phone:        user.PhoneNumber,
-		FIO:          user.Fio,
-		PhotoURL:     user.PhotoURL,
-		PositionID:   user.PositionID,
-		BranchID:     user.BranchID,
-		DepartmentID: user.DepartmentID,
-		OfficeID:     user.OfficeID,
-		OtdelID:      user.OtdelID,
-	}
-
-	return utils.SuccessResponse(c, response, "Профиль пользователя успешно получен", http.StatusOK)
+	return utils.SuccessResponse(c, userProfile, "Профиль пользователя успешно получен", http.StatusOK)
 }
 
 func (ctrl *AuthController) RequestPasswordReset(c echo.Context) error {
@@ -240,4 +234,61 @@ func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID uint
 	}
 
 	return utils.SuccessResponse(c, response, message, http.StatusOK)
+}
+
+func (ctrl *AuthController) UpdateMe(c echo.Context) error {
+	reqCtx := c.Request().Context()
+
+	var payload dto.UpdateMyProfileDTO
+
+	dataString := c.FormValue("data")
+	if dataString != "" {
+		if err := json.Unmarshal([]byte(dataString), &payload); err != nil {
+			return ctrl.errorResponse(c, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный JSON в поле 'data'", err, nil))
+		}
+	}
+	photoURL, err := ctrl.handlePhotoUpload(c, "profile_photo")
+	if err != nil {
+		return ctrl.errorResponse(c, err)
+	}
+	if photoURL != nil {
+		payload.PhotoURL = photoURL
+	}
+
+	if err := c.Validate(&payload); err != nil {
+		return ctrl.errorResponse(c, err)
+	}
+
+	updatedUser, err := ctrl.authService.UpdateMyProfile(reqCtx, payload)
+	if err != nil {
+		return ctrl.errorResponse(c, err)
+	}
+
+	return utils.SuccessResponse(c, updatedUser, "Профиль успешно обновлен", http.StatusOK)
+}
+
+func (c *AuthController) handlePhotoUpload(ctx echo.Context, uploadContext string) (*string, error) {
+	file, err := ctx.FormFile("photoFile")
+	if err != nil {
+		if err == http.ErrMissingFile {
+			return nil, nil
+		}
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Ошибка при чтении файла", err, nil)
+	}
+	src, err := file.Open()
+	if err != nil {
+		return nil, apperrors.ErrInternalServer
+	}
+	defer src.Close()
+	if err := utils.ValidateFile(file, src, uploadContext); err != nil {
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Файл не прошел валидацию", err, nil)
+	}
+	rules, _ := config.UploadContexts[uploadContext]
+	// Заменяем c.fileStorage на ctrl.fileStorage
+	savedPath, err := c.fileStorage.Save(src, file.Filename, rules.PathPrefix)
+	if err != nil {
+		return nil, apperrors.ErrInternalServer
+	}
+	fileURL := "/uploads/" + savedPath
+	return &fileURL, nil
 }

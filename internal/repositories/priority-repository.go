@@ -37,14 +37,13 @@ const (
 	priorityFields = "id, name, rate, code, created_at, updated_at"
 )
 
-// dbPriority - структура для сканирования из БД, без иконок.
 type dbPriority struct {
 	ID        uint64
 	Name      string
-	Rate      sql.NullInt32
-	Code      sql.NullString
+	Rate      sql.Null[int32]
+	Code      sql.Null[string]
 	CreatedAt time.Time
-	UpdatedAt sql.NullTime
+	UpdatedAt sql.Null[time.Time]
 }
 
 // toDTO - конвертер без полей иконок.
@@ -52,10 +51,10 @@ func (db *dbPriority) toDTO() dto.PriorityDTO {
 	return dto.PriorityDTO{
 		ID:        db.ID,
 		Name:      db.Name,
-		Rate:      utils.NullInt32ToInt(db.Rate),
-		Code:      utils.NullStringToString(db.Code),
+		Rate:      int(utils.NullToValue(db.Rate)),
+		Code:      utils.NullToValue(db.Code),
 		CreatedAt: db.CreatedAt.Local().Format("2006-01-02 15:04:05"),
-		UpdatedAt: utils.NullTimeToEmptyString(db.UpdatedAt),
+		UpdatedAt: utils.FormatNullTime(db.UpdatedAt),
 	}
 }
 

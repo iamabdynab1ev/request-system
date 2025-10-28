@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	"request-system/internal/repositories"
+
 	"request-system/pkg/config"
 	"request-system/pkg/constants"
 	apperrors "request-system/pkg/errors"
@@ -26,47 +28,57 @@ import (
 
 var emailRegex = regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`)
 
-// <<<--- ИНТЕРФЕЙС ОСТАЕТСЯ ПРЕЖНИМ ---
 type AuthServiceInterface interface {
 	Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error)
-	GetUserByID(ctx context.Context, userID uint64) (*entities.User, error)
+	GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error)
 	RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error
 	VerifyResetCode(ctx context.Context, payload dto.VerifyCodeDTO) (*dto.VerifyCodeResponseDTO, error)
 	ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error
+	UpdateMyProfile(ctx context.Context, payload dto.UpdateMyProfileDTO) (*dto.UserDTO, error)
 }
 
-// <<<--- СТРУКТУРА ТЕПЕРЬ ВКЛЮЧАЕТ СЕРВИС УВЕДОМЛЕНИЙ ---
 type AuthService struct {
-	userRepo  repositories.UserRepositoryInterface
-	cacheRepo repositories.CacheRepositoryInterface
-	logger    *zap.Logger
-	cfg       *config.AuthConfig
-	notifySvc NotificationServiceInterface // <--- ДОБАВЛЕНО
+	userRepo          repositories.UserRepositoryInterface
+	cacheRepo         repositories.CacheRepositoryInterface
+	logger            *zap.Logger
+	cfg               *config.AuthConfig
+	notifySvc         NotificationServiceInterface
+	positionService   PositionServiceInterface
+	branchService     BranchServiceInterface
+	departmentService DepartmentServiceInterface
+	otdelService      OtdelServiceInterface
+	officeService     OfficeServiceInterface
 }
 
-// <<<--- КОНСТРУКТОР ТЕПЕРЬ ПРИНИМАЕТ СЕРВИС УВЕДОМЛЕНИЙ ---
 func NewAuthService(
 	userRepo repositories.UserRepositoryInterface,
 	cacheRepo repositories.CacheRepositoryInterface,
 	logger *zap.Logger,
 	cfg *config.AuthConfig,
-	notifySvc NotificationServiceInterface, // <--- ДОБАВЛЕНО
+	notifySvc NotificationServiceInterface,
+	positionService PositionServiceInterface,
+	branchService BranchServiceInterface,
+	departmentService DepartmentServiceInterface,
+	otdelService OtdelServiceInterface,
+	officeService OfficeServiceInterface,
 ) AuthServiceInterface {
 	return &AuthService{
-		userRepo:  userRepo,
-		cacheRepo: cacheRepo,
-		logger:    logger,
-		cfg:       cfg,
-		notifySvc: notifySvc, // <--- ДОБАВЛЕНО
+		userRepo:          userRepo,
+		cacheRepo:         cacheRepo,
+		logger:            logger,
+		cfg:               cfg,
+		notifySvc:         notifySvc,
+		positionService:   positionService,
+		branchService:     branchService,
+		departmentService: departmentService,
+		otdelService:      otdelService,
+		officeService:     officeService,
 	}
 }
 
-// <<<--- ЭТО ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ ФУНКЦИЯ ---
 func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error {
 	loginInput := strings.ToLower(payload.Login)
 	logger := s.logger.With(zap.String("login_input", loginInput))
-
-	// Шаг 1: СРАЗУ ставим защиту от спама на основе оригинального ввода
 	spamProtectionKey := fmt.Sprintf(constants.CacheKeySpamProtect, loginInput)
 	if _, err := s.cacheRepo.Get(ctx, spamProtectionKey); err == nil {
 		logger.Warn("Слишком частые запросы на сброс пароля")
@@ -74,12 +86,10 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.Rese
 	}
 	s.cacheRepo.Set(ctx, spamProtectionKey, "active", time.Minute)
 
-	// <<<--- НАЧАЛО ГЛАВНЫХ ИЗМЕНЕНИЙ ---
 	var user *entities.User
 	var err error
 
 	isEmail := emailRegex.MatchString(loginInput)
-	// Пытаемся нормализовать ввод как телефонный номер
 	normalizedPhone := utils.NormalizeTajikPhoneNumber(loginInput)
 
 	if isEmail {
@@ -124,33 +134,23 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.Rese
 	return nil
 }
 
-// --- ОСТАЛЬНЫЕ ФУНКЦИИ (Login, VerifyResetCode, ResetPassword и т.д.) ОСТАЮТСЯ БЕЗ ИЗМЕНЕНИЙ ---
-// Здесь я их привожу, чтобы вы могли просто заменить весь файл целиком.
-
 func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error) {
 	loginInput := strings.ToLower(payload.Login)
 
-	// <<<--- НАЧАЛО НОВОЙ ЛОГИКИ ПОИСКА ---
 	var user *entities.User
 	var err error
 
-	// Проверяем, это email, или что-то, что может быть телефоном.
 	if emailRegex.MatchString(loginInput) {
-		// Если это email, ищем как и раньше.
 		user, err = s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
 	} else {
-		// А если это не email, ПРИНУДИТЕЛЬНО нормализуем ввод как телефонный номер.
+
 		normalizedPhone := utils.NormalizeTajikPhoneNumber(loginInput)
 		if normalizedPhone != "" {
-			// Если нормализация удалась, ищем пользователя в базе по ЧИСТОМУ номеру.
 			user, err = s.userRepo.FindUserByPhone(ctx, normalizedPhone)
 		} else {
-			// Если это и не email, и не распознаваемый телефон, тогда это просто логин.
-			// Пытаемся найти по нему как есть (для обратной совместимости).
 			user, err = s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
 		}
 	}
-	// <<<--- КОНЕЦ НОВОЙ ЛОГИКИ ПОИСКА ---
 
 	// Если пользователь не найден ни одним из способов, возвращаем ошибку.
 	if err != nil {
@@ -234,21 +234,79 @@ func (s *AuthService) ResetPassword(ctx context.Context, payload dto.ResetPasswo
 	return nil
 }
 
-func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*entities.User, error) {
+func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error) {
+	logger := s.logger.With(zap.Uint64("userID", userID))
+
+	// Шаг 1: Получаем основную информацию о пользователе
 	user, err := s.userRepo.FindUserByID(ctx, userID)
 	if err != nil {
+		logger.Error("Не удалось найти пользователя по ID", zap.Error(err))
 		return nil, apperrors.ErrUserNotFound
 	}
-	return user, nil
+
+	// Шаг 2: Создаем базовую структуру ответа
+	response := &dto.UserProfileDTO{
+		ID:           user.ID,
+		Email:        user.Email,
+		Phone:        user.PhoneNumber,
+		FIO:          user.Fio,
+		PhotoURL:     user.PhotoURL,
+		DepartmentID: user.DepartmentID, // Сразу присваиваем ID департамента
+	}
+
+	// Шаг 3: Получаем имена для связанных сущностей
+
+	// --- Получаем Департамент ---
+	if user.DepartmentID > 0 {
+		if depDTO, err := s.departmentService.FindDepartment(ctx, user.DepartmentID); err == nil {
+			response.DepartmentName = depDTO.Name
+		} else {
+			logger.Warn("Не удалось получить имя департамента", zap.Error(err))
+		}
+	}
+
+	// --- Получаем Отдел (если есть) ---
+	if user.OtdelID != nil && *user.OtdelID > 0 {
+		if otdelDTO, err := s.otdelService.FindOtdel(ctx, *user.OtdelID); err == nil {
+			response.OtdelName = &otdelDTO.Name // Присваиваем указатель на имя
+		} else {
+			logger.Warn("Не удалось получить имя отдела", zap.Error(err))
+		}
+	}
+
+	// --- Получаем Должность ---
+	if user.PositionID != nil {
+		if posDTO, err := s.positionService.GetByID(ctx, uint64(*user.PositionID)); err == nil {
+			response.PositionName = posDTO.Name
+		} else {
+			logger.Warn("Не удалось получить имя должности", zap.Error(err))
+		}
+	}
+
+	if user.BranchID != nil {
+		if branchDTO, err := s.branchService.FindBranch(ctx, *user.BranchID); err == nil {
+			response.BranchName = branchDTO.Name
+		} else {
+			logger.Warn("Не удалось получить имя филиала", zap.Error(err))
+		}
+	}
+
+	// --- Получаем Офис (если есть) ---
+	if user.OfficeID != nil && *user.OfficeID > 0 {
+		if officeDTO, err := s.officeService.FindOffice(ctx, *user.OfficeID); err == nil {
+			response.OfficeName = &officeDTO.Name // Присваиваем указатель на имя
+		} else {
+			logger.Warn("Не удалось получить имя офиса", zap.Error(err))
+		}
+	}
+
+	return response, nil
 }
 
 func (s *AuthService) VerifyResetCode(ctx context.Context, payload dto.VerifyCodeDTO) (*dto.VerifyCodeResponseDTO, error) {
-	// Для подсчета попыток и поиска ключа в Redis используем ОРИГИНАЛЬНЫЙ ВВОД,
-	// так как именно он использовался при создании ключа на шаге /request.
 	loginInput := payload.Login
 	logger := s.logger.With(zap.String("login_input", loginInput))
 
-	// Проверка на блокировку из-за частых неудачных попыток (остается без изменений)
 	attemptsKey := fmt.Sprintf(constants.CacheKeyResetAttempts, loginInput)
 	if attemptsStr, err := s.cacheRepo.Get(ctx, attemptsKey); err == nil {
 		if attempts, _ := strconv.Atoi(attemptsStr); attempts >= s.cfg.MaxResetAttempts {
@@ -256,7 +314,6 @@ func (s *AuthService) VerifyResetCode(ctx context.Context, payload dto.VerifyCod
 		}
 	}
 
-	// Проверяем код в Redis (остается без изменений)
 	cacheKeyCode := fmt.Sprintf(constants.CacheKeyResetPhoneCode, loginInput)
 	storedCode, err := s.cacheRepo.Get(ctx, cacheKeyCode)
 	if err != nil || storedCode != payload.Code {
@@ -318,4 +375,61 @@ func (s *AuthService) resetLoginAttempts(ctx context.Context, userID uint64) {
 	attemptsKey := fmt.Sprintf(constants.CacheKeyLoginAttempts, userID)
 	lockoutKey := fmt.Sprintf(constants.CacheKeyLockout, userID)
 	s.cacheRepo.Del(ctx, attemptsKey, lockoutKey)
+}
+
+func (s *AuthService) UpdateMyProfile(ctx context.Context, payload dto.UpdateMyProfileDTO) (*dto.UserDTO, error) {
+	userID, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, hasPermission := permissionsMap[authz.ProfileUpdate]; !hasPermission {
+		return nil, apperrors.ErrForbidden
+	}
+
+	// Шаг 2: Выполняем обновление через репозиторий
+	updatePayload := dto.UpdateUserDTO{
+		ID:          userID,
+		Fio:         payload.Fio,
+		PhoneNumber: payload.PhoneNumber,
+		Email:       payload.Email,
+		PhotoURL:    payload.PhotoURL,
+	}
+
+	tx, err := s.userRepo.BeginTx(ctx)
+	if err != nil {
+		s.logger.Error("UpdateMyProfile: не удалось начать транзакцию", zap.Error(err))
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := s.userRepo.UpdateUser(ctx, tx, updatePayload); err != nil {
+		s.logger.Error("UpdateMyProfile: ошибка при вызове userRepo.UpdateUser", zap.Uint64("userID", userID), zap.Error(err))
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		s.logger.Error("UpdateMyProfile: не удалось закоммитить транзакцию", zap.Error(err))
+		return nil, err
+	}
+
+	// Шаг 3: Возвращаем обновленные данные
+	updatedUser, err := s.userRepo.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	roles, _ := s.userRepo.GetRolesByUserID(ctx, userID)
+	roleIDs := make([]uint64, len(roles))
+	for i, r := range roles {
+		roleIDs[i] = r.ID
+	}
+
+	userDTO := userEntityToUserDTO(updatedUser)
+	userDTO.RoleIDs = roleIDs
+
+	return userDTO, nil
 }

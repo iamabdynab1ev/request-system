@@ -26,7 +26,6 @@ import (
 	"request-system/pkg/database/postgresql"
 	"request-system/pkg/logger"
 	"request-system/pkg/service"
-	"request-system/pkg/utils"
 )
 
 type CustomValidator struct {
@@ -133,11 +132,12 @@ func main() {
 		mainLogger.Fatal("Не удалось получить путь к ./uploads", zap.Error(err))
 	}
 	e.Static("/uploads", absPath)
-	v := validator.New()
-	if err := customvalidator.RegisterCustomValidations(v); err != nil {
-		mainLogger.Fatal("Не удалось зарегистрировать валидаторы", zap.Error(err))
-	}
-	e.Validator = utils.NewValidator(v)
+	e.Validator = customvalidator.New()
+
+	// 2. !!! А ТЕПЕРЬ РЕГИСТРИРУЕМ NULL-ТИПЫ !!!
+	mainLogger.Info("Регистрация Nullable-типов для валидатора...")
+
+	mainLogger.Info("Nullable-типы успешно зарегистрированы.")
 
 	dbConn := postgresql.ConnectDB(cfg.Postgres.DSN)
 	defer dbConn.Close()

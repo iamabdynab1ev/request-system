@@ -1,16 +1,16 @@
-// Файл: internal/entities/position-entity.go
 package entities
 
-import (
-	"request-system/pkg/types"
-)
+import "time"
 
 type Position struct {
-	Id       int     `json:"id"`
-	Name     string  `json:"name"`
-	Code     *string `json:"code"`
-	Level    int     `json:"level"`
-	StatusID int     `json:"status_id"`
-
-	types.BaseEntity // Добавляем CreatedAt, UpdatedAt
+	ID           uint64    `db:"id"`
+	Name         string    `db:"name"`
+	StatusID     *uint64   `db:"status_id"`
+	DepartmentID *uint64   `db:"department_id"`
+	OtdelID      *uint64   `db:"otdel_id"`
+	BranchID     *uint64   `db:"branch_id"`
+	OfficeID     *uint64   `db:"office_id"`
+	Type         *string   `db:"type"`
+	CreatedAt    time.Time `db:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at"`
 }

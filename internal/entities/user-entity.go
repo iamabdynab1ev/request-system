@@ -10,11 +10,11 @@ type User struct {
 	Password           string  `json:"-"`
 	StatusID           uint64  `json:"status_id"`
 	StatusCode         string  `json:"status_code"`
-	BranchID           uint64  `json:"branch_id"`
+	BranchID           *uint64 `json:"branch_id"`
 	DepartmentID       uint64  `json:"department_id"`
 	OfficeID           *uint64 `json:"office_id"`
 	OtdelID            *uint64 `json:"otdel_id"`
-	PositionID         uint64  `json:"position_id"`
+	PositionID         *uint64 `json:"position_id"`
 	PhotoURL           *string `json:"photo_url,omitempty"`
 	IsHead             *bool   `json:"is_head,omitempty"`
 	MustChangePassword bool    `json:"must_change_password"`

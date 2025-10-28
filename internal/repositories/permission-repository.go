@@ -30,6 +30,8 @@ type PermissionRepositoryInterface interface {
 	GetAllUserPermissionsNames(ctx context.Context, userID uint64) ([]string, error)
 	GetAllPermissionSourcesForUser(ctx context.Context, userID uint64) ([]dto.PermissionSource, error)
 	GetFinalUserPermissionIDs(ctx context.Context, userID uint64) ([]uint64, error)
+	GetDetailedPermissionsForUI(ctx context.Context, userID uint64) (*dto.UIPermissionsResponseDTO, error)
+	GetRolePermissionIDsForUser(ctx context.Context, userID uint64) ([]uint64, error)
 }
 
 type PermissionRepository struct {
@@ -59,43 +61,34 @@ func (r *PermissionRepository) FindPermissionByName(ctx context.Context, name st
 
 // Этот метод нужен для быстрой авторизации
 func (r *PermissionRepository) GetAllUserPermissionsNames(ctx context.Context, userID uint64) ([]string, error) {
-	query := `
-		SELECT p.name FROM permissions p WHERE p.id IN (
-			SELECT permission_id FROM user_permissions WHERE user_id = $1
-			UNION
-			SELECT rp.permission_id FROM role_permissions rp
-			JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = $1
-		) AND p.id NOT IN (
-			SELECT permission_id FROM user_permission_denials WHERE user_id = $1
-		)
-	`
-	// --- ЛОГИРОВАНИЕ ---
-	r.logger.Info("Executing GetAllUserPermissionsNames",
-		zap.String("query", query),
-		zap.Uint64("userID", userID),
-	)
-	// --- КОНЕЦ ЛОГИРОВАНИЯ ---
+	r.logger.Info("GetAllUserPermissionsNames вызван, ПЕРЕНАПРАВЛЯЕМ на GetFinalUserPermissionIDs...", zap.Uint64("userID", userID))
 
-	rows, err := r.storage.Query(ctx, query, userID)
+	// 1. Вызываем метод, который возвращает ID
+	permissionIDs, err := r.GetFinalUserPermissionIDs(ctx, userID)
 	if err != nil {
-		r.logger.Error("Ошибка при выполнении GetAllUserPermissionsNames", zap.Uint64("userID", userID), zap.Error(err))
+		return nil, err
+	}
+	if len(permissionIDs) == 0 {
+		return []string{}, nil
+	}
+
+	// 2. Теперь делаем простой запрос, чтобы превратить ID в имена
+	query := "SELECT name FROM permissions WHERE id = ANY($1)"
+	rows, err := r.storage.Query(ctx, query, permissionIDs)
+	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
 	permissions, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		r.logger.Error("Ошибка сканирования финального списка прав", zap.Uint64("userID", userID), zap.Error(err))
 		return nil, err
 	}
 
-	// --- ЛОГИРОВАНИЕ РЕЗУЛЬТАТА ---
-	r.logger.Info("GetAllUserPermissionsNames result",
+	r.logger.Info("Права успешно получены и сконвертированы в имена",
 		zap.Uint64("userID", userID),
-		zap.Int("permissions_count", len(permissions)), // <-- Добавим количество
-		zap.Strings("permissions", permissions),
+		zap.Int("count", len(permissions)),
 	)
-	// --- КОНЕЦ ЛОГИРОВАНИЯ ---
 
 	return permissions, nil
 }
@@ -259,6 +252,7 @@ func (r *PermissionRepository) GetAllPermissionSourcesForUser(ctx context.Contex
 }
 
 func (r *PermissionRepository) GetFinalUserPermissionIDs(ctx context.Context, userID uint64) ([]uint64, error) {
+	r.logger.Warn("!!! ВЫЗВАН GetFinalUserPermissionIDs !!!", zap.Uint64("userID", userID))
 	query := `
 		SELECT p.id FROM permissions p WHERE p.id IN (
 			SELECT permission_id FROM user_permissions WHERE user_id = $1
@@ -274,5 +268,80 @@ func (r *PermissionRepository) GetFinalUserPermissionIDs(ctx context.Context, us
 		return nil, err
 	}
 	defer rows.Close()
+	return pgx.CollectRows(rows, pgx.RowTo[uint64])
+}
+
+func (r *PermissionRepository) GetDetailedPermissionsForUI(ctx context.Context, userID uint64) (*dto.UIPermissionsResponseDTO, error) {
+	query := `
+		WITH user_role_perms AS (
+			SELECT DISTINCT rp.permission_id FROM user_roles ur
+			JOIN role_permissions rp ON ur.role_id = rp.role_id
+			WHERE ur.user_id = $1
+		),
+		user_individual_perms AS (
+			SELECT permission_id FROM user_permissions WHERE user_id = $1
+		),
+		user_denied_perms AS (
+			SELECT permission_id FROM user_permission_denials WHERE user_id = $1
+		)
+		SELECT
+			p.id, p.name, p.description,
+			CASE
+				WHEN p.id IN (SELECT permission_id FROM user_denied_perms) THEN 'denied'
+				WHEN p.id IN (SELECT permission_id FROM user_individual_perms) THEN 'individual'
+				WHEN p.id IN (SELECT permission_id FROM user_role_perms) THEN 'role'
+				ELSE 'available'
+			END AS status_or_source
+		FROM permissions p
+		ORDER BY p.name
+	`
+
+	rows, err := r.storage.Query(ctx, query, userID)
+	if err != nil {
+		r.logger.Error("GetDetailedPermissionsForUI: не удалось получить все источники прав", zap.Error(err))
+		return nil, err
+	}
+	defer rows.Close()
+
+	hasAccess := make([]dto.UIPermissionDetailDTO, 0)
+	noAccess := make([]dto.UIPermissionDetailDTO, 0)
+
+	for rows.Next() {
+		var detail dto.UIPermissionDetailDTO
+		var statusOrSource string
+		if err := rows.Scan(&detail.ID, &detail.Name, &detail.Description, &statusOrSource); err != nil {
+			return nil, err
+		}
+
+		switch statusOrSource {
+		case "individual", "role":
+			detail.Source = statusOrSource
+			hasAccess = append(hasAccess, detail)
+		case "denied", "available":
+			detail.Status = statusOrSource
+			noAccess = append(noAccess, detail)
+		}
+	}
+
+	return &dto.UIPermissionsResponseDTO{
+		HasAccess: hasAccess,
+		NoAccess:  noAccess,
+	}, nil
+}
+
+// --- НОВЫЙ HELPER-МЕТОД, КОТОРЫЙ НУЖЕН СЕРВИСУ ---
+func (r *PermissionRepository) GetRolePermissionIDsForUser(ctx context.Context, userID uint64) ([]uint64, error) {
+	query := `
+        SELECT DISTINCT rp.permission_id
+        FROM user_roles ur
+        JOIN role_permissions rp ON ur.role_id = rp.role_id
+        WHERE ur.user_id = $1
+    `
+	rows, err := r.storage.Query(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
 	return pgx.CollectRows(rows, pgx.RowTo[uint64])
 }

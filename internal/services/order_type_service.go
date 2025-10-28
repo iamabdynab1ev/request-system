@@ -116,8 +116,7 @@ func (s *OrderTypeService) Create(ctx context.Context, createDTO dto.CreateOrder
 	}
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		// Проверка уникальности имени
-		nameExists, err := s.repo.ExistsByName(ctx, tx, createDTO.Name, 0) // <<< Добавили , 0
+		nameExists, err := s.repo.ExistsByName(ctx, tx, createDTO.Name, 0)
 		if err != nil {
 			return err
 		}
@@ -125,8 +124,7 @@ func (s *OrderTypeService) Create(ctx context.Context, createDTO dto.CreateOrder
 			return apperrors.NewHttpError(http.StatusBadRequest, "Тип заявки с таким названием уже существует", nil, nil)
 		}
 
-		// Проверка уникальности кода
-		codeExists, err := s.repo.ExistsByCode(ctx, tx, createDTO.Code, 0) // <<< Добавили , 0
+		codeExists, err := s.repo.ExistsByCode(ctx, tx, createDTO.Code, 0)
 		if err != nil {
 			return err
 		}
@@ -155,7 +153,6 @@ func (s *OrderTypeService) Create(ctx context.Context, createDTO dto.CreateOrder
 	return toResponseDTO(createdEntity), nil
 }
 
-// Update обновляет существующий тип заявки.
 func (s *OrderTypeService) Update(ctx context.Context, id int, updateDTO dto.UpdateOrderTypeDTO) (*dto.OrderTypeResponseDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {

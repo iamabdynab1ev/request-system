@@ -74,4 +74,5 @@ var (
 	ErrEmptyAuthHeader      = NewHttpError(http.StatusUnauthorized, "Отсутствует заголовок авторизации", nil, nil)
 
 	ErrChangePasswordWithToken = NewHttpErrorWithDetails(http.StatusAccepted, "Требуется смена пароля", nil, nil, nil)
+	ErrNoChanges               = NewHttpError(http.StatusBadRequest, "Нет изменений в запросе", nil, nil)
 )

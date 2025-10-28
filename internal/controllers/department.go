@@ -107,10 +107,8 @@ func (c *DepartmentController) UpdateDepartment(ctx echo.Context) error {
 		)
 	}
 
-	// ---- НОВАЯ, ПРОСТАЯ И НАДЕЖНАЯ ЛОГИКА ПАРСИНГА ----
 	var dto dto.UpdateDepartmentDTO
 
-	// Мы просто читаем тело запроса и пытаемся его распарсить как JSON.
 	if err := json.NewDecoder(ctx.Request().Body).Decode(&dto); err != nil {
 		c.logger.Error("UpdateDepartment: ошибка привязки данных из JSON-тела", zap.Error(err))
 		return utils.ErrorResponse(
@@ -120,9 +118,7 @@ func (c *DepartmentController) UpdateDepartment(ctx echo.Context) error {
 		)
 	}
 
-	// После парсинга логгируем, чтобы УБЕДИТЬСЯ, что данные прочитались.
 	c.logger.Debug("DTO после парсинга в контроллере", zap.Any("parsedDTO", dto))
-	// --------------------------------------------------------
 
 	if err := ctx.Validate(&dto); err != nil {
 		c.logger.Error("UpdateDepartment: ошибка валидации данных", zap.Error(err))
@@ -134,7 +130,7 @@ func (c *DepartmentController) UpdateDepartment(ctx echo.Context) error {
 		c.logger.Error("Ошибка при обновлении департамента", zap.Uint64("id", id), zap.Any("payload", dto), zap.Error(err))
 		return utils.ErrorResponse(
 			ctx,
-			err, // Передаем ошибку из сервиса/репозитория напрямую
+			err,
 			c.logger,
 		)
 	}
@@ -144,7 +140,7 @@ func (c *DepartmentController) UpdateDepartment(ctx echo.Context) error {
 
 func (c *DepartmentController) DeleteDepartment(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
-	if err != nil {
+	if err != nil { /* ... обработка ошибки парсинга ... */
 		c.logger.Error("DeleteDepartment: неверный формат ID", zap.String("id", ctx.Param("id")), zap.Error(err))
 		return utils.ErrorResponse(
 			ctx,
@@ -156,11 +152,17 @@ func (c *DepartmentController) DeleteDepartment(ctx echo.Context) error {
 			),
 			c.logger,
 		)
+
 	}
-	if err := c.departmentService.DeleteDepartment(ctx.Request().Context(), id); err != nil {
+
+	err = c.departmentService.DeleteDepartment(ctx.Request().Context(), id)
+	if err != nil {
 		c.logger.Error("Ошибка при удалении департамента", zap.Uint64("id", id), zap.Error(err))
+
+		// Просто передаем 'err' как есть. Никаких fmt.Errorf.
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
+
 	return utils.SuccessResponse(ctx, nil, "Департамент успешно удален", http.StatusOK)
 }
 

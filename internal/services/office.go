@@ -10,6 +10,14 @@ import (
 	"go.uber.org/zap"
 )
 
+type OfficeServiceInterface interface {
+	GetOffices(ctx context.Context, filter types.Filter) ([]dto.OfficeResponseDTO, uint64, error)
+	FindOffice(ctx context.Context, id uint64) (*dto.OfficeResponseDTO, error)
+	CreateOffice(ctx context.Context, payload dto.CreateOfficeDTO) (*dto.OfficeResponseDTO, error)
+	UpdateOffice(ctx context.Context, id uint64, payload dto.UpdateOfficeDTO) (*dto.OfficeResponseDTO, error)
+	DeleteOffice(ctx context.Context, id uint64) error
+}
+
 const (
 	timeFormat = "2006-01-02 15:04:05"
 	dateFormat = "2006-01-02"
@@ -20,7 +28,7 @@ type OfficeService struct {
 	logger           *zap.Logger
 }
 
-func NewOfficeService(officeRepository repositories.OfficeRepositoryInterface, logger *zap.Logger) *OfficeService {
+func NewOfficeService(officeRepository repositories.OfficeRepositoryInterface, logger *zap.Logger) OfficeServiceInterface {
 	return &OfficeService{
 		officeRepository: officeRepository,
 		logger:           logger,

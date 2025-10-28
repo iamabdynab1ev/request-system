@@ -1,4 +1,3 @@
-// Файл: internal/routes/auth_router.go
 package routes
 
 import (
@@ -6,12 +5,14 @@ import (
 	"request-system/internal/repositories"
 	"request-system/internal/services"
 	"request-system/pkg/config"
+	"request-system/pkg/filestorage"
 	"request-system/pkg/middleware"
 	"request-system/pkg/service"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
+
 	"go.uber.org/zap"
 )
 
@@ -22,38 +23,51 @@ func runAuthRouter(
 	jwtSvc service.JWTService,
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
+	fileStorage filestorage.FileStorageInterface,
 	authPermissionService services.AuthPermissionServiceInterface,
 	cfg *config.Config,
+
+	positionService services.PositionServiceInterface,
+	branchService services.BranchServiceInterface,
+	departmentService services.DepartmentServiceInterface,
+	otdelService services.OtdelServiceInterface,
+	officeService services.OfficeServiceInterface,
 ) {
 	userRepository := repositories.NewUserRepository(dbConn, logger)
 	cacheRepository := repositories.NewRedisCacheRepository(redisClient)
 
-	// <<<--- НАЧАЛО ИЗМЕНЕНИЙ ---
-	// 1. Создаем наш новый сервис-заглушку для уведомлений.
 	notificationService := services.NewMockNotificationService(logger)
 
-	// 2. Передаем его в конструктор AuthService при создании.
 	authService := services.NewAuthService(
 		userRepository,
 		cacheRepository,
 		logger,
 		&cfg.Auth,
-		notificationService, // <-- Наша зависимость
+		notificationService,
+		positionService,
+		branchService,
+		departmentService,
+		otdelService,
+		officeService,
 	)
-	// <<<--- КОНЕЦ ИЗМЕНЕНИЙ ---
 
-	authCtrl := controllers.NewAuthController(authService, authPermissionService, jwtSvc, logger)
+	authCtrl := controllers.NewAuthController(
+		authService,
+		authPermissionService,
+		jwtSvc,
+		fileStorage,
+		logger,
+	)
 
 	authGroup := api.Group("/auth")
-	{
-		authGroup.POST("/login", authCtrl.Login)
-		authGroup.POST("/refresh_token", authCtrl.RefreshToken)
-		authGroup.GET("/me", authCtrl.Me, authMW.Auth)
-		authGroup.POST("/logout", authCtrl.Logout)
-
-		passwordGroup := authGroup.Group("/password")
-		passwordGroup.POST("/request", authCtrl.RequestPasswordReset)
-		passwordGroup.POST("/verify_phone", authCtrl.VerifyCode)
-		passwordGroup.POST("/reset", authCtrl.ResetPassword)
-	}
+	secureAuthGroup := authGroup.Group("", authMW.Auth)
+	authGroup.POST("/login", authCtrl.Login)
+	authGroup.POST("/refresh_token", authCtrl.RefreshToken)
+	passwordGroup := authGroup.Group("/password")
+	passwordGroup.POST("/request", authCtrl.RequestPasswordReset)
+	passwordGroup.POST("/verify_phone", authCtrl.VerifyCode)
+	passwordGroup.POST("/reset", authCtrl.ResetPassword)
+	secureAuthGroup.GET("/me", authCtrl.Me)
+	secureAuthGroup.POST("/logout", authCtrl.Logout)
+	secureAuthGroup.PUT("/me", authCtrl.UpdateMe, authMW.Auth)
 }

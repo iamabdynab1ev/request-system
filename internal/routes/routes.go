@@ -1,5 +1,3 @@
-// Файл: internal/routes/routes.go
-
 package routes
 
 import (
@@ -8,6 +6,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 
+	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
 	"request-system/pkg/config"
@@ -45,53 +44,62 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	orderRepo := repositories.NewOrderRepository(dbConn, loggers.Order)
 	priorityRepo := repositories.NewPriorityRepository(dbConn, loggers.Main)
 	attachRepo := repositories.NewAttachmentRepository(dbConn)
-	historyRepo := repositories.NewOrderHistoryRepository(dbConn)
+	historyRepo := repositories.NewOrderHistoryRepository(dbConn, loggers.OrderHistory)
 	positionRepo := repositories.NewPositionRepository(dbConn)
 	orderTypeRepo := repositories.NewOrderTypeRepository(dbConn)
 	ruleRepo := repositories.NewOrderRoutingRuleRepository(dbConn)
-	// ДОБАВЛЯЕМ РЕПОЗИТОРИЙ ОТЧЕТОВ
 	reportRepo := repositories.NewReportRepository(dbConn)
+
+	// <<<--- ДОБАВЛЕНИЕ НЕДОСТАЮЩИХ РЕПОЗИТОРИЕВ
+	branchRepo := repositories.NewBranchRepository(dbConn, loggers.Main)
+	departmentRepo := repositories.NewDepartmentRepository(dbConn, loggers.Main)
+	otdelRepo := repositories.NewOtdelRepository(dbConn, loggers.Main)
+	officeRepo := repositories.NewOfficeRepository(dbConn)
 
 	// --- 2. СЕРВИСЫ ---
 	ruleEngineService := services.NewRuleEngineService(ruleRepo, userRepo, positionRepo, loggers.Main)
-
 	roleService := services.NewRoleService(roleRepo, userRepo, statusRepo, authPermissionService, loggers.Main)
 	permissionService := services.NewPermissionService(permissionRepo, userRepo, loggers.Main)
 	userService := services.NewUserService(userRepo, roleRepo, permissionRepo, statusRepo, authPermissionService, loggers.User)
 	rpService := services.NewRolePermissionService(rpRepo, userRepo, authPermissionService, loggers.Main)
 	orderTypeService := services.NewOrderTypeService(orderTypeRepo, userRepo, txManager, ruleEngineService, loggers.Main)
 	positionService := services.NewPositionService(positionRepo, userRepo, txManager, loggers.Main)
-	orderRuleService := services.NewOrderRoutingRuleService(ruleRepo, userRepo, txManager, loggers.Main, orderTypeRepo)
-
-	// !!! ИСПРАВЛЕН ВЫЗОВ `NewOrderService` !!!
-	orderService := services.NewOrderService(
-		// ПОРЯДОК ОЧЕНЬ ВАЖЕН!
-		txManager,         // 1
-		orderRepo,         // 2
-		userRepo,          // 3
-		statusRepo,        // 4
-		priorityRepo,      // 5
-		attachRepo,        // 6
-		ruleEngineService, // 7
-		historyRepo,       // 8
-		fileStorage,       // 9
-		loggers.Order,     // 10
-		orderTypeRepo,     // 11
+	orderRuleService := services.NewOrderRoutingRuleService(
+		ruleRepo,
+		userRepo,
+		positionRepo,
+		txManager,
+		loggers.Main,
+		orderTypeRepo,
 	)
-
-	// ДОБАВЛЯЕМ СЕРВИС ОТЧЕТОВ
+	orderService := services.NewOrderService(
+		txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo,
+		ruleEngineService, historyRepo, fileStorage, loggers.Order, orderTypeRepo,
+	)
+	historyService := services.NewOrderHistoryService(historyRepo, orderService, userRepo, loggers.OrderHistory)
 	reportService := services.NewReportService(reportRepo, userRepo)
+
+	// === 3. КОНТРОЛЛЕРЫ === (НОВЫЙ БЛОК)
+	// Создаем ВСЕ контроллеры здесь, в одном месте.
+	userController := controllers.NewUserController(userService, fileStorage, loggers.User)
+	historyController := controllers.NewOrderHistoryController(historyService, orderService, loggers.OrderHistory)
+
+	// <<<--- ДОБАВЛЕНИЕ НЕДОСТАЮЩИХ СЕРВИСОВ
+	branchService := services.NewBranchService(branchRepo, userRepo, loggers.Main)
+	departmentService := services.NewDepartmentService(departmentRepo, otdelRepo, userRepo, loggers.Main)
+	otdelService := services.NewOtdelService(otdelRepo, userRepo, loggers.Main)
+	officeService := services.NewOfficeService(officeRepo, loggers.Main)
 
 	// --- 3. РОУТЕРЫ ---
 	secureGroup := api.Group("", authMW.Auth)
 
-	// ДОБАВЛЯЕМ ВЫЗОВ РОУТЕРА ОТЧЕТОВ
 	runReportRouter(secureGroup, reportService, loggers.Main, authMW)
 
-	runAuthRouter(api, dbConn, redisClient, jwtSvc, loggers.Auth, authMW, authPermissionService, cfg)
+	// <<<--- ИСПРАВЛЕННЫЙ ВЫЗОВ runAuthRouter
+	runAuthRouter(api, dbConn, redisClient, jwtSvc, loggers.Auth, authMW, fileStorage, authPermissionService, cfg,
+		positionService, branchService, departmentService, otdelService, officeService)
 
-	// ... остальной код ...
-	runUserRouter(secureGroup, userService, fileStorage, loggers.User, authMW)
+	runUserRouter(secureGroup, userController, authMW)
 	runRoleRouter(secureGroup, roleService, loggers.Main, authMW)
 	runPermissionRouter(secureGroup, permissionService, loggers.Main, authMW)
 	runRolePermissionRouter(secureGroup, rpService, loggers.Main, authMW)
@@ -101,13 +109,15 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	runOrderRoutingRuleRouter(secureGroup, orderRuleService, loggers.Main, authMW)
 	runAttachmentRouter(secureGroup, dbConn, fileStorage, loggers.Main)
 	runStatusRouter(secureGroup, dbConn, loggers.Main, authMW, fileStorage)
-	runOrderHistoryRouter(secureGroup, dbConn, loggers.OrderHistory, authMW)
+	runOrderHistoryRouter(secureGroup, historyController, authMW)
 	RunPriorityRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runDepartmentRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runOtdelRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runEquipmentTypeRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runBranchRouter(secureGroup, dbConn, loggers.Main, authMW)
-	runOfficeRouter(secureGroup, dbConn, loggers.Main, authMW)
+
+	runOfficeRouter(secureGroup, officeService, loggers.Main, authMW)
+
 	runEquipmentRouter(secureGroup, dbConn, loggers.Main, authMW)
 
 	loggers.Main.Info("INIT_ROUTER: Создание маршрутов завершено")

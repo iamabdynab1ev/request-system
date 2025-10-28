@@ -29,8 +29,6 @@ type AttachmentDTO struct {
 type AttachmentResponseDTO struct {
 	ID       uint64 `json:"id"`
 	FileName string `json:"file_name"`
-	FileSize int64  `json:"file_size"`
-	FileType string `json:"file_type"`
 	URL      string `json:"url"`
 }
 

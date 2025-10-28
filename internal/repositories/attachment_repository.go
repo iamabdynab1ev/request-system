@@ -13,11 +13,10 @@ import (
 )
 
 type AttachmentRepositoryInterface interface {
-	Create(ctx context.Context, tx pgx.Tx, attachment *entities.Attachment) (uint64, error)
+	CreateInTx(ctx context.Context, tx pgx.Tx, attachment *entities.Attachment) (uint64, error)
 	FindAllByOrderID(ctx context.Context, orderID uint64, limit, offset int) ([]entities.Attachment, error)
 	FindByID(ctx context.Context, id uint64) (*entities.Attachment, error)
 	DeleteAttachment(ctx context.Context, id uint64) error
-	// <<<--- 1. ДОБАВЛЕН НОВЫЙ МЕТОД В ИНТЕРФЕЙС ---
 	FindAttachmentsByOrderIDs(ctx context.Context, orderIDs []uint64) (map[uint64][]entities.Attachment, error)
 }
 
@@ -60,7 +59,7 @@ func (r *attachmentRepository) FindAttachmentsByOrderIDs(ctx context.Context, or
 
 // --- Существующие методы остаются без изменений ---
 
-func (r *attachmentRepository) Create(ctx context.Context, tx pgx.Tx, attachment *entities.Attachment) (uint64, error) {
+func (r *attachmentRepository) CreateInTx(ctx context.Context, tx pgx.Tx, attachment *entities.Attachment) (uint64, error) {
 	query := `
 		INSERT INTO attachments 
 		(order_id, user_id, file_name, file_path, file_type, file_size)

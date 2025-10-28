@@ -79,6 +79,7 @@ const (
 	OrdersCreateDuration        = "order:create:duration"
 	OrdersCreateComment         = "order:create:comment"
 	OrdersCreateFile            = "order:create:file"
+	OrdersCreateStatusID        = "order:create:status_id"
 
 	// --- ПОЛЯ ПРИ ОБНОВЛЕНИИ ---
 	OrdersUpdateName            = "order:update:name"

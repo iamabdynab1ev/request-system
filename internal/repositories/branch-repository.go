@@ -104,14 +104,18 @@ func (r *BranchRepository) scanBranch(row pgx.Row) (*entities.Branch, error) {
 	var b entities.Branch
 	var s entities.Status
 
-	// Создаем временные переменные для полей, которые могут быть NULL
-	var emailIndex sql.NullString
+	// --- ИСПРАВЛЕНИЕ: СОЗДАЕМ ВРЕМЕННЫЕ ПЕРЕМЕННЫЕ ДЛЯ ВСЕХ NULLABLE-ПОЛЕЙ ---
+	var address, phoneNumber, email, emailIndex sql.NullString
+	var openDate sql.NullTime
 
 	err := row.Scan(
-		&b.ID, &b.Name, &b.ShortName, &b.Address, &b.PhoneNumber,
-		&b.Email,
-		&emailIndex, // Сканируем значение email_index в sql.NullString
-		&b.OpenDate, &b.StatusID,
+		&b.ID, &b.Name, &b.ShortName,
+		&address,     // Сканируем в `sql.NullString`
+		&phoneNumber, // Сканируем в `sql.NullString`
+		&email,       // Сканируем в `sql.NullString`
+		&emailIndex,  // Сканируем в `sql.NullString`
+		&openDate,    // Сканируем в `sql.NullTime`
+		&b.StatusID,
 		&b.CreatedAt, &b.UpdatedAt,
 		&s.ID, &s.Name,
 	)
@@ -123,13 +127,28 @@ func (r *BranchRepository) scanBranch(row pgx.Row) (*entities.Branch, error) {
 		r.logger.Error("Failed to scan branch row", zap.Error(err))
 		return nil, err
 	}
+
+	// --- ПРИСВАИВАЕМ ЗНАЧЕНИЯ, ЕСЛИ ОНИ ЕСТЬ ---
+	if address.Valid {
+		b.Address = address.String
+	}
+	if phoneNumber.Valid {
+		b.PhoneNumber = phoneNumber.String
+	}
+	if email.Valid {
+		b.Email = email.String
+	}
 	if emailIndex.Valid {
 		b.EmailIndex = emailIndex.String
+	}
+	if openDate.Valid {
+		b.OpenDate = openDate.Time
 	}
 
 	if s.ID > 0 {
 		b.Status = &s
 	}
+
 	return &b, nil
 }
 

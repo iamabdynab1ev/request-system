@@ -2,32 +2,32 @@ package entities
 
 import (
 	"database/sql"
-	"encoding/json"
 	"time"
 )
 
 type ReportFilter struct {
-	OrderIDs     []uint64
-	UserIDs      []uint64
-	EventTypes   []string
 	DateFrom     *time.Time
 	DateTo       *time.Time
-	MetadataJSON string
+	ExecutorIDs  []uint64
+	OrderTypeIDs []uint64
+	PriorityIDs  []uint64
 	Page         int
 	PerPage      int
-	SortOrder    string
 }
 
-type HistoryReportItem struct {
-	ID        uint64          `json:"id" db:"id"`
-	OrderID   uint64          `json:"order_id" db:"order_id"`
-	OrderName string          `json:"order_name" db:"order_name"`
-	UserID    uint64          `json:"user_id" db:"user_id"`
-	UserName  string          `json:"user_name" db:"user_name"`
-	EventType string          `json:"event_type" db:"event_type"`
-	OldValue  sql.NullString  `json:"old_value" db:"old_value"`
-	NewValue  sql.NullString  `json:"new_value" db:"new_value"`
-	Comment   sql.NullString  `json:"comment" db:"comment"`
-	Metadata  json.RawMessage `json:"metadata" db:"metadata"`
-	CreatedAt time.Time       `json:"created_at" db:"created_at"`
+// ReportItem определяет структуру одной строки в итоговом отчете.
+type ReportItem struct {
+	OrderID         uint64          `db:"order_id"`
+	CreatorFio      sql.NullString  `db:"creator_fio"`
+	CreatedAt       time.Time       `db:"created_at"`
+	OrderTypeName   sql.NullString  `db:"order_type_name"`
+	PriorityName    sql.NullString  `db:"priority_name"`
+	StatusName      string          `db:"status_name"`
+	OrderName       string          `db:"order_name"`
+	ExecutorFio     sql.NullString  `db:"executor_fio"`
+	DelegatedAt     sql.NullTime    `db:"delegated_at"`
+	CompletedAt     sql.NullTime    `db:"completed_at"`
+	ResolutionHours sql.NullFloat64 `db:"resolution_hours"`
+	SLAStatus       string          `db:"sla_status"`
+	Comment         sql.NullString  `db:"comment"`
 }

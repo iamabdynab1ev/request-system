@@ -17,7 +17,8 @@ func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *
 	departmentRepo := repositories.NewDepartmentRepository(dbConn, logger)
 	userRepo := repositories.NewUserRepository(dbConn, logger)
 
-	departmentService := services.NewDepartmentService(departmentRepo, userRepo, logger)
+	otdelRepo := repositories.NewOtdelRepository(dbConn, logger)
+	departmentService := services.NewDepartmentService(departmentRepo, otdelRepo, userRepo, logger)
 	departmentCtrl := controllers.NewDepartmentController(departmentService, logger)
 
 	// Роуты

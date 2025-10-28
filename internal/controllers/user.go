@@ -90,6 +90,23 @@ func (c *UserController) CreateUser(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, res, "Пользователь успешно создан", http.StatusCreated)
 }
 
+func (c *UserController) GetUserPermissions(ctx echo.Context) error {
+	c.logger.Info("=======> 1. ЗАШЕЛ В КОНТРОЛЛЕР GetUserPermissions")
+	reqCtx := ctx.Request().Context()
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		return c.errorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID пользователя"))
+	}
+
+	// Вызываем новый метод сервиса
+	res, err := c.userService.GetPermissionDetailsForUser(reqCtx, id)
+	if err != nil {
+		return c.errorResponse(ctx, err)
+	}
+
+	return utils.SuccessResponse(ctx, res, "Права пользователя успешно получены", http.StatusOK)
+}
+
 func (c *UserController) UpdateUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	idFromURL, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
@@ -166,4 +183,47 @@ func (c *UserController) DeleteUser(ctx echo.Context) error {
 	}
 
 	return utils.SuccessResponse(ctx, struct{}{}, "Пользователь успешно удален", http.StatusOK)
+}
+
+func (c *UserController) UpdateUserPermissions(ctx echo.Context) error {
+	// ... (парсинг userID из URL `ctx.Param("id")`)
+	// ... (парсинг `dto.UpdateUserPermissionsDTO` из `ctx.Bind(&payload)`)
+	reqCtx := ctx.Request().Context()
+	userID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		c.logger.Warn("UpdateUserPermissions: некорректный ID пользователя", zap.String("id", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Некорректный ID пользователя",
+				err,
+				map[string]interface{}{"param": ctx.Param("id")},
+			),
+			c.logger,
+		)
+	}
+
+	var payload dto.UpdateUserPermissionsDTO
+	if err := ctx.Bind(&payload); err != nil {
+		c.logger.Warn("UpdateUserPermissions: неверный запрос (bind)", zap.Error(err))
+		return utils.ErrorResponse(ctx,
+			apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Неверный формат запроса для обновления индивидуальных прав пользователя",
+				err,
+				nil,
+			),
+			c.logger,
+		)
+	}
+
+	if err := ctx.Validate(&payload); err != nil {
+		c.logger.Warn("UpdateUserPermissions: ошибка валидации DTO", zap.Error(err))
+		return utils.ErrorResponse(ctx, err, c.logger)
+	}
+	if err := c.userService.UpdateUserPermissions(reqCtx, userID, payload); err != nil {
+		return utils.ErrorResponse(ctx, err, c.logger)
+	}
+
+	return utils.SuccessResponse(ctx, nil, "Индивидуальные права пользователя успешно обновлены", http.StatusOK)
 }

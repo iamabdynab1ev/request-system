@@ -1,28 +1,23 @@
-// Файл: internal/routes/office.go
-// СКОПИРУЙТЕ И ПОЛНОСТЬЮ ЗАМЕНИТЕ СОДЕРЖИМОЕ
-
 package routes
 
 import (
 	"request-system/internal/authz"
 	"request-system/internal/controllers"
-	"request-system/internal/repositories"
-	"request-system/internal/services"
+	"request-system/internal/services" // Убрали 'repositories' - он больше не нужен
 	"request-system/pkg/middleware"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	// "github.com/jackc/pgx/v5/pgxpool" // Убрали - больше не нужен
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
 func runOfficeRouter(
 	secureGroup *echo.Group,
-	dbConn *pgxpool.Pool,
+
+	officeService services.OfficeServiceInterface,
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
 ) {
-	officeRepository := repositories.NewOfficeRepository(dbConn)
-	officeService := services.NewOfficeService(officeRepository, logger)
 	officeCtrl := controllers.NewOfficeController(officeService, logger)
 
 	offices := secureGroup.Group("/office")

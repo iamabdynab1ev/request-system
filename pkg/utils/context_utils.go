@@ -4,29 +4,24 @@ import (
 	"context"
 	"strings"
 
-	"request-system/internal/dto"
 	"request-system/pkg/contextkeys"
 	apperrors "request-system/pkg/errors"
 )
 
-func GetClaimsFromContext(ctx context.Context) (*dto.UserClaims, error) {
-	claims, ok := ctx.Value(contextkeys.UserIDKey).(*dto.UserClaims)
+func GetClaimsFromContext[T any](ctx context.Context) (*T, error) {
+	claims, ok := ctx.Value(contextkeys.UserIDKey).(*T)
 	if !ok || claims == nil {
 		return nil, apperrors.ErrUnauthorized
 	}
 	return claims, nil
 }
 
-func HasPermission(claims *dto.UserClaims, requiredPermission string) bool {
+func HasPermission[T any](claims *T, requiredPermission string) bool {
 	if claims == nil {
 		return false
 	}
 
 	userPerms := make(map[string]bool)
-	for _, p := range claims.Permissions {
-		userPerms[p] = true
-	}
-
 	if userPerms["superuser"] {
 		return true
 	}

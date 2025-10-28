@@ -17,7 +17,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// ... (структура HTTPResponse и ParseFilterFromQuery остаются БЕЗ ИЗМЕНЕНИЙ) ...
 type HTTPResponse struct {
 	Status  bool        `json:"status"`
 	Body    interface{} `json:"body,omitempty"`
@@ -37,59 +36,85 @@ func MergeOrders(original *entities.Order, changes entities.Order) (*entities.Or
 	hasChanges := false
 	merged := *original // Создаем копию
 
+	// --- 1. ОБРАБОТКА ПРОСТЫХ ТИПОВ (НЕ УКАЗАТЕЛЕЙ) ---
 	if changes.Name != "" && merged.Name != changes.Name {
 		merged.Name = changes.Name
-		hasChanges = true
-	}
-	if changes.Address != nil && merged.Address != nil && *merged.Address != *changes.Address {
-		merged.Address = changes.Address
 		hasChanges = true
 	}
 	if changes.DepartmentID != 0 && merged.DepartmentID != changes.DepartmentID {
 		merged.DepartmentID = changes.DepartmentID
 		hasChanges = true
 	}
-	if !AreUint64PointersEqual(merged.OtdelID, changes.OtdelID) {
-		merged.OtdelID = changes.OtdelID
-		hasChanges = true
-	}
-	if !AreUint64PointersEqual(merged.BranchID, changes.BranchID) {
-		merged.BranchID = changes.BranchID
-		hasChanges = true
-	}
-	if !AreUint64PointersEqual(merged.OfficeID, changes.OfficeID) {
-		merged.OfficeID = changes.OfficeID
-		hasChanges = true
-	}
-	if !AreUint64PointersEqual(merged.EquipmentID, changes.EquipmentID) {
-		merged.EquipmentID = changes.EquipmentID
-		hasChanges = true
-	}
-	if !AreUint64PointersEqual(merged.EquipmentTypeID, changes.EquipmentTypeID) {
-		merged.EquipmentTypeID = changes.EquipmentTypeID
-		hasChanges = true
-	}
-
 	if changes.StatusID != 0 && merged.StatusID != changes.StatusID {
 		merged.StatusID = changes.StatusID
 		hasChanges = true
 	}
-	if !AreUint64PointersEqual(merged.PriorityID, changes.PriorityID) {
-		merged.PriorityID = changes.PriorityID
-		hasChanges = true
-	}
-	if !AreUint64PointersEqual(merged.ExecutorID, changes.ExecutorID) {
-		merged.ExecutorID = changes.ExecutorID
+	if changes.CreatorID != 0 && merged.CreatorID != changes.CreatorID {
+		merged.CreatorID = changes.CreatorID
 		hasChanges = true
 	}
 
-	if changes.Duration != nil {
-		if merged.Duration == nil || !merged.Duration.Equal(*changes.Duration) {
-			merged.Duration = changes.Duration
-			hasChanges = true
-		}
-	} else if merged.Duration != nil {
-		merged.Duration = nil
+	// --- 2. ОБРАБОТКА УКАЗАТЕЛЕЙ (*uint64) ---
+	if changes.OrderTypeID != nil && (merged.OrderTypeID == nil || *merged.OrderTypeID != *changes.OrderTypeID) {
+		merged.OrderTypeID = changes.OrderTypeID
+		hasChanges = true
+	}
+	if changes.OtdelID != nil && (merged.OtdelID == nil || *merged.OtdelID != *changes.OtdelID) {
+		merged.OtdelID = changes.OtdelID
+		hasChanges = true
+	}
+	if changes.BranchID != nil && (merged.BranchID == nil || *merged.BranchID != *changes.BranchID) {
+		merged.BranchID = changes.BranchID
+		hasChanges = true
+	}
+	if changes.OfficeID != nil && (merged.OfficeID == nil || *merged.OfficeID != *changes.OfficeID) {
+		merged.OfficeID = changes.OfficeID
+		hasChanges = true
+	}
+	if changes.EquipmentID != nil && (merged.EquipmentID == nil || *merged.EquipmentID != *changes.EquipmentID) {
+		merged.EquipmentID = changes.EquipmentID
+		hasChanges = true
+	}
+	if changes.EquipmentTypeID != nil && (merged.EquipmentTypeID == nil || *merged.EquipmentTypeID != *changes.EquipmentTypeID) {
+		merged.EquipmentTypeID = changes.EquipmentTypeID
+		hasChanges = true
+	}
+	if changes.PriorityID != nil && (merged.PriorityID == nil || *merged.PriorityID != *changes.PriorityID) {
+		merged.PriorityID = changes.PriorityID
+		hasChanges = true
+	}
+	if changes.ExecutorID != nil && (merged.ExecutorID == nil || *merged.ExecutorID != *changes.ExecutorID) {
+		merged.ExecutorID = changes.ExecutorID
+		hasChanges = true
+	}
+	if changes.ResolutionTimeSeconds != nil && (merged.ResolutionTimeSeconds == nil || *merged.ResolutionTimeSeconds != *changes.ResolutionTimeSeconds) {
+		merged.ResolutionTimeSeconds = changes.ResolutionTimeSeconds
+		hasChanges = true
+	}
+	if changes.FirstResponseTimeSeconds != nil && (merged.FirstResponseTimeSeconds == nil || *merged.FirstResponseTimeSeconds != *changes.FirstResponseTimeSeconds) {
+		merged.FirstResponseTimeSeconds = changes.FirstResponseTimeSeconds
+		hasChanges = true
+	}
+
+	// --- 3. ОБРАБОТКА ДРУГИХ УКАЗАТЕЛЕЙ (*string, *time.Time, *bool) ---
+	if changes.Address != nil && (merged.Address == nil || *merged.Address != *changes.Address) {
+		merged.Address = changes.Address
+		hasChanges = true
+	}
+	if changes.Duration != nil && (merged.Duration == nil || !merged.Duration.Equal(*changes.Duration)) {
+		merged.Duration = changes.Duration
+		hasChanges = true
+	}
+	if changes.DeletedAt != nil && (merged.DeletedAt == nil || !merged.DeletedAt.Equal(*changes.DeletedAt)) {
+		merged.DeletedAt = changes.DeletedAt
+		hasChanges = true
+	}
+	if changes.CompletedAt != nil && (merged.CompletedAt == nil || !merged.CompletedAt.Equal(*changes.CompletedAt)) {
+		merged.CompletedAt = changes.CompletedAt
+		hasChanges = true
+	}
+	if changes.IsFirstContactResolution != nil && (merged.IsFirstContactResolution == nil || *merged.IsFirstContactResolution != *changes.IsFirstContactResolution) {
+		merged.IsFirstContactResolution = changes.IsFirstContactResolution
 		hasChanges = true
 	}
 
@@ -165,37 +190,32 @@ func ParseFilterFromQuery(values url.Values) types.Filter {
 			}
 		}
 	}
-	// <<<--- КОНЕЦ НОВОЙ ЛОГИКИ ---
 
 	return filterReq
 }
 
 func SuccessResponse(ctx echo.Context, body interface{}, message string, code int, total ...uint64) error {
-	// ... (без изменений)
 	response := &HTTPResponse{Status: true, Message: message}
 	withPagination, _ := strconv.ParseBool(ctx.QueryParam("withPagination"))
 	if withPagination && len(total) > 0 {
 		filter := ParseFilterFromQuery(ctx.Request().URL.Query())
-		var totalPages int
+		totalPages := 0
 		if filter.Limit > 0 {
-			totalPages = int(total[0]) / filter.Limit
-			if int(total[0])%filter.Limit != 0 {
-				totalPages++
-			}
+			totalPages = int(total[0])/filter.Limit + (int(total[0]) % filter.Limit)
 		}
-		response.Body = map[string]interface{}{"list": body, "pagination": types.Pagination{TotalCount: total[0], Page: filter.Page, Limit: filter.Limit, TotalPages: totalPages}}
+		pagination := map[string]interface{}{
+			"total_count": total[0],
+			"page":        filter.Page,
+			"limit":       filter.Limit,
+			"total_pages": totalPages,
+		}
+		response.Body = map[string]interface{}{"list": body, "pagination": pagination}
 	} else {
-		if body != nil {
-			response.Body = body
-		} else {
-			response.Body = struct{}{}
-		}
+		response.Body = body
 	}
 	return ctx.JSON(code, response)
 }
 
-// ---- ИЗМЕНЕНИЯ ЗДЕСЬ ----
-// Ошибка с логированием
 func ErrorResponse(c echo.Context, err error, logger *zap.Logger) error {
 	var httpErr *apperrors.HttpError
 	if errors.As(err, &httpErr) {
@@ -208,13 +228,11 @@ func ErrorResponse(c echo.Context, err error, logger *zap.Logger) error {
 			)
 		}
 
-		// Формируем базовый ответ
 		response := map[string]interface{}{
 			"status":  false,
 			"message": httpErr.Message,
 		}
 
-		// Если есть details, добавляем их в ответ
 		if httpErr.Details != nil {
 			response["body"] = httpErr.Details
 		}
@@ -222,10 +240,8 @@ func ErrorResponse(c echo.Context, err error, logger *zap.Logger) error {
 		return c.JSON(httpErr.Code, response)
 	}
 
-	// Валидация
 	var validationErrors validator.ValidationErrors
 	if errors.As(err, &validationErrors) {
-		// ... (без изменений)
 		var msgs []string
 		for _, e := range validationErrors {
 			msgs = append(msgs, fmt.Sprintf("Поле '%s' не прошло проверку '%s'", e.Field(), e.Tag()))
@@ -233,7 +249,6 @@ func ErrorResponse(c echo.Context, err error, logger *zap.Logger) error {
 		return c.JSON(http.StatusBadRequest, map[string]interface{}{"status": false, "message": "Ошибка валидации: " + strings.Join(msgs, "; ")})
 	}
 
-	// Неожиданная ошибка
 	logger.Error("Unexpected Error", zap.Error(err))
 	return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 		"status":  false,

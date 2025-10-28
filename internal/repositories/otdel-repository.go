@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	sq "github.com/Masterminds/squirrel"
 
@@ -23,7 +24,7 @@ const otdelTable = "otdels"
 
 var (
 	otdelAllowedFilterFields = map[string]string{"status_id": "status_id", "department_id": "department_id"}
-	otdelAllowedSortFields   = map[string]string{"id": "id", "name": "name", "created_at": "created_at"}
+	otdelAllowedSortFields   = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true, "status_id": true, "department_id": true, "otdel_id": true}
 )
 
 type OtdelRepositoryInterface interface {
@@ -55,64 +56,77 @@ func scanOtdel(row pgx.Row) (*entities.Otdel, error) {
 	return &o, nil
 }
 
-func (r *OtdelRepository) buildFilterQuery(filter types.Filter) (string, []interface{}) {
-	conditions, args := []string{}, []interface{}{}
-	argCounter := 1
-	if filter.Search != "" {
-		conditions, args = append(conditions, fmt.Sprintf("name ILIKE $%d", argCounter)), append(args, "%"+filter.Search+"%")
-		argCounter++
-	}
-	for key, value := range filter.Filter {
-		if dbColumn, ok := otdelAllowedFilterFields[key]; ok {
-			items := strings.Split(fmt.Sprintf("%v", value), ",")
-			if len(items) > 1 {
-				placeholders := []string{}
-				for _, item := range items {
-					placeholders = append(placeholders, fmt.Sprintf("$%d", argCounter))
-					args = append(args, item)
-					argCounter++
+func (r *OtdelRepository) GetOtdels(ctx context.Context, filter types.Filter) ([]entities.Otdel, uint64, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+
+	baseBuilder := psql.Select().From(otdelTable)
+
+	// --- ИСПОЛЬЗУЕМ otdelAllowedFilterFields ---
+	if len(filter.Filter) > 0 {
+		for key, value := range filter.Filter {
+			// Проверяем, разрешено ли фильтровать по этому полю
+			if dbColumn, ok := otdelAllowedFilterFields[key]; ok {
+				items := strings.Split(fmt.Sprintf("%v", value), ",")
+				if len(items) > 1 {
+					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: items})
+				} else {
+					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: value})
 				}
-				conditions = append(conditions, fmt.Sprintf("%s IN (%s)", dbColumn, strings.Join(placeholders, ",")))
-			} else {
-				conditions = append(conditions, fmt.Sprintf("%s = $%d", dbColumn, argCounter))
-				args = append(args, value)
-				argCounter++
 			}
 		}
 	}
-	if len(conditions) == 0 {
-		return "", args
-	}
-	return "WHERE " + strings.Join(conditions, " AND "), args
-}
+	// ----------------------------------------
 
-func (r *OtdelRepository) GetOtdels(ctx context.Context, filter types.Filter) ([]entities.Otdel, uint64, error) {
-	whereClause, args := r.buildFilterQuery(filter)
-	countQuery := fmt.Sprintf("SELECT COUNT(id) FROM %s %s", otdelTable, whereClause)
+	if filter.Search != "" {
+		baseBuilder = baseBuilder.Where(sq.ILike{"name": "%" + filter.Search + "%"})
+	}
+
+	// --- ПОДСЧЕТ ---
+	countBuilder := baseBuilder.Columns("COUNT(id)")
+	countQuery, countArgs, err := countBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
 	var total uint64
-	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	if total == 0 {
 		return []entities.Otdel{}, 0, nil
 	}
 
-	orderByClause := "ORDER BY id DESC" // ... (Логика сортировки)
+	// --- ВЫБОРКА, СОРТИРОВКА И ПАГИНАЦИЯ ---
+	selectBuilder := baseBuilder.Columns("id, name, status_id, department_id, created_at, updated_at")
 
-	limitClause := ""
-	argCounter := len(args) + 1
-	if filter.WithPagination {
-		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", argCounter, argCounter+1)
-		args = append(args, filter.Limit, filter.Offset)
+	if len(filter.Sort) > 0 {
+		for field, direction := range filter.Sort {
+			if _, ok := otdelAllowedSortFields[field]; ok {
+				safeDirection := "ASC"
+				if strings.ToUpper(direction) == "DESC" {
+					safeDirection = "DESC"
+				}
+				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("%s %s", field, safeDirection))
+			}
+		}
+	} else {
+		selectBuilder = selectBuilder.OrderBy("id DESC")
 	}
 
-	query := fmt.Sprintf("SELECT id, name, status_id, department_id, created_at, updated_at FROM %s %s %s %s", otdelTable, whereClause, orderByClause, limitClause)
+	if filter.WithPagination {
+		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
+	}
+
+	query, args, err := selectBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
 
 	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
+
 	otdels := make([]entities.Otdel, 0)
 	for rows.Next() {
 		o, err := scanOtdel(rows)
@@ -140,10 +154,30 @@ func (r *OtdelRepository) CreateOtdel(ctx context.Context, otdel entities.Otdel)
 
 // --- ИСПРАВЛЕННЫЙ ДИНАМИЧЕСКИЙ UPDATE ---
 func (r *OtdelRepository) UpdateOtdel(ctx context.Context, id uint64, dto dto.UpdateOtdelDTO) (*entities.Otdel, error) {
+	// Мы будем работать в транзакции, чтобы гарантировать целостность
+	tx, err := r.storage.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) // Откатится, если что-то пойдет не так
+
+	// --- 1. СНАЧАЛА ПРОВЕРЯЕМ, СУЩЕСТВУЕТ ЛИ ЗАПИСЬ ---
+	var exists bool
+	// Используем `tx` для запроса внутри транзакции
+	checkQuery := "SELECT EXISTS(SELECT 1 FROM otdels WHERE id = $1)"
+	if err := tx.QueryRow(ctx, checkQuery, id).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		// Если не существует - сразу возвращаем ошибку 404
+		return nil, apperrors.ErrNotFound
+	}
+
+	// --- 2. ЕСЛИ СУЩЕСТВУЕТ - СТРОИМ ЗАПРОС НА ОБНОВЛЕНИЕ ---
 	updateBuilder := sq.Update(otdelTable).
 		PlaceholderFormat(sq.Dollar).
 		Where(sq.Eq{"id": id}).
-		Set("updated_at", sq.Expr("NOW()"))
+		Set("updated_at", time.Now()) // Используем time.Now()
 
 	hasChanges := false
 	if dto.Name != "" {
@@ -158,16 +192,31 @@ func (r *OtdelRepository) UpdateOtdel(ctx context.Context, id uint64, dto dto.Up
 		updateBuilder = updateBuilder.Set("department_id", dto.DepartmentsID)
 		hasChanges = true
 	}
+
+	// Если в DTO не было данных для обновления, просто возвращаем текущее состояние
 	if !hasChanges {
+		tx.Commit(ctx) // Не забываем закрыть транзакцию
 		return r.FindOtdel(ctx, id)
 	}
-	query, args, err := updateBuilder.
-		Suffix("RETURNING id, name, status_id, department_id, created_at, updated_at").
-		ToSql()
+
+	// --- 3. ВЫПОЛНЯЕМ ОБНОВЛЕНИЕ ---
+	query, args, err := updateBuilder.ToSql()
 	if err != nil {
 		return nil, err
 	}
-	return scanOtdel(r.storage.QueryRow(ctx, query, args...))
+
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		// Здесь может быть ошибка уникальности имени и т.д.
+		return nil, err
+	}
+
+	// --- 4. КОММИТИМ ТРАНЗАКЦИЮ И ВОЗВРАЩАЕМ РЕЗУЛЬТАТ ---
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	// После успешного обновления, запрашиваем и возвращаем актуальное состояние
+	return r.FindOtdel(ctx, id)
 }
 
 func (r *OtdelRepository) DeleteOtdel(ctx context.Context, id uint64) error {

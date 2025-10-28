@@ -17,11 +17,11 @@ import (
 )
 
 type OfficeController struct {
-	officeService *services.OfficeService
+	officeService services.OfficeServiceInterface
 	logger        *zap.Logger
 }
 
-func NewOfficeController(service *services.OfficeService, logger *zap.Logger) *OfficeController {
+func NewOfficeController(service services.OfficeServiceInterface, logger *zap.Logger) *OfficeController {
 	return &OfficeController{officeService: service, logger: logger}
 }
 

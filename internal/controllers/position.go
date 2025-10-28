@@ -1,7 +1,8 @@
-// Файл: internal/controllers/position.go
 package controllers
 
 import (
+	"bytes"
+	"io/ioutil"
 	"net/http"
 	"strconv"
 
@@ -39,7 +40,18 @@ func (c *PositionController) Create(ctx echo.Context) error {
 }
 
 func (c *PositionController) Update(ctx echo.Context) error {
-	id, _ := strconv.Atoi(ctx.Param("id"))
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		c.logger.Error("Update: неверный формат ID", zap.String("id", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID", err, nil), c.logger)
+	}
+
+	rawBody, err := ioutil.ReadAll(ctx.Request().Body)
+	if err != nil {
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Не удалось прочитать тело запроса", err, nil), c.logger)
+	}
+	ctx.Request().Body = ioutil.NopCloser(bytes.NewBuffer(rawBody))
+
 	var d dto.UpdatePositionDTO
 	if err := ctx.Bind(&d); err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверные данные", err, nil), c.logger)
@@ -47,7 +59,8 @@ func (c *PositionController) Update(ctx echo.Context) error {
 	if err := ctx.Validate(&d); err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
-	result, err := c.service.Update(ctx.Request().Context(), id, d)
+
+	result, err := c.service.Update(ctx.Request().Context(), id, d, rawBody)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
@@ -55,7 +68,12 @@ func (c *PositionController) Update(ctx echo.Context) error {
 }
 
 func (c *PositionController) Delete(ctx echo.Context) error {
-	id, _ := strconv.Atoi(ctx.Param("id"))
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		c.logger.Error("Delete: неверный формат ID", zap.String("id", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID", err, nil), c.logger)
+	}
+
 	if err := c.service.Delete(ctx.Request().Context(), id); err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
@@ -63,7 +81,12 @@ func (c *PositionController) Delete(ctx echo.Context) error {
 }
 
 func (c *PositionController) GetByID(ctx echo.Context) error {
-	id, _ := strconv.Atoi(ctx.Param("id"))
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		c.logger.Error("GetByID: неверный формат ID", zap.String("id", ctx.Param("id")), zap.Error(err))
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID", err, nil), c.logger)
+	}
+
 	result, err := c.service.GetByID(ctx.Request().Context(), id)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
@@ -73,9 +96,25 @@ func (c *PositionController) GetByID(ctx echo.Context) error {
 
 func (c *PositionController) GetAll(ctx echo.Context) error {
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
-	result, err := c.service.GetAll(ctx.Request().Context(), uint64(filter.Limit), uint64(filter.Offset), filter.Search)
+	paginatedResult, err := c.service.GetAll(ctx.Request().Context(), filter)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
-	return utils.SuccessResponse(ctx, result.List, "Список должностей получен", http.StatusOK, result.Pagination.TotalCount)
+
+	return utils.SuccessResponse(
+		ctx,
+		paginatedResult.List,
+		"Список должностей получен",
+		http.StatusOK,
+		paginatedResult.Pagination.TotalCount,
+	)
+}
+
+func (c *PositionController) GetTypes(ctx echo.Context) error {
+	result, err := c.service.GetTypes(ctx.Request().Context())
+	if err != nil {
+		return utils.ErrorResponse(ctx, err, c.logger)
+	}
+
+	return utils.SuccessResponse(ctx, result, "Список типов должностей получен", http.StatusOK)
 }

@@ -45,27 +45,27 @@ func (s *AuthPermissionService) GetAllUserPermissions(ctx context.Context, userI
 	if err == nil {
 		var permissions []string
 		if err := json.Unmarshal([]byte(cachedData), &permissions); err == nil {
-			s.logger.Debug("Permissions loaded from cache", zap.Uint64("userID", userID))
+			s.logger.Debug("Привилегии из кэша", zap.Uint64("userID", userID))
 			return permissions, nil
 		}
-		s.logger.Warn("Failed to unmarshal cached permissions", zap.Error(err), zap.String("key", cacheKey))
+		s.logger.Warn("Не удалось распарсить привилегии из кэша", zap.Error(err), zap.String("key", cacheKey))
 	}
 
-	s.logger.Debug("Cache miss. Loading permissions from DB", zap.Uint64("userID", userID))
+	s.logger.Debug("Кэш не найден. Загружаем привилегии из БД", zap.Uint64("userID", userID))
 	permissions, err := s.permissionRepo.GetAllUserPermissionsNames(ctx, userID)
 	if err != nil {
-		s.logger.Error("Failed to get permissions from DB", zap.Uint64("userID", userID), zap.Error(err))
+		s.logger.Error("Не удалось получить привилегии из БД", zap.Uint64("userID", userID), zap.Error(err))
 		return nil, apperrors.ErrInternalServer
 	}
 
 	encoded, err := json.Marshal(permissions)
 	if err != nil {
-		s.logger.Error("Failed to marshal permissions", zap.Uint64("userID", userID), zap.Error(err))
+		s.logger.Error("Не удалось сериализовать привилегии", zap.Uint64("userID", userID), zap.Error(err))
 	} else {
 		if err := s.cacheRepo.Set(ctx, cacheKey, string(encoded), s.cacheTTL); err != nil {
-			s.logger.Error("Failed to cache permissions", zap.Uint64("userID", userID), zap.Error(err))
+			s.logger.Error("Не удалось сохранить привилегии в кэше", zap.Uint64("userID", userID), zap.Error(err))
 		} else {
-			s.logger.Debug("Permissions cached successfully", zap.Uint64("userID", userID))
+			s.logger.Debug("Привилегии успешно сохранены в кэше", zap.Uint64("userID", userID))
 		}
 	}
 
@@ -74,10 +74,11 @@ func (s *AuthPermissionService) GetAllUserPermissions(ctx context.Context, userI
 
 func (s *AuthPermissionService) InvalidateUserPermissionsCache(ctx context.Context, userID uint64) error {
 	cacheKey := fmt.Sprintf("auth:permissions:user:%d", userID)
+	s.logger.Info("Попытка удаления кэша по ключу.", zap.String("cacheKey", cacheKey))
 	if err := s.cacheRepo.Del(ctx, cacheKey); err != nil {
-		s.logger.Error("Failed to invalidate permission cache", zap.Uint64("userID", userID), zap.Error(err))
+		s.logger.Error("Не удалось удалить кэш привилегий", zap.Uint64("userID", userID), zap.Error(err))
 		return err
 	}
-	s.logger.Info("Permission cache invalidated successfully", zap.Uint64("userID", userID))
+	s.logger.Info("Кэш привилегий успешно удален", zap.Uint64("userID", userID))
 	return nil
 }

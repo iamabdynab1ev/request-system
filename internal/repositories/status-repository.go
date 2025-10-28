@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,40 +23,49 @@ import (
 )
 
 type dbStatus struct {
-	ID        uint64
-	IconSmall sql.NullString
-	IconBig   sql.NullString
+	ID        int
+	IconSmall sql.Null[string]
+	IconBig   sql.Null[string]
 	Name      string
-	Type      int
-	Code      sql.NullString
+	Type      string
+	Code      sql.Null[string]
 	CreatedAt time.Time
-	UpdatedAt sql.NullTime
+	UpdatedAt sql.Null[time.Time]
 }
 
 func (db *dbStatus) ToDTO() dto.StatusDTO {
+	// Конвертируем 'Type' из string в int. Эта логика остается.
+	typeInt, _ := strconv.Atoi(db.Type)
+
 	return dto.StatusDTO{
-		ID:        db.ID,
-		IconSmall: utils.NullStringToString(db.IconSmall),
-		IconBig:   utils.NullStringToString(db.IconBig),
+		ID:        uint64(db.ID),
+		IconSmall: utils.NullToValue(db.IconSmall),
+		IconBig:   utils.NullToValue(db.IconBig),
 		Name:      db.Name,
-		Type:      db.Type,
-		Code:      utils.NullStringToString(db.Code),
+		Type:      typeInt,
+		Code:      utils.NullToValue(db.Code),
 		CreatedAt: db.CreatedAt.Local().Format("2006-01-02 15:04:05"),
-		UpdatedAt: utils.NullTimeToEmptyString(db.UpdatedAt),
+		UpdatedAt: utils.FormatNullTime(db.UpdatedAt),
 	}
 }
 
 func (db *dbStatus) ToEntity() entities.Status {
-	var codePtr *string
-	if db.Code.Valid {
-		code := db.Code.String
-		codePtr = &code
+	typeInt, _ := strconv.Atoi(db.Type)
+	createdAtStr := db.CreatedAt.Local().Format("2006-01-02 15:04:05")
+	updatedAtStr := ""
+	if db.UpdatedAt.Valid {
+		updatedAtStr = db.UpdatedAt.V.Local().Format("2006-01-02 15:04:05")
 	}
 	return entities.Status{
-		ID:   int(db.ID),
-		Name: db.Name,
-		Code: codePtr,
-		Type: db.Type,
+		ID:        db.ID,
+		Name:      db.Name,
+		Code:      utils.NullToPtr(db.Code),
+		Type:      typeInt,
+		IconSmall: utils.NullToPtr(db.IconSmall), // <-- Важно убедиться, что эти поля есть в entities.Status
+		IconBig:   utils.NullToPtr(db.IconBig),   // <-- И они имеют тип *string
+
+		CreatedAt: createdAtStr, // <-- Передаем строку
+		UpdatedAt: updatedAtStr, // <-- Передаем строку
 	}
 }
 
@@ -72,7 +82,7 @@ type StatusRepositoryInterface interface {
 	UpdateStatus(ctx context.Context, id uint64, dto dto.UpdateStatusDTO, iconSmallPath *string, iconBigPath *string) (*dto.StatusDTO, error)
 	DeleteStatus(ctx context.Context, id uint64) error
 	FindByCodeInTx(ctx context.Context, tx pgx.Tx, code string) (*entities.Status, error)
-	FindStatusInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Status, error)
+	FindByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Status, error)
 	FindIDByCode(ctx context.Context, code string) (uint64, error)
 }
 
@@ -196,7 +206,7 @@ func (r *statusRepository) FindStatus(ctx context.Context, id uint64) (*entities
 	return &entity, nil
 }
 
-func (r *statusRepository) FindStatusInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Status, error) {
+func (r *statusRepository) FindByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Status, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", statusFields, statusTable)
 	row := tx.QueryRow(ctx, query, id)
 	dbRow, err := r.scanRow(row)

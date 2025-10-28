@@ -1,36 +1,55 @@
-// Файл: internal/repositories/position-repository.go
 package repositories
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
+	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
+	"request-system/pkg/types"
 )
 
 const (
 	positionTable  = "positions"
-	positionFields = "id, name, code, level, status_id, created_at, updated_at"
+	positionFields = `id, name, department_id, otdel_id, branch_id, office_id, "type", status_id, created_at, updated_at`
+)
+
+var (
+	positionAllowedFilterFields = map[string]string{
+		"status_id":     "status_id",
+		"department_id": "department_id",
+		"otdel_id":      "otdel_id",
+		"branch_id":     "branch_id",
+		"type":          "\"type\"", // Кавычки нужны, т.к. 'type' - ключевое слово
+	}
+	positionAllowedSortFields = map[string]bool{
+		"id":         true,
+		"name":       true,
+		"created_at": true,
+		"updated_at": true,
+	}
 )
 
 type PositionRepositoryInterface interface {
 	Create(ctx context.Context, tx pgx.Tx, p *entities.Position) (int, error)
 	Update(ctx context.Context, tx pgx.Tx, p *entities.Position) error
 	Delete(ctx context.Context, tx pgx.Tx, id int) error
-	FindByID(ctx context.Context, id int) (*entities.Position, error)
-	GetAll(ctx context.Context, limit, offset uint64, search string) ([]*entities.Position, uint64, error)
-	FindNextInHierarchy(ctx context.Context, tx pgx.Tx, currentLevel int, departmentID uint64) (*entities.Position, error)
+	FindByID(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Position, error)
+	GetAll(ctx context.Context, filter types.Filter) ([]*entities.Position, uint64, error)
+	FindByTypeAndOrg(ctx context.Context, tx pgx.Tx, posType string, depID *uint64, otdelID *uint64) ([]*entities.Position, error)
 }
 
-type positionRepository struct{ storage *pgxpool.Pool }
+type positionRepository struct {
+	storage *pgxpool.Pool
+}
 
 func NewPositionRepository(storage *pgxpool.Pool) PositionRepositoryInterface {
 	return &positionRepository{storage: storage}
@@ -38,41 +57,44 @@ func NewPositionRepository(storage *pgxpool.Pool) PositionRepositoryInterface {
 
 func (r *positionRepository) scanRow(row pgx.Row) (*entities.Position, error) {
 	var p entities.Position
-	var code sql.NullString
-	err := row.Scan(&p.Id, &p.Name, &code, &p.Level, &p.StatusID, &p.CreatedAt, &p.UpdatedAt)
+	err := row.Scan(
+		&p.ID, &p.Name, &p.DepartmentID, &p.OtdelID, &p.BranchID, &p.OfficeID,
+		&p.Type, &p.StatusID, &p.CreatedAt, &p.UpdatedAt,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, fmt.Errorf("ошибка сканирования positions: %w", err)
 	}
-	if code.Valid {
-		p.Code = &code.String
-	}
 	return &p, nil
 }
 
 func (r *positionRepository) Create(ctx context.Context, tx pgx.Tx, p *entities.Position) (int, error) {
-	query := `INSERT INTO positions (name, code, level, status_id) VALUES ($1, $2, $3, $4) RETURNING id`
-	var id int
-	err := tx.QueryRow(ctx, query, p.Name, p.Code, p.Level, p.StatusID).Scan(&id)
+	query := `INSERT INTO positions (name, department_id, otdel_id, branch_id, office_id, "type", status_id)
+			  VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`
+	var newID int
+	err := tx.QueryRow(ctx, query, p.Name, p.DepartmentID, p.OtdelID, p.BranchID, p.OfficeID, p.Type, p.StatusID).Scan(&newID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return 0, fmt.Errorf("должность с таким кодом уже существует: %w", apperrors.ErrConflict)
+			return 0, fmt.Errorf("должность с таким именем уже существует: %w", apperrors.ErrConflict)
 		}
 		return 0, fmt.Errorf("ошибка создания positions: %w", err)
 	}
-	return id, nil
+	return newID, nil
 }
 
 func (r *positionRepository) Update(ctx context.Context, tx pgx.Tx, p *entities.Position) error {
-	query := `UPDATE positions SET name = $1, code = $2, level = $3, status_id = $4, updated_at = NOW() WHERE id = $5`
-	result, err := tx.Exec(ctx, query, p.Name, p.Code, p.Level, p.StatusID, p.Id)
+	query := `UPDATE positions SET 
+				 name = $1, department_id = $2, otdel_id = $3, branch_id = $4,
+				 office_id = $5, "type" = $6, status_id = $7, updated_at = NOW() 
+			  WHERE id = $8`
+	result, err := tx.Exec(ctx, query, p.Name, p.DepartmentID, p.OtdelID, p.BranchID, p.OfficeID, p.Type, p.StatusID, p.ID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return fmt.Errorf("должность с таким кодом уже существует: %w", apperrors.ErrConflict)
+			return fmt.Errorf("должность с таким именем уже существует: %w", apperrors.ErrConflict)
 		}
 		return fmt.Errorf("ошибка обновления positions: %w", err)
 	}
@@ -98,42 +120,91 @@ func (r *positionRepository) Delete(ctx context.Context, tx pgx.Tx, id int) erro
 	return nil
 }
 
-func (r *positionRepository) FindByID(ctx context.Context, id int) (*entities.Position, error) {
+func (r *positionRepository) FindByID(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Position, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", positionFields, positionTable)
-	row := r.storage.QueryRow(ctx, query, id)
+	var querier interface {
+		QueryRow(context.Context, string, ...interface{}) pgx.Row
+	} = r.storage
+	if tx != nil {
+		querier = tx
+	}
+	row := querier.QueryRow(ctx, query, id)
 	return r.scanRow(row)
 }
 
-func (r *positionRepository) GetAll(ctx context.Context, limit, offset uint64, search string) ([]*entities.Position, uint64, error) {
-	// ... (эта функция очень похожа на GetAll из order_type_repository, можете скопировать или я могу прислать)
-	var total uint64
-	var args []interface{}
-	whereClause := ""
+func (r *positionRepository) GetAll(ctx context.Context, filter types.Filter) ([]*entities.Position, uint64, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
-	if search != "" {
-		whereClause = "WHERE name ILIKE $1 OR code ILIKE $1"
-		args = append(args, "%"+search+"%")
+	baseBuilder := psql.Select().From(positionTable)
+
+	// ФИЛЬТРАЦИЯ
+	if len(filter.Filter) > 0 {
+		for key, value := range filter.Filter {
+			if dbColumn, ok := positionAllowedFilterFields[key]; ok {
+				if items, ok := value.(string); ok && strings.Contains(items, ",") {
+					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: strings.Split(items, ",")})
+				} else {
+					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: value})
+				}
+			}
+		}
 	}
 
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", positionTable, whereClause)
-	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+	// ПОИСК
+	if filter.Search != "" {
+		baseBuilder = baseBuilder.Where(sq.ILike{"name": "%" + filter.Search + "%"})
+	}
+
+	// ПОДСЧЕТ
+	countBuilder := baseBuilder.Columns("COUNT(id)")
+	countQuery, countArgs, err := countBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
+	var total uint64
+	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	if total == 0 {
 		return []*entities.Position{}, 0, nil
 	}
 
-	queryArgs := append(args, limit, offset)
-	query := fmt.Sprintf("SELECT %s FROM %s %s ORDER BY level DESC, name ASC LIMIT $%d OFFSET $%d",
-		positionFields, positionTable, whereClause, len(args)+1, len(args)+2)
+	// ВЫБОРКА + СОРТИРОВКА + ПАГИНАЦИЯ
+	selectBuilder := baseBuilder.Columns(positionFields)
 
-	rows, err := r.storage.Query(ctx, query, queryArgs...)
+	// СОРТИРОВКА
+	if len(filter.Sort) > 0 {
+		for field, direction := range filter.Sort {
+			if _, ok := positionAllowedSortFields[field]; ok {
+				safeDirection := "ASC"
+				if strings.ToUpper(direction) == "DESC" {
+					safeDirection = "DESC"
+				}
+				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("%s %s", field, safeDirection))
+			}
+		}
+	} else {
+		selectBuilder = selectBuilder.OrderBy("id DESC")
+	}
+
+	// ПАГИНАЦИЯ
+	if filter.WithPagination {
+		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
+	}
+
+	// ВЫПОЛНЕНИЕ
+	query, args, err := selectBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 
-	positions := make([]*entities.Position, 0, limit)
+	positions := make([]*entities.Position, 0)
 	for rows.Next() {
 		pos, err := r.scanRow(rows)
 		if err != nil {
@@ -141,23 +212,49 @@ func (r *positionRepository) GetAll(ctx context.Context, limit, offset uint64, s
 		}
 		positions = append(positions, pos)
 	}
-	if err = rows.Err(); err != nil {
-		return nil, 0, err
-	}
-	return positions, total, nil
+
+	return positions, total, rows.Err()
 }
 
-func (r *positionRepository) FindNextInHierarchy(ctx context.Context, tx pgx.Tx, currentLevel int, departmentID uint64) (*entities.Position, error) {
-	query := `
-        SELECT p.id, p.name, p.code, p.level, p.status_id, p.created_at, p.updated_at
-        FROM positions p
-        WHERE p.level < $1 AND p.status_id = 2 AND EXISTS ( -- Ищем только активные должности
-            SELECT 1 FROM users u 
-            WHERE u.position_id = p.id AND u.department_id = $2 AND u.deleted_at IS NULL
-        )
-        ORDER BY p.level DESC
-        LIMIT 1
-    `
-	row := tx.QueryRow(ctx, query, currentLevel, departmentID)
-	return r.scanRow(row) // Ваш scanRow уже возвращает *entities.Position, это правильно
+func (r *positionRepository) FindByTypeAndOrg(ctx context.Context, tx pgx.Tx, posType string, depID *uint64, otdelID *uint64) ([]*entities.Position, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	builder := psql.Select(positionFields).
+		From(positionTable).
+		Where(sq.Eq{"\"type\"": posType}).
+		OrderBy("id")
+
+	if depID != nil {
+		builder = builder.Where(sq.Eq{"department_id": *depID})
+	}
+	if otdelID != nil {
+		builder = builder.Where(sq.Eq{"otdel_id": *otdelID})
+	}
+
+	query, args, err := builder.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("ошибка сборки запроса FindByTypeAndOrg: %w", err)
+	}
+
+	var querier interface {
+		Query(context.Context, string, ...interface{}) (pgx.Rows, error)
+	} = r.storage
+	if tx != nil {
+		querier = tx
+	}
+
+	rows, err := querier.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var positions []*entities.Position
+	for rows.Next() {
+		pos, err := r.scanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		positions = append(positions, pos)
+	}
+	return positions, rows.Err()
 }

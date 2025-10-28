@@ -29,5 +29,7 @@ func runPositionRouter(
 		positions.GET("/:id", posCtrl.GetByID, authMW.AuthorizeAny("position:view"))
 		positions.PUT("/:id", posCtrl.Update, authMW.AuthorizeAny("position:update"))
 		positions.DELETE("/:id", posCtrl.Delete, authMW.AuthorizeAny("position:delete"))
+
+		positions.GET("/types", posCtrl.GetTypes, authMW.AuthorizeAny("position:view"))
 	}
 }

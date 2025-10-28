@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"errors"
+	"net/http"
 
 	"request-system/internal/authz"
 	"request-system/internal/dto"
@@ -11,6 +13,7 @@ import (
 	"request-system/pkg/types"
 	"request-system/pkg/utils"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 )
 
@@ -25,12 +28,23 @@ type DepartmentServiceInterface interface {
 
 type DepartmentService struct {
 	departmentRepository repositories.DepartmentRepositoryInterface
+	otdelRepository      repositories.OtdelRepositoryInterface
 	userRepository       repositories.UserRepositoryInterface
 	logger               *zap.Logger
 }
 
-func NewDepartmentService(depRepo repositories.DepartmentRepositoryInterface, userRepo repositories.UserRepositoryInterface, logger *zap.Logger) DepartmentServiceInterface {
-	return &DepartmentService{departmentRepository: depRepo, userRepository: userRepo, logger: logger}
+func NewDepartmentService(
+	depRepo repositories.DepartmentRepositoryInterface,
+	otdelRepo repositories.OtdelRepositoryInterface,
+	userRepo repositories.UserRepositoryInterface,
+	logger *zap.Logger,
+) DepartmentServiceInterface {
+	return &DepartmentService{
+		departmentRepository: depRepo,
+		otdelRepository:      otdelRepo,
+		userRepository:       userRepo,
+		logger:               logger,
+	}
 }
 
 func (s *DepartmentService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
@@ -146,7 +160,24 @@ func (s *DepartmentService) DeleteDepartment(ctx context.Context, id uint64) err
 	if !authz.CanDo(authz.DepartmentsDelete, *authCtx) {
 		return apperrors.ErrForbidden
 	}
-	return s.departmentRepository.DeleteDepartment(ctx, id)
+
+	err = s.departmentRepository.DeleteDepartment(ctx, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return apperrors.NewHttpError(
+				http.StatusConflict, // 409 Conflict - самый подходящий статус
+				"Невозможно удалить департамент, так как он используется в других частях системы (например, в отделах или заявках).",
+				nil,
+				map[string]interface{}{"department_id": id},
+			)
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 func (s *DepartmentService) GetDepartmentStats(ctx context.Context, filter types.Filter) ([]dto.DepartmentStatsDTO, uint64, error) {

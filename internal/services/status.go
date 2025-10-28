@@ -104,7 +104,6 @@ func (s *StatusService) GetStatuses(ctx context.Context, filter types.Filter) (*
 }
 
 func (s *StatusService) FindStatus(ctx context.Context, id uint64) (*dto.StatusDTO, error) {
-	// <<<--- ИСПРАВЛЕНИЕ: Вызываем метод, возвращающий сущность, и конвертируем в DTO ---
 	entity, err := s.repo.FindStatus(ctx, id)
 	if err != nil {
 		return nil, err
@@ -177,8 +176,7 @@ func (s *StatusService) CreateStatus(
 			)
 		}
 
-		// И ИЗМЕНЕНИЕ ЗДЕСЬ
-		rules, _ := config.UploadContexts["icon_big"]
+		rules := config.UploadContexts["icon_big"]
 		path, err := s.fileStorage.Save(file, iconBigHeader.Filename, rules.PathPrefix)
 		if err != nil {
 			s.logger.Error("Не удалось сохранить big icon", zap.Error(err))
@@ -205,11 +203,11 @@ func (s *StatusService) UpdateStatus(ctx context.Context, id uint64, updateDTO d
 	if iconSmallHeader != nil {
 		file, _ := iconSmallHeader.Open()
 		defer file.Close()
-		// ИЗМЕНЕНИЕ ЗДЕСЬ
+
 		if err := utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
 			return nil, err
 		}
-		// И ИЗМЕНЕНИЕ ЗДЕСЬ
+
 		rules, _ := config.UploadContexts["icon_small"]
 		path, err := s.fileStorage.Save(file, iconSmallHeader.Filename, rules.PathPrefix)
 		if err != nil {
@@ -222,11 +220,11 @@ func (s *StatusService) UpdateStatus(ctx context.Context, id uint64, updateDTO d
 	if iconBigHeader != nil {
 		file, _ := iconBigHeader.Open()
 		defer file.Close()
-		// ИЗМЕНЕНИЕ ЗДЕСЬ
+
 		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
 			return nil, err
 		}
-		// И ИЗМЕНЕНИЕ ЗДЕСЬ
+
 		rules, _ := config.UploadContexts["icon_big"]
 		path, err := s.fileStorage.Save(file, iconBigHeader.Filename, rules.PathPrefix)
 		if err != nil {
