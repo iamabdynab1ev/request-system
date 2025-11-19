@@ -17,11 +17,12 @@ func runBranchRouter(
 	secureGroup *echo.Group,
 	dbConn *pgxpool.Pool,
 	logger *zap.Logger,
+	txManager repositories.TxManagerInterface,
 	authMW *middleware.AuthMiddleware,
 ) {
 	branchRepository := repositories.NewBranchRepository(dbConn, logger)
 	userRepository := repositories.NewUserRepository(dbConn, logger)
-	branchService := services.NewBranchService(branchRepository, userRepository, logger)
+	branchService := services.NewBranchService(txManager, branchRepository, userRepository, logger)
 
 	branchCtrl := controllers.NewBranchController(branchService, logger)
 

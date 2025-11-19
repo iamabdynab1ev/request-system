@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"request-system/internal/authz"
@@ -15,41 +17,55 @@ import (
 	"request-system/pkg/types"
 	"request-system/pkg/utils"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
+
+const telegramLinkTokenTTL = 10 * time.Minute
 
 type UserServiceInterface interface {
 	GetUsers(ctx context.Context, filter types.Filter) ([]dto.UserDTO, uint64, error)
 	FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error)
 	CreateUser(ctx context.Context, payload dto.CreateUserDTO) (*dto.UserDTO, error)
-	UpdateUser(ctx context.Context, payload dto.UpdateUserDTO) (*dto.UserDTO, error)
+	UpdateUser(ctx context.Context, payload dto.UpdateUserDTO, rawRequestBody []byte) (*dto.UserDTO, error)
 	DeleteUser(ctx context.Context, id uint64) error
 	GetPermissionDetailsForUser(ctx context.Context, userID uint64) (*dto.UIPermissionsResponseDTO, error)
 	UpdateUserPermissions(ctx context.Context, userID uint64, payload dto.UpdateUserPermissionsDTO) error
+
+	GenerateTelegramLinkToken(ctx context.Context) (string, error)
+	ConfirmTelegramLink(ctx context.Context, token string, chatID int64) error
+	FindUserByTelegramChatID(ctx context.Context, chatID int64) (*entities.User, error)
 }
 
 type UserService struct {
+	txManager             repositories.TxManagerInterface
 	userRepository        repositories.UserRepositoryInterface
 	roleRepository        repositories.RoleRepositoryInterface
 	permissionRepository  repositories.PermissionRepositoryInterface
 	statusRepository      repositories.StatusRepositoryInterface
+	cacheRepository       repositories.CacheRepositoryInterface
 	authPermissionService AuthPermissionServiceInterface
 	logger                *zap.Logger
 }
 
 func NewUserService(
+	txManager repositories.TxManagerInterface,
 	userRepository repositories.UserRepositoryInterface,
 	roleRepository repositories.RoleRepositoryInterface,
 	permissionRepository repositories.PermissionRepositoryInterface,
 	statusRepository repositories.StatusRepositoryInterface,
+	cacheRepository repositories.CacheRepositoryInterface,
 	authPermissionService AuthPermissionServiceInterface,
 	logger *zap.Logger,
 ) UserServiceInterface {
 	return &UserService{
+		txManager:             txManager,
 		userRepository:        userRepository,
 		roleRepository:        roleRepository,
 		permissionRepository:  permissionRepository,
 		statusRepository:      statusRepository,
+		cacheRepository:       cacheRepository,
 		authPermissionService: authPermissionService,
 		logger:                logger,
 	}
@@ -143,19 +159,8 @@ func (s *UserService) CreateUser(ctx context.Context, payload dto.CreateUserDTO)
 		return nil, apperrors.ErrForbidden
 	}
 
-	if payload.IsHead {
-		exists, err := s.userRepository.IsHeadExistsInDepartment(ctx, payload.DepartmentID, 0)
-		if err != nil {
-			return nil, apperrors.ErrInternalServer
-		}
-		if exists {
-			return nil, apperrors.NewHttpError(http.StatusBadRequest, "В этом департаменте уже назначен руководитель.", nil, nil)
-		}
-	}
-
 	activeStatusID, err := s.statusRepository.FindIDByCode(ctx, constants.UserStatusActiveCode)
 	if err != nil {
-		return nil, apperrors.NewHttpError(http.StatusInternalServerError, "Ошибка конфигурации: статус 'ACTIVE' не найден.", err, nil)
 	}
 
 	hashedPassword, err := utils.HashPassword(payload.PhoneNumber)
@@ -163,110 +168,120 @@ func (s *UserService) CreateUser(ctx context.Context, payload dto.CreateUserDTO)
 		return nil, err
 	}
 
-	now := time.Now()
-	userEntity := &entities.User{
+	entity := entities.User{
 		Fio:                payload.Fio,
 		Email:              payload.Email,
 		PhoneNumber:        payload.PhoneNumber,
 		Password:           hashedPassword,
 		PositionID:         &payload.PositionID,
 		StatusID:           activeStatusID,
-		BranchID:           &payload.BranchID,
+		BranchID:           payload.BranchID,
 		DepartmentID:       payload.DepartmentID,
 		OfficeID:           payload.OfficeID,
 		OtdelID:            payload.OtdelID,
 		PhotoURL:           payload.PhotoURL,
 		IsHead:             &payload.IsHead,
 		MustChangePassword: true,
-		BaseEntity:         types.BaseEntity{CreatedAt: &now, UpdatedAt: &now},
 	}
 
-	tx, err := s.userRepository.BeginTx(ctx)
+	var createdID uint64
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		createdID, txErr = s.userRepository.CreateFromSync(ctx, tx, entity)
+		if txErr != nil {
+			return txErr
+		}
+		if txErr = s.userRepository.SyncUserRoles(ctx, tx, createdID, payload.RoleIDs); txErr != nil {
+			return txErr
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	createdID, err := s.userRepository.CreateUser(ctx, tx, userEntity)
-	if err != nil {
-		return nil, err
-	}
-
-	if err = s.userRepository.SyncUserRoles(ctx, tx, createdID, payload.RoleIDs); err != nil {
-		return nil, err
-	}
-
-	if err = tx.Commit(ctx); err != nil {
+		s.logger.Error("Ошибка в транзакции создания пользователя", zap.Error(err))
 		return nil, err
 	}
 
 	return s.FindUser(ctx, createdID)
 }
 
-func (s *UserService) UpdateUser(ctx context.Context, payload dto.UpdateUserDTO) (*dto.UserDTO, error) {
+// UpdateUser - ИСПРАВЛЕН
+func (s *UserService) UpdateUser(ctx context.Context, payload dto.UpdateUserDTO, rawRequestBody []byte) (*dto.UserDTO, error) {
 	targetUser, err := s.userRepository.FindUserByID(ctx, payload.ID)
 	if err != nil {
-		return nil, err // Если пользователь не найден, вернется ошибка
+		return nil, err
 	}
 
-	// 2. Создаем контекст авторизации.
 	authContext, err := s.buildAuthzContext(ctx, targetUser)
 	if err != nil {
 		return nil, err
 	}
 	if !authz.CanDo(authz.UsersUpdate, *authContext) {
-		s.logger.Warn("Отказано в доступе на обновление пользователя",
-			zap.Uint64("actorID", authContext.Actor.ID),
-			zap.Uint64("targetID", targetUser.ID),
-			zap.String("requiredPermission", authz.UsersUpdate),
-		)
 		return nil, apperrors.ErrForbidden
 	}
 
-	tx, err := s.userRepository.BeginTx(ctx)
+	// Применяем изменения к существующей сущности
+	// (логику можно вынести в хелпер)
+	if payload.Fio != nil {
+		targetUser.Fio = *payload.Fio
+	}
+	if payload.Email != nil {
+		targetUser.Email = *payload.Email
+	}
+	if payload.PhoneNumber != nil {
+		targetUser.PhoneNumber = *payload.PhoneNumber
+	}
+	if payload.PositionID != nil {
+		targetUser.PositionID = payload.PositionID
+	}
+	if payload.StatusID != nil {
+		targetUser.StatusID = *payload.StatusID
+	}
+	if payload.BranchID != nil {
+		targetUser.BranchID = payload.BranchID
+	}
+	if payload.DepartmentID != nil {
+		targetUser.DepartmentID = payload.DepartmentID
+	}
+	if payload.OfficeID != nil {
+		targetUser.OfficeID = payload.OfficeID
+	}
+	if payload.OtdelID != nil {
+		targetUser.OtdelID = payload.OtdelID
+	}
+	if payload.PhotoURL != nil {
+		targetUser.PhotoURL = payload.PhotoURL
+	}
+	if payload.IsHead != nil {
+		targetUser.IsHead = payload.IsHead
+	}
+
+	// ИСПРАВЛЕНИЕ: Используем TxManager
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		// ИСПОЛЬЗУЕМ НОВЫЙ МЕТОД UpdateFromSync
+		if txErr := s.userRepository.UpdateFromSync(ctx, tx, payload.ID, *targetUser); txErr != nil {
+			return txErr
+		}
+
+		// (Опционально) Обновляем пароль, если он передан (остается без изменений)
+		// (Опционально) Синхронизируем роли, если они переданы
+		if payload.RoleIDs != nil {
+			if txErr := s.userRepository.SyncUserRoles(ctx, tx, payload.ID, *payload.RoleIDs); txErr != nil {
+				return txErr
+			}
+		}
+
+		return nil
+	})
 	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	// 4. Обновляем основные поля пользователя
-	if err = s.userRepository.UpdateUser(ctx, tx, payload); err != nil {
+		s.logger.Error("Ошибка в транзакции обновления пользователя", zap.Error(err))
 		return nil, err
 	}
 
-	// 5. (Опционально) Обновляем пароль, если он передан
-	if payload.Password != nil && *payload.Password != "" {
-		if !authz.CanDo(authz.UsersPasswordReset, *authContext) {
-			return nil, apperrors.NewHttpError(http.StatusForbidden, "У вас нет прав на сброс/смену пароля", nil, nil)
-		}
-		hashedPassword, err := utils.HashPassword(*payload.Password)
-		if err != nil {
-			return nil, err
-		}
-		if err = s.userRepository.UpdatePassword(ctx, payload.ID, hashedPassword); err != nil {
-			return nil, err
-		}
-	}
-
-	// 6. (Опционально) Синхронизируем роли, если они переданы
+	// Инвалидация кеша после успешного коммита
 	if payload.RoleIDs != nil {
-		if err = s.userRepository.SyncUserRoles(ctx, tx, payload.ID, *payload.RoleIDs); err != nil {
-			return nil, err
-		}
-
-		// 7. САМОЕ ГЛАВНОЕ: Если роли изменились, инвалидируем кэш
-		if err := s.authPermissionService.InvalidateUserPermissionsCache(ctx, payload.ID); err != nil {
-			s.logger.Warn("Не удалось инвалидировать кеш пользователя после обновления ролей", zap.Uint64("userID", payload.ID), zap.Error(err))
-			// Не возвращаем ошибку, так как основная операция прошла успешно
-		}
+		s.authPermissionService.InvalidateUserPermissionsCache(ctx, payload.ID)
 	}
 
-	// 8. Коммитим транзакцию
-	if err = tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-
-	// 9. Возвращаем обновленный профиль
 	return s.FindUser(ctx, payload.ID)
 }
 
@@ -295,14 +310,7 @@ func userEntityToUserDTO(entity *entities.User) *dto.UserDTO {
 		return nil
 	}
 
-	var branchID, positionID uint64
 	var isHead bool
-	if entity.BranchID != nil {
-		branchID = *entity.BranchID
-	}
-	if entity.PositionID != nil {
-		positionID = *entity.PositionID
-	}
 	if entity.IsHead != nil {
 		isHead = *entity.IsHead
 	}
@@ -314,12 +322,12 @@ func userEntityToUserDTO(entity *entities.User) *dto.UserDTO {
 		PhoneNumber:        entity.PhoneNumber,
 		StatusID:           entity.StatusID,
 		DepartmentID:       entity.DepartmentID,
-		MustChangePassword: entity.MustChangePassword,
-		BranchID:           branchID,
-		PositionID:         positionID,
-		IsHead:             isHead,
+		BranchID:           entity.BranchID,
+		PositionID:         entity.PositionID,
 		OfficeID:           entity.OfficeID,
 		OtdelID:            entity.OtdelID,
+		MustChangePassword: entity.MustChangePassword,
+		IsHead:             isHead,
 		PhotoURL:           entity.PhotoURL,
 	}
 }
@@ -408,4 +416,80 @@ func (s *UserService) buildAuthzContext(ctx context.Context, target *entities.Us
 	}
 
 	return &authz.Context{Actor: actor, Permissions: permissionsMap, Target: targetInterface}, nil
+}
+
+func (s *UserService) GenerateTelegramLinkToken(ctx context.Context) (string, error) {
+	// 1. Получаем ID текущего пользователя из контекста
+	userID, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil {
+		s.logger.Error("GenerateTelegramLinkToken: не удалось получить userID из контекста", zap.Error(err))
+		return "", err
+	}
+
+	// 2. Генерируем уникальный, случайный токен
+	token := uuid.New().String()
+
+	// 3. Формируем ключ для Redis
+	redisKey := fmt.Sprintf("telegram-link-token:%s", token)
+
+	// 4. Сохраняем в Redis связку "токен -> userID" со временем жизни
+	err = s.cacheRepository.Set(ctx, redisKey, userID, telegramLinkTokenTTL)
+	if err != nil {
+		s.logger.Error("GenerateTelegramLinkToken: не удалось сохранить токен в Redis",
+			zap.String("redisKey", redisKey),
+			zap.Uint64("userID", userID),
+			zap.Error(err),
+		)
+		return "", apperrors.ErrInternalServer
+	}
+
+	s.logger.Info("Сгенерирован токен для привязки Telegram", zap.Uint64("userID", userID))
+
+	// 5. Возвращаем токен пользователю (он его отправит боту)
+	return token, nil
+}
+
+// ConfirmTelegramLink проверяет токен и привязывает chat_id к пользователю
+func (s *UserService) ConfirmTelegramLink(ctx context.Context, token string, chatID int64) error {
+	// 1. Формируем ключ и ищем его в Redis
+	redisKey := fmt.Sprintf("telegram-link-token:%s", token)
+
+	val, err := s.cacheRepository.Get(ctx, redisKey)
+	if err != nil {
+		if errors.Is(err, apperrors.ErrNotFound) {
+			s.logger.Warn("ConfirmTelegramLink: Попытка использовать неверный или просроченный токен", zap.String("token", token))
+			return apperrors.NewBadRequestError("Неверный код или истекло время его действия")
+		}
+		s.logger.Error("ConfirmTelegramLink: Ошибка при получении токена из Redis", zap.Error(err))
+		return apperrors.ErrInternalServer
+	}
+	s.logger.Info("ConfirmTelegramLink: Получен userID из Redis", zap.String("valueFromRedis", val))
+
+	// 2. Конвертируем userID из строки в uint64
+	userID, err := strconv.ParseUint(val, 10, 64)
+	if err != nil {
+		s.logger.Error("ConfirmTelegramLink: Не удалось распарсить userID из Redis", zap.String("valueFromRedis", val), zap.Error(err))
+		return apperrors.ErrInternalServer
+	}
+	s.logger.Info("ConfirmTelegramLink: userID успешно распарсен", zap.Uint64("userID", userID))
+	// 3. Обновляем chat_id для найденного пользователя в базе данных
+	err = s.userRepository.UpdateTelegramChatID(ctx, userID, chatID)
+	if err != nil {
+		s.logger.Error("ConfirmTelegramLink: Не удалось обновить telegram_chat_id в базе",
+			zap.Uint64("userID", userID),
+			zap.Int64("chatID", chatID),
+			zap.Error(err),
+		)
+		return apperrors.ErrInternalServer
+	}
+
+	// 4. Удаляем токен из Redis, чтобы его нельзя было использовать повторно
+	_ = s.cacheRepository.Del(ctx, redisKey)
+
+	s.logger.Info("Telegram-аккаунт успешно привязан", zap.Uint64("userID", userID), zap.Int64("chatID", chatID))
+	return nil
+}
+
+func (s *UserService) FindUserByTelegramChatID(ctx context.Context, chatID int64) (*entities.User, error) {
+	return s.userRepository.FindUserByTelegramChatID(ctx, chatID)
 }

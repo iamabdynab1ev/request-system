@@ -15,11 +15,12 @@ type TxManagerInterface interface {
 
 type TxManager struct {
 	pool   *pgxpool.Pool
-	logger *zap.Logger // Add this
+	logger *zap.Logger
 }
 
-func NewTxManager(pool *pgxpool.Pool) TxManagerInterface {
-	return &TxManager{pool: pool}
+// --- ИЗМЕНЕНИЕ 1: ДОБАВЛЯЕМ ЛОГГЕР В КОНСТРУКТОР ---
+func NewTxManager(pool *pgxpool.Pool, logger *zap.Logger) TxManagerInterface {
+	return &TxManager{pool: pool, logger: logger}
 }
 
 func (m *TxManager) RunInTransaction(ctx context.Context, fn func(tx pgx.Tx) error) (err error) {
@@ -30,25 +31,20 @@ func (m *TxManager) RunInTransaction(ctx context.Context, fn func(tx pgx.Tx) err
 
 	defer func() {
 		if p := recover(); p != nil {
-			// Log panic details for debugging
-			// Assuming logger injected; if not, add to NewTxManager and struct
-			// m.logger.Error("Panic in transaction, rolling back", zap.Any("panic", p))
+
+			m.logger.Error("Паника в транзакции, откат", zap.Any("panic", p))
 			_ = tx.Rollback(ctx)
-			panic(p) // Re-panic to propagate
+			panic(p)
 		} else if err != nil {
-			// fn returned err: rollback (already doomed if DB error)
+
+			m.logger.Warn("Транзакция отменена из-за ошибки", zap.Error(err))
 			_ = tx.Rollback(ctx)
-			// m.logger.Warn("Transaction rolled back due to fn error", zap.Error(err))
 		} else {
-			// Attempt commit
 			if commitErr := tx.Commit(ctx); commitErr != nil {
-				// This is the "unexpected rollback" case—log specifically
-				// m.logger.Error("Transaction commit failed (likely doomed tx)", zap.Error(commitErr))
+				m.logger.Error("Ошибка при коммите транзакции", zap.Error(commitErr))
 				err = fmt.Errorf("ошибка при коммите транзакции: %w", commitErr)
-				// Note: Original cause should be in err from fn; if not, it's ignored upstream
 			} else {
-				// Success
-				// m.logger.Debug("Transaction committed successfully")
+				m.logger.Debug("Транзакция успешно закоммичена")
 			}
 		}
 	}()

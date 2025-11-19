@@ -2,7 +2,7 @@ package controllers
 
 import (
 	"bytes"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -46,11 +46,11 @@ func (c *PositionController) Update(ctx echo.Context) error {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат ID", err, nil), c.logger)
 	}
 
-	rawBody, err := ioutil.ReadAll(ctx.Request().Body)
+	rawBody, err := io.ReadAll(ctx.Request().Body)
 	if err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Не удалось прочитать тело запроса", err, nil), c.logger)
 	}
-	ctx.Request().Body = ioutil.NopCloser(bytes.NewBuffer(rawBody))
+	ctx.Request().Body = io.NopCloser(bytes.NewBuffer(rawBody))
 
 	var d dto.UpdatePositionDTO
 	if err := ctx.Bind(&d); err != nil {

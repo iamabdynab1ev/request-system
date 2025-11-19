@@ -9,15 +9,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aarondl/null/v8"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
+	sq "github.com/Masterminds/squirrel"
+
 	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/entities"
+	"request-system/internal/events"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
+	"request-system/pkg/eventbus"
 	"request-system/pkg/filestorage"
 	"request-system/pkg/types"
 	"request-system/pkg/utils"
@@ -38,42 +43,76 @@ var ValidationRegistry = map[string][]ValidationRule{
 
 type OrderServiceInterface interface {
 	CreateOrder(ctx context.Context, createDTO dto.CreateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error)
-	GetOrders(ctx context.Context, filter types.Filter) (*dto.OrderListResponseDTO, error)
+	GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool) (*dto.OrderListResponseDTO, error)
 	FindOrderByID(ctx context.Context, orderID uint64) (*dto.OrderResponseDTO, error)
-	UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader, rawRequestBody []byte) (*dto.OrderResponseDTO, error)
+	UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error)
 	DeleteOrder(ctx context.Context, orderID uint64) error
 	GetStatusByID(ctx context.Context, id uint64) (*entities.Status, error)
 	GetPriorityByID(ctx context.Context, id uint64) (*entities.Priority, error)
 	GetValidationConfigForOrderType(ctx context.Context, orderTypeID uint64) (map[string]interface{}, error)
+	FindOrderByIDForTelegram(ctx context.Context, userID uint64, orderID uint64) (*entities.Order, error)
 }
 
 type OrderService struct {
-	txManager     repositories.TxManagerInterface
-	orderRepo     repositories.OrderRepositoryInterface
-	userRepo      repositories.UserRepositoryInterface
-	statusRepo    repositories.StatusRepositoryInterface
-	priorityRepo  repositories.PriorityRepositoryInterface
-	attachRepo    repositories.AttachmentRepositoryInterface
-	ruleEngine    RuleEngineServiceInterface
-	historyRepo   repositories.OrderHistoryRepositoryInterface
-	orderTypeRepo repositories.OrderTypeRepositoryInterface
-	fileStorage   filestorage.FileStorageInterface
-	logger        *zap.Logger
+	txManager             repositories.TxManagerInterface
+	orderRepo             repositories.OrderRepositoryInterface
+	userRepo              repositories.UserRepositoryInterface
+	statusRepo            repositories.StatusRepositoryInterface
+	priorityRepo          repositories.PriorityRepositoryInterface
+	attachRepo            repositories.AttachmentRepositoryInterface
+	ruleEngine            RuleEngineServiceInterface
+	historyRepo           repositories.OrderHistoryRepositoryInterface
+	orderTypeRepo         repositories.OrderTypeRepositoryInterface
+	fileStorage           filestorage.FileStorageInterface
+	eventBus              *eventbus.Bus
+	logger                *zap.Logger
+	authPermissionService AuthPermissionServiceInterface
 }
 
 func NewOrderService(
-	txManager repositories.TxManagerInterface, orderRepo repositories.OrderRepositoryInterface,
-	userRepo repositories.UserRepositoryInterface, statusRepo repositories.StatusRepositoryInterface,
-	priorityRepo repositories.PriorityRepositoryInterface, attachRepo repositories.AttachmentRepositoryInterface,
-	ruleEngine RuleEngineServiceInterface, historyRepo repositories.OrderHistoryRepositoryInterface,
-	fileStorage filestorage.FileStorageInterface, logger *zap.Logger,
+	txManager repositories.TxManagerInterface,
+	orderRepo repositories.OrderRepositoryInterface,
+	userRepo repositories.UserRepositoryInterface,
+	statusRepo repositories.StatusRepositoryInterface,
+	priorityRepo repositories.PriorityRepositoryInterface,
+	attachRepo repositories.AttachmentRepositoryInterface,
+	ruleEngine RuleEngineServiceInterface,
+	historyRepo repositories.OrderHistoryRepositoryInterface,
+	fileStorage filestorage.FileStorageInterface,
+	eventBus *eventbus.Bus,
+	logger *zap.Logger,
 	orderTypeRepo repositories.OrderTypeRepositoryInterface,
+	authPermissionService AuthPermissionServiceInterface,
 ) OrderServiceInterface {
 	return &OrderService{
-		txManager: txManager, orderRepo: orderRepo, userRepo: userRepo, statusRepo: statusRepo,
-		priorityRepo: priorityRepo, attachRepo: attachRepo, ruleEngine: ruleEngine, historyRepo: historyRepo,
-		fileStorage: fileStorage, logger: logger, orderTypeRepo: orderTypeRepo,
+		txManager:             txManager,
+		orderRepo:             orderRepo,
+		userRepo:              userRepo,
+		statusRepo:            statusRepo,
+		priorityRepo:          priorityRepo,
+		attachRepo:            attachRepo,
+		ruleEngine:            ruleEngine,
+		historyRepo:           historyRepo,
+		fileStorage:           fileStorage,
+		eventBus:              eventBus,
+		logger:                logger,
+		orderTypeRepo:         orderTypeRepo,
+		authPermissionService: authPermissionService,
 	}
+}
+
+func (s *OrderService) addHistoryAndPublish(ctx context.Context, tx pgx.Tx, item *repositories.OrderHistoryItem, order entities.Order, actor *entities.User) error {
+	if err := s.historyRepo.CreateInTx(ctx, tx, item); err != nil {
+		s.logger.Error("Не удалось создать запись в истории", zap.Error(err),
+			zap.Uint64("orderID", item.OrderID), zap.String("eventType", item.EventType))
+		return err
+	}
+	s.eventBus.Publish(ctx, events.OrderHistoryCreatedEvent{
+		HistoryItem: *item,
+		Order:       &order,
+		Actor:       actor,
+	})
+	return nil
 }
 
 func (s *OrderService) GetStatusByID(ctx context.Context, id uint64) (*entities.Status, error) {
@@ -84,65 +123,91 @@ func (s *OrderService) GetPriorityByID(ctx context.Context, id uint64) (*entitie
 	return s.priorityRepo.FindByID(ctx, id)
 }
 
-func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter) (*dto.OrderListResponseDTO, error) {
-	userID, _ := utils.GetUserIDFromCtx(ctx)
-	permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
+func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool) (*dto.OrderListResponseDTO, error) {
+	// 1. Получаем всю информацию об акторе (кто запрашивает) и его правах
+	userID, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil {
+		return nil, apperrors.ErrUserNotFound
+	}
+	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+	if err != nil {
+		s.logger.Error("Не удалось получить карту прав из контекста", zap.Error(err))
+		return nil, apperrors.ErrInternalServer
+	}
 	actor, err := s.userRepo.FindUserByID(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
 
+	// 2. Проверяем базовое право на просмотр заявок
 	authContext := authz.Context{Actor: actor, Permissions: permissionsMap}
 	if !authz.CanDo(authz.OrdersView, authContext) {
+		s.logger.Warn("Попытка доступа к списку заявок без права order:view", zap.Uint64("userID", userID))
 		return nil, apperrors.ErrForbidden
 	}
 
-	var securityFilter string
-	var securityArgs []interface{}
+	// 3. <<-- ИЗМЕНЕНИЕ: Используем sq.And для всех условий -->>
+	securityBuilder := sq.And{}
+
+	// 4. Строим ДИНАМИЧЕСКИЙ фильтр безопасности, если у пользователя нет глобального доступа
 	if !authContext.HasPermission(authz.ScopeAll) && !authContext.HasPermission(authz.ScopeAllView) {
-		var conditions []string
-		scopeRules := map[string]func(){
-			authz.ScopeDepartment: func() {
-				if actor.DepartmentID > 0 {
-					conditions = append(conditions, "o.department_id = ?")
-					securityArgs = append(securityArgs, actor.DepartmentID)
-				}
-			},
-			authz.ScopeBranch: func() {
-				if actor.BranchID != nil {
-					conditions = append(conditions, "o.branch_id = ?")
-					securityArgs = append(securityArgs, *actor.BranchID)
-				}
-			},
-			authz.ScopeOwn: func() {
-				condition := `(o.user_id = ? OR o.executor_id = ? OR o.id IN (SELECT DISTINCT order_id FROM order_history WHERE user_id = ?))`
-				conditions = append(conditions, condition)
-				securityArgs = append(securityArgs, actor.ID, actor.ID, actor.ID)
-			},
+
+		scopeConditions := sq.Or{}
+
+		if authContext.HasPermission(authz.ScopeDepartment) && actor.DepartmentID != nil {
+			scopeConditions = append(scopeConditions, sq.Eq{"o.department_id": *actor.DepartmentID})
 		}
-		for scope, ruleFunc := range scopeRules {
-			if authContext.HasPermission(scope) {
-				ruleFunc()
-			}
+		if authContext.HasPermission(authz.ScopeBranch) && actor.BranchID != nil {
+			scopeConditions = append(scopeConditions, sq.Eq{"o.branch_id": *actor.BranchID})
 		}
-		if len(conditions) == 0 {
+		if authContext.HasPermission(authz.ScopeOtdel) && actor.OtdelID != nil {
+			scopeConditions = append(scopeConditions, sq.Eq{"o.otdel_id": *actor.OtdelID})
+		}
+		if authContext.HasPermission(authz.ScopeOffice) && actor.OfficeID != nil {
+			scopeConditions = append(scopeConditions, sq.Eq{"o.office_id": *actor.OfficeID})
+		}
+
+		if authContext.HasPermission(authz.ScopeOwn) {
+			scopeConditions = append(scopeConditions, sq.Eq{"o.user_id": actor.ID})
+			scopeConditions = append(scopeConditions, sq.Eq{"o.executor_id": actor.ID})
+			scopeConditions = append(scopeConditions, sq.Expr("o.id IN (SELECT DISTINCT order_id FROM order_history WHERE user_id = ?)", actor.ID))
+		}
+
+		if len(scopeConditions) > 0 {
+			securityBuilder = append(securityBuilder, scopeConditions)
+		} else {
+			s.logger.Warn("У пользователя нет ни одного scope-права для просмотра заявок, возвращен пустой список.", zap.Uint64("userID", userID))
 			return &dto.OrderListResponseDTO{List: []dto.OrderResponseDTO{}, TotalCount: 0}, nil
 		}
-		securityFilter = "(" + strings.Join(conditions, " OR ") + ")"
 	}
 
-	orders, totalCount, err := s.orderRepo.GetOrders(ctx, filter, securityFilter, securityArgs)
+	// 5. <<-- ИЗМЕНЕНИЕ: ДОБАВЛЯЕМ УСЛОВИЕ УЧАСТИЯ, если флаг true -->>
+	if onlyParticipant {
+		participantCondition := sq.Or{
+			sq.Eq{"o.user_id": actor.ID},     // Я создатель
+			sq.Eq{"o.executor_id": actor.ID}, // Я исполнитель
+			// Это условие для истории теперь становится частью "или", а не обязательным.
+			// Оно может дублировать `ScopeOwn`, но здесь оно в контексте `или`.
+			sq.Expr("o.id IN (SELECT DISTINCT order_id FROM order_history WHERE user_id = ?)", actor.ID),
+		}
+		securityBuilder = append(securityBuilder, participantCondition)
+	}
+
+	// 6. Вызываем репозиторий с ГОТОВЫМ объектом squirrel
+	orders, totalCount, err := s.orderRepo.GetOrders(ctx, filter, securityBuilder)
 	if err != nil {
+		s.logger.Error("Ошибка получения списка заявок из репозитория", zap.Error(err))
 		return nil, err
 	}
 	if len(orders) == 0 {
 		return &dto.OrderListResponseDTO{List: []dto.OrderResponseDTO{}, TotalCount: 0}, nil
 	}
 
+	// 7. Обогащаем данные для ответа (эта часть остается без изменений)
 	userIDsMap := make(map[uint64]struct{})
-	orderIDs := make([]uint64, 0, len(orders))
-	for _, order := range orders {
-		orderIDs = append(orderIDs, order.ID)
+	orderIDs := make([]uint64, len(orders))
+	for i, order := range orders {
+		orderIDs[i] = order.ID
 		userIDsMap[order.CreatorID] = struct{}{}
 		if order.ExecutorID != nil {
 			userIDsMap[*order.ExecutorID] = struct{}{}
@@ -156,19 +221,25 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter) (*dto
 	usersMap, _ := s.userRepo.FindUsersByIDs(ctx, userIDs)
 	attachmentsMap, _ := s.attachRepo.FindAttachmentsByOrderIDs(ctx, orderIDs)
 
-	dtos := make([]dto.OrderResponseDTO, 0, len(orders))
+	dtos := make([]dto.OrderResponseDTO, len(orders))
 	for i := range orders {
 		order := &orders[i]
-		creator := usersMap[order.CreatorID]
-		var executorPtr *entities.User
+		var creator, executor *entities.User
+
+		if c, ok := usersMap[order.CreatorID]; ok {
+			creator = &c
+		}
+
 		if order.ExecutorID != nil {
-			if exec, ok := usersMap[*order.ExecutorID]; ok && &exec != nil {
-				executorPtr = &exec
+			if exec, ok := usersMap[*order.ExecutorID]; ok {
+				executor = &exec
 			}
 		}
+
 		attachments := attachmentsMap[order.ID]
-		dtos = append(dtos, *buildOrderResponse(order, &creator, executorPtr, attachments))
+		dtos[i] = *buildOrderResponse(order, creator, executor, attachments)
 	}
+
 	return &dto.OrderListResponseDTO{List: dtos, TotalCount: totalCount}, nil
 }
 
@@ -200,6 +271,7 @@ func (s *OrderService) FindOrderByID(ctx context.Context, orderID uint64) (*dto.
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error) {
+	// ... (Проверки авторизации и валидации остаются прежними)
 	authContext, err := s.buildAuthzContext(ctx, 0)
 	if err != nil {
 		return nil, err
@@ -212,17 +284,16 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 		orderTypeCode, err := s.orderTypeRepo.FindCodeByID(ctx, uint64(createDTO.OrderTypeID.Int))
 		if err == nil {
 			if _, ok := ValidationRegistry[orderTypeCode]; ok {
-				// Здесь в будущем можно добавить логику валидации на основе правил
+				// В будущем здесь можно добавить логику валидации
 			}
 		}
 	}
 
 	var finalOrderID uint64
-
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		txID := uuid.New() // Один ID на всю операцию
-		now := time.Now()  // Одно время на всю операцию
-
+		txID := uuid.New()
+		now := time.Now()
+		// ... (Логика определения исполнителя и статуса остается)
 		// --- 1. Определение исполнителя ---
 		var userSelectedExecutorID *uint64
 		if createDTO.ExecutorID.Valid {
@@ -256,8 +327,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 			duration = &createDTO.Duration.Time
 		}
 
-		// --- 2. Создание основной записи о заявке ---
-		orderEntity := &entities.Order{
+		orderEntity := &entities.Order{ // ... (создание orderEntity) ...
 			OrderTypeID:     utils.NullIntToUint64Ptr(createDTO.OrderTypeID),
 			Name:            createDTO.Name,
 			Address:         utils.NullStringToStrPtr(createDTO.Address),
@@ -280,94 +350,88 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 			return err
 		}
 		finalOrderID = orderID
+		orderEntity.ID = orderID // Важно установить ID в сущность для передачи в события
 		s.logger.Debug("Заявка успешно создана в БД", zap.Uint64("orderID", orderID))
 
-		// --- 3. Создание записей в ИСТОРИИ ---
-
-		// Запись 1: Создание заявки
-		if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-			OrderID:   orderID,
-			UserID:    authContext.Actor.ID,
-			EventType: "CREATE",
-			NewValue:  sql.NullString{String: orderEntity.Name, Valid: true},
-			TxID:      &txID,
-			CreatedAt: now,
-		}); err != nil {
+		// ИСПОЛЬЗОВАНИЕ ХЕЛПЕРА: Создаем записи в истории чисто и без дублирования.
+		itemCreate := &repositories.OrderHistoryItem{
+			OrderID: orderID, UserID: authContext.Actor.ID, EventType: "CREATE",
+			NewValue: sql.NullString{String: orderEntity.Name, Valid: true}, TxID: &txID, CreatedAt: now,
+		}
+		if err := s.addHistoryAndPublish(ctx, tx, itemCreate, *orderEntity, authContext.Actor); err != nil {
 			return err
 		}
 
-		// Запись 2: Назначение исполнителя
 		delegationText := "Назначено на: " + result.Executor.Fio
-		if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-			OrderID:   orderID,
-			UserID:    authContext.Actor.ID,
-			EventType: "DELEGATION",
-			NewValue:  sql.NullString{String: fmt.Sprintf("%d", result.Executor.ID), Valid: true},
-			Comment:   sql.NullString{String: delegationText, Valid: true},
-			TxID:      &txID,
-			CreatedAt: now,
-		}); err != nil {
+		itemDelegation := &repositories.OrderHistoryItem{
+			OrderID: orderID, UserID: authContext.Actor.ID, EventType: "DELEGATION",
+			NewValue: sql.NullString{String: fmt.Sprintf("%d", result.Executor.ID), Valid: true},
+			Comment:  sql.NullString{String: delegationText, Valid: true}, TxID: &txID, CreatedAt: now,
+		}
+		if err := s.addHistoryAndPublish(ctx, tx, itemDelegation, *orderEntity, authContext.Actor); err != nil {
 			return err
 		}
 
-		// Запись 3: Установка статуса
-		if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-			OrderID:   orderID,
-			UserID:    authContext.Actor.ID,
-			EventType: "STATUS_CHANGE",
-			NewValue:  sql.NullString{String: fmt.Sprintf("%d", status.ID), Valid: true},
-			TxID:      &txID,
-			CreatedAt: now,
-		}); err != nil {
+		itemStatus := &repositories.OrderHistoryItem{
+			OrderID: orderID, UserID: authContext.Actor.ID, EventType: "STATUS_CHANGE",
+			NewValue: sql.NullString{String: fmt.Sprintf("%d", status.ID), Valid: true}, TxID: &txID, CreatedAt: now,
+		}
+		if err := s.addHistoryAndPublish(ctx, tx, itemStatus, *orderEntity, authContext.Actor); err != nil {
 			return err
 		}
 
-		// Запись 4: Установка приоритета (если был указан)
 		if orderEntity.PriorityID != nil {
-			if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-				OrderID:   orderID,
-				UserID:    authContext.Actor.ID,
-				EventType: "PRIORITY_CHANGE",
-				NewValue:  sql.NullString{String: fmt.Sprintf("%d", *orderEntity.PriorityID), Valid: true},
-				TxID:      &txID,
-				CreatedAt: now,
-			}); err != nil {
+			itemPriority := &repositories.OrderHistoryItem{
+				OrderID: orderID, UserID: authContext.Actor.ID, EventType: "PRIORITY_CHANGE",
+				NewValue: sql.NullString{String: fmt.Sprintf("%d", *orderEntity.PriorityID), Valid: true},
+				TxID:     &txID, CreatedAt: now,
+			}
+			if err := s.addHistoryAndPublish(ctx, tx, itemPriority, *orderEntity, authContext.Actor); err != nil {
 				return err
 			}
 		}
 
-		// Запись 5: Добавление комментария (если был указан)
 		if createDTO.Comment.Valid {
-			if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-				OrderID:   orderID,
-				UserID:    authContext.Actor.ID,
-				EventType: "COMMENT",
-				Comment:   sql.NullString{String: createDTO.Comment.String, Valid: true},
-				TxID:      &txID,
-				CreatedAt: now,
-			}); err != nil {
+			itemComment := &repositories.OrderHistoryItem{
+				OrderID: orderID, UserID: authContext.Actor.ID, EventType: "COMMENT",
+				Comment: sql.NullString{String: createDTO.Comment.String, Valid: true}, TxID: &txID, CreatedAt: now,
+			}
+			if err := s.addHistoryAndPublish(ctx, tx, itemComment, *orderEntity, authContext.Actor); err != nil {
 				return err
 			}
 		}
 
-		// Запись 6: Прикрепление файла (если был прикреплен)
+		if orderEntity.Duration != nil {
+			itemDuration := &repositories.OrderHistoryItem{
+				OrderID: orderID, UserID: authContext.Actor.ID, EventType: "DURATION_CHANGE",
+				NewValue: utils.TimeToNullString(orderEntity.Duration), TxID: &txID, CreatedAt: now,
+			}
+			if err := s.addHistoryAndPublish(ctx, tx, itemDuration, *orderEntity, authContext.Actor); err != nil {
+				return err
+			}
+		}
+
 		if file != nil {
-			if _, err := s.attachFileToOrderInTx(ctx, tx, orderID, authContext.Actor.ID, file, &txID); err != nil {
+			// attachFileToOrderInTx уже вызывает addHistoryAndPublish внутри себя.
+			if _, err := s.attachFileToOrderInTx(ctx, tx, orderID, authContext.Actor.ID, file, &txID, orderEntity); err != nil {
 				return err
 			}
 		}
-
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-
 	return s.FindOrderByID(ctx, finalOrderID)
 }
 
-func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader, rawRequestBody []byte) (*dto.OrderResponseDTO, error) {
-	authContext, err := s.buildAuthzContext(ctx, orderID)
+func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error) {
+	// 1. Авторизация
+	targetOrder, err := s.orderRepo.FindByID(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	authContext, err := s.buildAuthzContextWithTarget(ctx, targetOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -375,161 +439,86 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 		return nil, apperrors.ErrForbidden
 	}
 
-	currentOrder := authContext.Target.(*entities.Order)
-
+	// 2. Логика обновления в транзакции
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		txID := uuid.New()
 		now := time.Now()
 		updated := false
 
-		// --- ОБРАБОТКА ОБНОВЛЕНИЯ ПОЛЕЙ С ЗАПИСЬЮ В ИСТОРИЮ ---
+		// --- I. ПРИОРИТЕТ: ПРОВЕРЯЕМ СМЕНУ ПОДРАЗДЕЛЕНИЯ ---
+		var err error
+		deptChanged := false
+		if updateDTO.DepartmentID != nil {
+			deptChanged, err = s.updateDepartment(ctx, tx, *authContext, null.IntFrom(int(*updateDTO.DepartmentID)), targetOrder, &txID, now)
+			if err != nil {
+				return err
+			}
+			if deptChanged {
+				updated = true
+			}
+		}
 
-		// Простой комментарий
+		otdelChanged := false
+		if !deptChanged && updateDTO.OtdelID != nil {
+			otdelChanged, err = s.updateOtdel(ctx, tx, *authContext, null.IntFrom(int(*updateDTO.OtdelID)), targetOrder, &txID, now)
+			if err != nil {
+				return err
+			}
+			if otdelChanged {
+				updated = true
+			}
+		}
+
+		orgStructureChanged := deptChanged || otdelChanged
+
+		if orgStructureChanged {
+			s.logger.Info("Подразделение изменено, запускается автоматическое переназначение.", zap.Uint64("orderID", orderID))
+			orderCtx := OrderContext{DepartmentID: targetOrder.DepartmentID, OtdelID: targetOrder.OtdelID, OrderTypeID: 0}
+			result, err := s.ruleEngine.ResolveExecutor(ctx, tx, orderCtx, nil)
+			if err != nil {
+				return apperrors.NewHttpError(http.StatusBadRequest, "Не удалось найти исполнителя в новом подразделении.", err, nil)
+			}
+			if err := s.updateExecutor(ctx, tx, *authContext, null.IntFrom(int(result.Executor.ID)), targetOrder, txID, now); err != nil {
+				return err
+			}
+		} else if updateDTO.ExecutorID != nil {
+			if err := s.updateExecutor(ctx, tx, *authContext, null.IntFrom(int(*updateDTO.ExecutorID)), targetOrder, txID, now); err != nil {
+				return err
+			}
+			updated = true
+		}
+		// --- II. ОБНОВЛЕНИЕ ОСТАЛЬНЫХ ПОЛЕЙ ---
 		if updateDTO.Comment.Valid {
-			if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
+			item := &repositories.OrderHistoryItem{
 				OrderID: orderID, UserID: authContext.Actor.ID, EventType: "COMMENT",
-				Comment: sql.NullString{String: updateDTO.Comment.String, Valid: true},
-				TxID:    &txID, CreatedAt: now,
-			}); err != nil {
+				Comment: sql.NullString{String: updateDTO.Comment.String, Valid: true}, TxID: &txID, CreatedAt: now,
+			}
+			if err := s.addHistoryAndPublish(ctx, tx, item, *targetOrder, authContext.Actor); err != nil {
+				return err
+			}
+			updated = true
+		}
+		if updateDTO.StatusID != nil {
+			if err := s.updateStatus(ctx, tx, *authContext, null.IntFrom(int(*updateDTO.StatusID)), targetOrder, txID, now); err != nil {
+				return err
+			}
+			updated = true
+		}
+		if updateDTO.PriorityID != nil {
+			if err := s.updatePriority(ctx, tx, *authContext, null.IntFrom(int(*updateDTO.PriorityID)), targetOrder, &txID, now); err != nil {
+				return err
+			}
+			updated = true
+		}
+		if updateDTO.Duration.Valid {
+			if err := s.updateDuration(ctx, tx, *authContext, updateDTO.Duration, targetOrder, txID, now); err != nil {
 				return err
 			}
 			updated = true
 		}
 
-		// Изменение статуса
-		if updateDTO.StatusID.Valid {
-			oldStatusID := currentOrder.StatusID
-			newStatusID := uint64(updateDTO.StatusID.Int)
-
-			if oldStatusID != newStatusID {
-				newStatus, err := s.statusRepo.FindByIDInTx(ctx, tx, newStatusID)
-				if err != nil || newStatus == nil {
-					return apperrors.NewHttpError(http.StatusBadRequest, "Указанный статус не найден", err, nil)
-				}
-
-				if newStatus.Code != nil && *newStatus.Code == "CLOSED" {
-					currentOrder.CompletedAt = &now
-					if currentOrder.ResolutionTimeSeconds == nil {
-						resTime := uint64(now.Sub(currentOrder.CreatedAt).Seconds())
-						currentOrder.ResolutionTimeSeconds = &resTime
-					}
-				}
-				currentOrder.StatusID = newStatusID
-
-				if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-					OrderID: orderID, UserID: authContext.Actor.ID, EventType: "STATUS_CHANGE",
-					OldValue: utils.Uint64ToNullString(oldStatusID), NewValue: utils.Uint64ToNullString(newStatusID),
-					TxID: &txID, CreatedAt: now,
-				}); err != nil {
-					return err
-				}
-				updated = true
-			}
-		}
-
-		// Переназначение исполнителя
-		if updateDTO.ExecutorID.Valid {
-			newExecutorID := uint64(updateDTO.ExecutorID.Int)
-			oldExecutorIDPtr := currentOrder.ExecutorID
-
-			if oldExecutorIDPtr == nil || *oldExecutorIDPtr != newExecutorID {
-				if !authz.CanDo(authz.OrdersUpdateExecutorID, *authContext) {
-					return apperrors.ErrForbidden
-				}
-
-				newExec, err := s.userRepo.FindUserByIDInTx(ctx, tx, newExecutorID)
-				if err != nil || newExec == nil {
-					return apperrors.NewHttpError(http.StatusBadRequest, "Новый исполнитель не найден", err, nil)
-				}
-
-				currentOrder.ExecutorID = &newExecutorID
-				delegationText := "Переназначено на: " + newExec.Fio
-
-				if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-					OrderID: orderID, UserID: authContext.Actor.ID, EventType: "DELEGATION",
-					OldValue:  utils.Uint64PtrToNullString(oldExecutorIDPtr),
-					NewValue:  utils.Uint64PtrToNullString(currentOrder.ExecutorID),
-					Comment:   sql.NullString{String: delegationText, Valid: true},
-					TxID:      &txID,
-					CreatedAt: now,
-				}); err != nil {
-					return err
-				}
-				updated = true
-			}
-		}
-
-		// Изменение отдела (OtdelID)
-		if updateDTO.OtdelID.Valid {
-			newVal := uint64(updateDTO.OtdelID.Int)
-			if currentOrder.OtdelID == nil || *currentOrder.OtdelID != newVal {
-				oldVal := currentOrder.OtdelID
-				currentOrder.OtdelID = &newVal
-				if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-					OrderID: orderID, UserID: authContext.Actor.ID, EventType: "OTDEL_CHANGE",
-					OldValue: utils.Uint64PtrToNullString(oldVal), NewValue: utils.Uint64PtrToNullString(currentOrder.OtdelID),
-					TxID: &txID, CreatedAt: now,
-				}); err != nil {
-					return err
-				}
-				updated = true
-			}
-		}
-		// изменение приоритета
-		if updateDTO.PriorityID.Valid {
-			newVal := uint64(updateDTO.PriorityID.Int)
-			if currentOrder.PriorityID == nil || *currentOrder.PriorityID != newVal {
-				oldVal := currentOrder.PriorityID
-				currentOrder.PriorityID = &newVal
-				if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-					OrderID: orderID, UserID: authContext.Actor.ID, EventType: "PRIORITY_CHANGE",
-					OldValue: utils.Uint64PtrToNullString(oldVal), NewValue: utils.Uint64PtrToNullString(currentOrder.PriorityID),
-					TxID: &txID, CreatedAt: now,
-				}); err != nil {
-					return err
-				}
-				updated = true
-			}
-		}
-		// Изменение Duration
-		if updateDTO.Duration.Valid {
-			var newDuration *time.Time
-			if updateDTO.Duration.Time.After(time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)) {
-				newDuration = &updateDTO.Duration.Time
-			}
-
-			oldTimeStr, newTimeStr := "null", "null"
-			if currentOrder.Duration != nil {
-				oldTimeStr = currentOrder.Duration.UTC().Format(time.RFC3339)
-			}
-			if newDuration != nil {
-				newTimeStr = newDuration.UTC().Format(time.RFC3339)
-			}
-
-			s.logger.Debug("Сравнение Duration",
-				zap.String("old_value", oldTimeStr),
-				zap.String("new_value", newTimeStr),
-				zap.Bool("is_different", oldTimeStr != newTimeStr),
-			)
-
-			if oldTimeStr != newTimeStr {
-				oldDuration := currentOrder.Duration
-				currentOrder.Duration = newDuration
-
-				if err := s.historyRepo.CreateInTx(ctx, tx, &repositories.OrderHistoryItem{
-					OrderID: orderID, UserID: authContext.Actor.ID, EventType: "DURATION_CHANGE",
-					OldValue: utils.TimeToNullString(oldDuration), NewValue: utils.TimeToNullString(currentOrder.Duration),
-					TxID: &txID, CreatedAt: now,
-				}); err != nil {
-					return err
-				}
-				updated = true
-			}
-		}
-
-		// Прикрепление файла
 		if file != nil {
-			if _, err := s.attachFileToOrderInTx(ctx, tx, orderID, authContext.Actor.ID, file, &txID); err != nil {
+			if _, err := s.attachFileToOrderInTx(ctx, tx, orderID, authContext.Actor.ID, file, &txID, targetOrder); err != nil {
 				return err
 			}
 			updated = true
@@ -539,18 +528,209 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 			return apperrors.ErrNoChanges
 		}
 
-		currentOrder.UpdatedAt = now
-		if err := s.orderRepo.Update(ctx, tx, currentOrder); err != nil {
-			return err
-		}
-
-		return nil
+		targetOrder.UpdatedAt = now
+		return s.orderRepo.Update(ctx, tx, targetOrder)
 	})
 	if err != nil {
 		return nil, err
 	}
-
 	return s.FindOrderByID(ctx, orderID)
+}
+
+// --- ВСЕ HELPER-ФУНКЦИИ (ЗАМЕНИТЕ ВСЕ ВАШИ HELPER'Ы НА ЭТИ) ---
+
+func (s *OrderService) updateStatus(ctx context.Context, tx pgx.Tx, authCtx authz.Context, statusID null.Int, order *entities.Order, txID uuid.UUID, now time.Time) error {
+	if !statusID.Valid {
+		return nil
+	}
+
+	oldStatusID, newStatusID := order.StatusID, uint64(statusID.Int)
+	if oldStatusID == newStatusID {
+		return nil
+	}
+
+	newStatus, err := s.statusRepo.FindByIDInTx(ctx, tx, newStatusID)
+	if err != nil || newStatus == nil {
+		return apperrors.NewHttpError(http.StatusBadRequest, "Указанный статус не найден", err, nil)
+	}
+
+	if newStatus.Code != nil && strings.ToUpper(*newStatus.Code) == "CLOSED" {
+		if order.CompletedAt == nil {
+			order.CompletedAt = &now
+		}
+	} else {
+		order.CompletedAt = nil
+	}
+	order.StatusID = newStatusID
+
+	historyItem := &repositories.OrderHistoryItem{
+		OrderID: order.ID, UserID: authCtx.Actor.ID, EventType: "STATUS_CHANGE",
+		OldValue: utils.Uint64ToNullString(oldStatusID), NewValue: utils.Uint64ToNullString(newStatusID),
+		TxID: &txID, CreatedAt: now,
+	}
+
+	err = s.historyRepo.CreateInTx(ctx, tx, historyItem)
+	if err == nil {
+		s.eventBus.Publish(ctx, events.OrderHistoryCreatedEvent{
+			HistoryItem: *historyItem,
+			Order:       order,
+			Actor:       authCtx.Actor,
+		})
+	}
+
+	return err
+}
+
+func (s *OrderService) updateExecutor(ctx context.Context, tx pgx.Tx, authCtx authz.Context, executorID null.Int, order *entities.Order, txID uuid.UUID, now time.Time) error {
+	if !executorID.Valid {
+		return nil
+	}
+
+	newExecutorID := uint64(executorID.Int)
+	if order.ExecutorID != nil && *order.ExecutorID == newExecutorID {
+		return nil
+	}
+
+	newExec, err := s.userRepo.FindUserByIDInTx(ctx, tx, newExecutorID)
+	if err != nil || newExec == nil {
+		return apperrors.NewHttpError(http.StatusBadRequest, "Новый исполнитель не найден", err, nil)
+	}
+
+	oldExecutorIDPtr := order.ExecutorID
+	order.ExecutorID = &newExecutorID
+	delegationText := "Переназначено на: " + newExec.Fio
+
+	historyItem := &repositories.OrderHistoryItem{
+		OrderID: order.ID, UserID: authCtx.Actor.ID, EventType: "DELEGATION",
+		OldValue: utils.Uint64PtrToNullString(oldExecutorIDPtr), NewValue: utils.Uint64PtrToNullString(order.ExecutorID),
+		Comment: sql.NullString{String: delegationText, Valid: true}, TxID: &txID, CreatedAt: now,
+	}
+
+	err = s.historyRepo.CreateInTx(ctx, tx, historyItem)
+	if err == nil {
+		s.eventBus.Publish(ctx, events.OrderHistoryCreatedEvent{
+			HistoryItem: *historyItem, Order: order, Actor: authCtx.Actor,
+		})
+	}
+	return err
+}
+
+func (s *OrderService) updateDuration(ctx context.Context, tx pgx.Tx, authCtx authz.Context, duration null.Time, order *entities.Order, txID uuid.UUID, now time.Time) error {
+	var newDuration *time.Time
+	if duration.Valid {
+		newDuration = &duration.Time
+	}
+
+	// Сравниваем старое и новое значение, чтобы не создавать лишних записей
+	isChanged := (order.Duration == nil && newDuration != nil) || (order.Duration != nil && newDuration == nil) || (order.Duration != nil && newDuration != nil && !order.Duration.Equal(*newDuration))
+
+	if !isChanged {
+		return nil
+	}
+
+	oldDuration := order.Duration
+	order.Duration = newDuration
+
+	historyItem := &repositories.OrderHistoryItem{
+		OrderID: order.ID, UserID: authCtx.Actor.ID, EventType: "DURATION_CHANGE",
+		OldValue: utils.TimeToNullString(oldDuration), NewValue: utils.TimeToNullString(order.Duration),
+		TxID: &txID, CreatedAt: now,
+	}
+
+	err := s.historyRepo.CreateInTx(ctx, tx, historyItem)
+	if err == nil {
+		s.eventBus.Publish(ctx, events.OrderHistoryCreatedEvent{
+			HistoryItem: *historyItem, Order: order, Actor: authCtx.Actor,
+		})
+	}
+	return err
+}
+
+func (s *OrderService) updateDepartment(ctx context.Context, tx pgx.Tx, authCtx authz.Context, deptID null.Int, order *entities.Order, txID *uuid.UUID, now time.Time) (bool, error) {
+	if !deptID.Valid {
+		return false, nil
+	}
+
+	newDeptID := uint64(deptID.Int)
+	if order.DepartmentID == newDeptID {
+		return false, nil
+	}
+
+	oldDeptID := order.DepartmentID
+	order.DepartmentID = newDeptID
+	order.OtdelID = nil // Сбрасываем отдел при смене департамента
+
+	historyItem := &repositories.OrderHistoryItem{
+		OrderID: order.ID, UserID: authCtx.Actor.ID, EventType: "DEPARTMENT_CHANGE",
+		OldValue: utils.Uint64ToNullString(oldDeptID), NewValue: utils.Uint64ToNullString(order.DepartmentID),
+		TxID: txID, CreatedAt: now,
+	}
+
+	err := s.historyRepo.CreateInTx(ctx, tx, historyItem)
+	if err == nil {
+		s.eventBus.Publish(ctx, events.OrderHistoryCreatedEvent{
+			HistoryItem: *historyItem, Order: order, Actor: authCtx.Actor,
+		})
+	}
+
+	return err == nil, err
+}
+
+func (s *OrderService) updateOtdel(ctx context.Context, tx pgx.Tx, authCtx authz.Context, otdelID null.Int, order *entities.Order, txID *uuid.UUID, now time.Time) (bool, error) {
+	if !otdelID.Valid {
+		return false, nil
+	}
+
+	newOtdelID := uint64(otdelID.Int)
+	if order.OtdelID != nil && *order.OtdelID == newOtdelID {
+		return false, nil
+	}
+
+	oldOtdelIDPtr := order.OtdelID
+	order.OtdelID = &newOtdelID
+
+	historyItem := &repositories.OrderHistoryItem{
+		OrderID: order.ID, UserID: authCtx.Actor.ID, EventType: "OTDEL_CHANGE",
+		OldValue: utils.Uint64PtrToNullString(oldOtdelIDPtr), NewValue: utils.Uint64PtrToNullString(order.OtdelID),
+		TxID: txID, CreatedAt: now,
+	}
+
+	err := s.historyRepo.CreateInTx(ctx, tx, historyItem)
+	if err == nil {
+		s.eventBus.Publish(ctx, events.OrderHistoryCreatedEvent{
+			HistoryItem: *historyItem, Order: order, Actor: authCtx.Actor,
+		})
+	}
+
+	return err == nil, err
+}
+
+func (s *OrderService) updatePriority(ctx context.Context, tx pgx.Tx, authCtx authz.Context, priorityID null.Int, order *entities.Order, txID *uuid.UUID, now time.Time) error {
+	if !priorityID.Valid {
+		return nil
+	}
+
+	newVal := uint64(priorityID.Int)
+	if order.PriorityID != nil && *order.PriorityID == newVal {
+		return nil
+	}
+
+	oldVal := order.PriorityID
+	order.PriorityID = &newVal
+
+	historyItem := &repositories.OrderHistoryItem{
+		OrderID: order.ID, UserID: authCtx.Actor.ID, EventType: "PRIORITY_CHANGE",
+		OldValue: utils.Uint64PtrToNullString(oldVal), NewValue: utils.Uint64PtrToNullString(order.PriorityID),
+		TxID: txID, CreatedAt: now,
+	}
+
+	err := s.historyRepo.CreateInTx(ctx, tx, historyItem)
+	if err == nil {
+		s.eventBus.Publish(ctx, events.OrderHistoryCreatedEvent{
+			HistoryItem: *historyItem, Order: order, Actor: authCtx.Actor,
+		})
+	}
+	return err
 }
 
 func (s *OrderService) DeleteOrder(ctx context.Context, orderID uint64) error {
@@ -581,6 +761,24 @@ func (s *OrderService) GetValidationConfigForOrderType(ctx context.Context, orde
 }
 
 func (s *OrderService) buildAuthzContext(ctx context.Context, orderID uint64) (*authz.Context, error) {
+	if orderID == 0 {
+		userID, _ := utils.GetUserIDFromCtx(ctx)
+		permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
+		actor, err := s.userRepo.FindUserByID(ctx, userID)
+		if err != nil {
+			return nil, apperrors.ErrUserNotFound
+		}
+		return &authz.Context{Actor: actor, Permissions: permissionsMap, Target: nil}, nil
+	}
+
+	targetOrder, err := s.orderRepo.FindByID(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	return s.buildAuthzContextWithTarget(ctx, targetOrder)
+}
+
+func (s *OrderService) buildAuthzContextWithTarget(ctx context.Context, target *entities.Order) (*authz.Context, error) {
 	userID, _ := utils.GetUserIDFromCtx(ctx)
 	permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
 	actor, err := s.userRepo.FindUserByID(ctx, userID)
@@ -588,18 +786,13 @@ func (s *OrderService) buildAuthzContext(ctx context.Context, orderID uint64) (*
 		return nil, apperrors.ErrUserNotFound
 	}
 
-	authContext := &authz.Context{Actor: actor, Permissions: permissionsMap}
-	if orderID > 0 {
-		targetOrder, err := s.orderRepo.FindByID(ctx, uint64(orderID))
-		if err != nil {
-			return nil, err
-		}
-		authContext.Target = targetOrder
-		wasInHistory, _ := s.historyRepo.IsUserParticipant(ctx, orderID, userID)
-		isCreator := targetOrder.CreatorID == userID
-		isExecutor := targetOrder.ExecutorID != nil && *targetOrder.ExecutorID == userID
-		authContext.IsParticipant = isCreator || isExecutor || wasInHistory
-	}
+	authContext := &authz.Context{Actor: actor, Permissions: permissionsMap, Target: target}
+
+	wasInHistory, _ := s.historyRepo.IsUserParticipant(ctx, target.ID, userID)
+	isCreator := target.CreatorID == userID
+	isExecutor := target.ExecutorID != nil && *target.ExecutorID == userID
+	authContext.IsParticipant = isCreator || isExecutor || wasInHistory
+
 	return authContext, nil
 }
 
@@ -645,16 +838,21 @@ func buildOrderResponse(order *entities.Order, creator *entities.User, executor 
 	}
 }
 
-func (s *OrderService) attachFileToOrderInTx(ctx context.Context, tx pgx.Tx, orderID, userID uint64, file *multipart.FileHeader, txID *uuid.UUID) (uint64, error) {
+func (s *OrderService) attachFileToOrderInTx(ctx context.Context, tx pgx.Tx, orderID, userID uint64, file *multipart.FileHeader, txID *uuid.UUID, order *entities.Order) (uint64, error) {
+	// Шаг 1: Сохраняем файл физически (ваш код)
 	reader, err := file.Open()
 	if err != nil {
 		return 0, err
 	}
 	defer reader.Close()
+
 	filePath, err := s.fileStorage.Save(reader, file.Filename, "orders")
 	if err != nil {
 		return 0, err
 	}
+
+	// Шаг 2: Создаем запись о вложении в базе (ваш код)
+	now := time.Now()
 	attach := &entities.Attachment{
 		OrderID:   orderID,
 		UserID:    userID,
@@ -662,25 +860,92 @@ func (s *OrderService) attachFileToOrderInTx(ctx context.Context, tx pgx.Tx, ord
 		FilePath:  filePath,
 		FileType:  file.Header.Get("Content-Type"),
 		FileSize:  file.Size,
-		CreatedAt: time.Now(),
+		CreatedAt: now,
 	}
 	attachID, err := s.attachRepo.CreateInTx(ctx, tx, attach)
 	if err != nil {
 		return 0, err
 	}
-	historyItem := repositories.OrderHistoryItem{
+
+	// Шаг 3: Создаем запись в истории (ваш код)
+	historyItem := &repositories.OrderHistoryItem{
 		OrderID:      orderID,
 		UserID:       userID,
 		EventType:    "ATTACHMENT_ADD",
 		NewValue:     sql.NullString{String: file.Filename, Valid: true},
-		Attachment:   attach,
+		Attachment:   attach, // Вложение уже здесь, так что для Listener'а все есть
 		AttachmentID: sql.NullInt64{Int64: int64(attachID), Valid: true},
-		CreatedAt:    time.Now(),
+		CreatedAt:    now,
 		TxID:         txID,
 	}
-	err = s.historyRepo.CreateInTx(ctx, tx, &historyItem)
+
+	actor, err := s.userRepo.FindUserByIDInTx(ctx, tx, userID)
 	if err != nil {
 		return 0, err
 	}
+
+	// Здесь ошибка 'undefined: order' теперь тоже исправлена, так как order приходит в аргументах.
+	if err := s.addHistoryAndPublish(ctx, tx, historyItem, *order, actor); err != nil {
+		return 0, err
+	}
+
 	return attachID, nil
+}
+
+func (s *OrderService) FindOrderByIDForTelegram(ctx context.Context, userID uint64, orderID uint64) (*entities.Order, error) {
+	s.logger.Debug("FindOrderByIDForTelegram: --- НАЧАЛО ---", zap.Uint64("userID", userID), zap.Uint64("orderID", orderID))
+
+	// ШАГ 1: Быстро получаем заявку из репозитория.
+	s.logger.Debug("FindOrderByIDForTelegram: Шаг 1: Поиск заявки...")
+	order, err := s.orderRepo.FindByID(ctx, orderID)
+	if err != nil {
+		s.logger.Error("FindOrderByIDForTelegram: Ошибка на шаге 1", zap.Error(err))
+		return nil, err
+	}
+	s.logger.Debug("FindOrderByIDForTelegram: Шаг 1.1: Заявка найдена.")
+
+	// ШАГ 2: Быстро получаем пользователя, который делает запрос.
+	s.logger.Debug("FindOrderByIDForTelegram: Шаг 2: Поиск пользователя...")
+	actor, err := s.userRepo.FindUserByID(ctx, userID)
+	if err != nil {
+		s.logger.Error("FindOrderByIDForTelegram: Ошибка на шаге 2", zap.Error(err))
+		return nil, apperrors.ErrUserNotFound
+	}
+	s.logger.Debug("FindOrderByIDForTelegram: Шаг 2.1: Пользователь найден.")
+
+	// ШАГ 3: Загружаем права пользователя.
+	s.logger.Debug("FindOrderByIDForTelegram: Шаг 3: Получение прав доступа... (возможно зависание)")
+	permissions, err := s.authPermissionService.GetAllUserPermissions(ctx, userID)
+	if err != nil {
+		s.logger.Error("FindOrderByIDForTelegram: Ошибка на шаге 3", zap.Error(err), zap.Uint64("userID", userID))
+		return nil, err
+	}
+	permissionsMap := make(map[string]bool)
+	for _, p := range permissions {
+		permissionsMap[p] = true
+	}
+	s.logger.Debug("FindOrderByIDForTelegram: Шаг 3.1: Права доступа получены.", zap.Int("count", len(permissionsMap)))
+
+	// ШАГ 4: Собираем контекст авторизации.
+	authContext := &authz.Context{
+		Actor:       actor,
+		Permissions: permissionsMap,
+		Target:      order,
+	}
+	wasInHistory, _ := s.historyRepo.IsUserParticipant(ctx, order.ID, userID)
+	isCreator := order.CreatorID == userID
+	isExecutor := order.ExecutorID != nil && *order.ExecutorID == userID
+	authContext.IsParticipant = isCreator || isExecutor || wasInHistory
+	s.logger.Debug("FindOrderByIDForTelegram: Шаг 4: Контекст авторизации собран.")
+
+	// ШАГ 5: Проверяем право на обновление.
+	s.logger.Debug("FindOrderByIDForTelegram: Шаг 5: Проверка прав...")
+	if !authz.CanDo(authz.OrdersUpdate, *authContext) {
+		s.logger.Warn("FindOrderByIDForTelegram: Доступ запрещен", zap.Uint64("userID", userID), zap.Uint64("orderID", orderID))
+		return nil, apperrors.ErrForbidden
+	}
+	s.logger.Debug("FindOrderByIDForTelegram: Шаг 5.1: Проверка прав пройдена.")
+
+	s.logger.Debug("FindOrderByIDForTelegram: --- УСПЕШНОЕ ЗАВЕРШЕНИЕ ---")
+	return order, nil
 }

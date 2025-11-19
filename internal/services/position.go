@@ -43,9 +43,6 @@ func NewPositionService(
 	return &PositionService{repo: repo, userRepo: userRepo, txManager: txManager, logger: logger}
 }
 
-// Новая функция-конвертер
-
-// --- ИСПРАВЛЕННЫЙ `toPositionResponseDTO` ---
 func toPositionResponseDTO(e *entities.Position) *dto.PositionResponseDTO {
 	if e == nil {
 		return nil
@@ -81,11 +78,10 @@ func (s *PositionService) Create(ctx context.Context, d dto.CreatePositionDTO) (
 		return nil, apperrors.ErrForbidden
 	}
 
-	var newID int
-	// КОММЕНТАРИЙ: Создаем временную переменную statusID64 типа uint64.
 	statusID64 := uint64(d.StatusID)
 
-	posEntity := &entities.Position{
+	// ИСПРАВЛЕНИЕ: Передаем `entities.Position`, а не `*entities.Position`
+	posEntity := entities.Position{
 		Name:         d.Name,
 		StatusID:     &statusID64,
 		Type:         d.Type,
@@ -95,12 +91,14 @@ func (s *PositionService) Create(ctx context.Context, d dto.CreatePositionDTO) (
 		OfficeID:     utils.NullIntToUint64Ptr(d.OfficeID),
 	}
 
+	var newID uint64 // <-- ИСПРАВЛЕНИЕ: тип изменен на uint64
+
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		createdID, errTx := s.repo.Create(ctx, tx, posEntity)
+		createdID, errTx := s.repo.Create(ctx, tx, posEntity) // repo.Create теперь ожидает entities.Position
 		if errTx != nil {
 			return errTx
 		}
-		newID = createdID
+		newID = createdID // <-- ИСПРАВЛЕНИЕ: присваиваем uint64
 		return nil
 	})
 	if err != nil {
@@ -108,12 +106,52 @@ func (s *PositionService) Create(ctx context.Context, d dto.CreatePositionDTO) (
 		return nil, err
 	}
 
-	created, err := s.repo.FindByID(ctx, nil, uint64(newID))
+	created, err := s.repo.FindByID(ctx, nil, newID)
 	if err != nil {
 		s.logger.Error("Ошибка при получении Position", zap.Error(err))
 		return nil, err
 	}
 	return toPositionResponseDTO(created), nil
+}
+
+// Update - ИСПРАВЛЕН
+func (s *PositionService) Update(ctx context.Context, id uint64, patchDTO dto.UpdatePositionDTO, rawBody []byte) (*dto.PositionResponseDTO, error) {
+	authContext, err := buildAuthzContext(ctx, s.userRepo)
+	if err != nil {
+		return nil, err
+	}
+	if !authz.CanDo(authz.PositionsUpdate, *authContext) {
+		return nil, apperrors.ErrForbidden
+	}
+
+	existing, err := s.repo.FindByID(ctx, nil, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Ваша логика обновления с помощью патча - остается
+	if err := utils.ApplyPatchFinal(existing, patchDTO, rawBody); err != nil {
+		s.logger.Error("Ошибка применения патча для Position", zap.Error(err))
+		return nil, err
+	}
+
+	existing.UpdatedAt = time.Now()
+
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		// ИСПРАВЛЕНИЕ: `Update` теперь принимает `id uint64` и `entities.Position`
+		return s.repo.Update(ctx, tx, id, *existing)
+	})
+	if err != nil {
+		s.logger.Error("Ошибка в транзакции обновления Position", zap.Error(err))
+		return nil, err
+	}
+
+	updated, err := s.repo.FindByID(ctx, nil, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return toPositionResponseDTO(updated), nil
 }
 
 func (s *PositionService) GetAll(ctx context.Context, filter types.Filter) (*dto.PaginatedResponse[dto.PositionResponseDTO], error) {
@@ -159,44 +197,6 @@ func (s *PositionService) GetTypes(ctx context.Context) ([]dto.PositionTypeDTO, 
 		})
 	}
 	return typeList, nil
-}
-
-func (s *PositionService) Update(ctx context.Context, id uint64, patchDTO dto.UpdatePositionDTO, rawBody []byte) (*dto.PositionResponseDTO, error) {
-	authContext, err := buildAuthzContext(ctx, s.userRepo)
-	if err != nil {
-		return nil, err
-	}
-	if !authz.CanDo(authz.PositionsUpdate, *authContext) {
-		return nil, apperrors.ErrForbidden
-	}
-
-	existing, err := s.repo.FindByID(ctx, nil, id)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := utils.ApplyPatchFinal(existing, patchDTO, rawBody); err != nil {
-		s.logger.Error("Ошибка применения патча для Position", zap.Error(err))
-		return nil, err
-	}
-
-	// КОММЕНТАРИЙ: В `entities.Position` поле `UpdatedAt` - это `time.Time`, а не `*time.Time`.
-	// Поэтому мы присваиваем `time.Now()` напрямую.
-	existing.UpdatedAt = time.Now()
-
-	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		return s.repo.Update(ctx, tx, existing)
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	updated, err := s.repo.FindByID(ctx, nil, id)
-	if err != nil {
-		return nil, err
-	}
-
-	return toPositionResponseDTO(updated), nil
 }
 
 func (s *PositionService) GetByID(ctx context.Context, id uint64) (*dto.PositionResponseDTO, error) {

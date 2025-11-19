@@ -8,48 +8,89 @@ import (
 )
 
 type Context struct {
-	Actor         *entities.User
-	Permissions   map[string]bool
-	Target        interface{}
-	IsParticipant bool
+	Actor             *entities.User
+	Permissions       map[string]bool
+	Target            interface{}
+	IsParticipant     bool
+	CurrentPermission string
 }
 
 func (c *Context) HasPermission(permission string) bool {
 	if c.Permissions == nil {
 		return false
 	}
-	return c.Permissions[permission]
+	_, exists := c.Permissions[permission]
+	return exists
 }
 
 func getAction(permission string) string {
-	parts := strings.Split(permission, ":")
-	if len(parts) > 1 {
+	if parts := strings.Split(permission, ":"); len(parts) > 1 {
 		return parts[1]
 	}
 	return ""
 }
 
 func canAccessOrder(ctx Context, target *entities.Order) bool {
-	if ctx.HasPermission(ScopeAll) || ctx.HasPermission(ScopeAllView) {
-		return true
-	}
+	action := getAction(ctx.CurrentPermission)
 	actor := ctx.Actor
 
-	if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID > 0 && target.DepartmentID == actor.DepartmentID {
+	// --- Логика для ДЕЙСТВИЙ ПРОСМОТРА (`order:view`) ---
+	if action == "view" {
+		if ctx.HasPermission(ScopeAllView) || ctx.HasPermission(ScopeAll) {
+			return true
+		}
+		if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID == *actor.DepartmentID {
+			return true
+		}
+		if ctx.HasPermission(ScopeBranch) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
+			return true
+		}
+		if ctx.HasPermission(ScopeOtdel) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID {
+			return true
+		}
+		if ctx.HasPermission(ScopeOffice) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID {
+			return true
+		}
+		if ctx.HasPermission(ScopeOwn) {
+			isCreator := target.CreatorID == actor.ID
+			isExecutor := target.ExecutorID != nil && *target.ExecutorID == actor.ID
+			if isCreator || isExecutor || ctx.IsParticipant {
+				return true
+			}
+		}
+		return false
+	}
+
+	// --- Логика для ДЕЙСТВИЙ РЕДАКТИРОВАНИЯ (`order:update`) ---
+
+	// Уровень 1: Полный доступ на редактирование
+	if ctx.HasPermission(ScopeAll) {
 		return true
 	}
-	if ctx.HasPermission(ScopeBranch) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
+
+	// Уровень 2: Управленческий доступ
+	if ctx.HasPermission(OrdersUpdateInDepartmentScope) && actor.DepartmentID != nil && target.DepartmentID == *actor.DepartmentID {
 		return true
 	}
-	if ctx.HasPermission(ScopeOffice) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID {
+	if ctx.HasPermission(OrdersUpdateInBranchScope) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
 		return true
 	}
-	if ctx.HasPermission(ScopeOtdel) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID {
+	if ctx.HasPermission(OrdersUpdateInOtdelScope) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID {
 		return true
 	}
-	if ctx.IsParticipant {
+	if ctx.HasPermission(OrdersUpdateInOfficeScope) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID {
 		return true
 	}
+
+	// Уровень 3: Собственный доступ
+	if ctx.HasPermission(OrdersUpdate) {
+		isCreator := target.CreatorID == actor.ID
+		isExecutor := target.ExecutorID != nil && *target.ExecutorID == actor.ID
+		if isCreator || isExecutor || ctx.IsParticipant {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -69,51 +110,45 @@ func canAccessUser(ctx Context, target *entities.User) bool {
 	}
 
 	// Правило 3: Проверка иерархических scope (если они нужны для пользователей)
-	// Эти проверки имеют смысл, если вы хотите, чтобы руководитель отдела мог редактировать своих сотрудников.
-	if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID == target.DepartmentID {
+
+	if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
 		return true
 	}
 	if ctx.HasPermission(ScopeBranch) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
 		return true
 	}
-	// ... (добавьте ScopeOtdel, ScopeOffice по аналогии, если нужно) ...
+	if ctx.HasPermission(ScopeOffice) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID {
+		return true
+	}
+	if ctx.HasPermission(ScopeOtdel) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID {
+		return true
+	}
 
-	// Если ни одно из правил не сработало
 	return false
 }
 
 func CanDo(permission string, ctx Context) bool {
+	// 1. Запоминаем, какое право мы проверяем. Это нужно для `canAccessOrder`.
+	ctx.CurrentPermission = permission
+
+	// 2. Базовая проверка: есть ли у пользователя вообще такое право в списке
 	if !ctx.HasPermission(permission) {
 		return false
 	}
+
+	// 3. Если нет объекта (`Target`) для проверки - доступ разрешен (например, для `Create`)
 	if ctx.Target == nil {
 		return true
 	}
 
+	// 4. Выбираем правильную функцию проверки в зависимости от типа объекта
 	switch target := ctx.Target.(type) {
 	case *entities.Order:
-
-		if !canAccessOrder(ctx, target) {
-			return false
-		}
-
-		switch permission {
-		case OrdersUpdateInDepartmentScope:
-			return ctx.HasPermission(ScopeDepartment)
-		case OrdersUpdateInBranchScope:
-			return ctx.HasPermission(ScopeBranch)
-		case OrdersUpdateInOfficeScope:
-			return ctx.HasPermission(ScopeOffice)
-		case OrdersUpdateInOtdelScope:
-			return ctx.HasPermission(ScopeOtdel)
-		}
-
-		return true
-
+		return canAccessOrder(ctx, target)
 	case *entities.User:
-
 		return canAccessUser(ctx, target)
 	}
 
-	return false
+	// Если для этого типа объекта нет правил, по умолчанию разрешаем (если базовое право есть)
+	return true
 }

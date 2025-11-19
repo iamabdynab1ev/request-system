@@ -46,18 +46,14 @@ func (r *attachmentRepository) FindAttachmentsByOrderIDs(ctx context.Context, or
 	attachmentsMap := make(map[uint64][]entities.Attachment)
 	for rows.Next() {
 		var a entities.Attachment
-		// Используем ваш существующий scan из FindAllByOrderID
 		if err := rows.Scan(&a.ID, &a.OrderID, &a.UserID, &a.FileName, &a.FilePath, &a.FileType, &a.FileSize, &a.CreatedAt); err != nil {
 			return nil, err
 		}
-		// Группируем вложения по order_id
 		attachmentsMap[a.OrderID] = append(attachmentsMap[a.OrderID], a)
 	}
 
 	return attachmentsMap, rows.Err()
 }
-
-// --- Существующие методы остаются без изменений ---
 
 func (r *attachmentRepository) CreateInTx(ctx context.Context, tx pgx.Tx, attachment *entities.Attachment) (uint64, error) {
 	query := `

@@ -47,17 +47,17 @@ type CreateOrderDTO struct {
 type UpdateOrderDTO struct {
 	Name            null.String `json:"name,omitempty" validate:"omitempty,min=5"`
 	Address         null.String `json:"address,omitempty" validate:"omitempty,min=5"`
-	Comment         null.String `json:"comment,omitempty" validate:"omitempty,min=3"`
+	Comment         null.String `json:"comment,omitempty"`
 	Duration        null.Time   `json:"duration,omitempty"`
-	DepartmentID    null.Int    `json:"department_id,omitempty"`
-	OtdelID         null.Int    `json:"otdel_id,omitempty"`
+	DepartmentID    *uint64     `json:"department_id,omitempty"`
+	OtdelID         *uint64     `json:"otdel_id,omitempty"`
 	BranchID        null.Int    `json:"branch_id,omitempty"`
 	OfficeID        null.Int    `json:"office_id,omitempty"`
 	EquipmentID     null.Int    `json:"equipment_id,omitempty"`
 	EquipmentTypeID null.Int    `json:"equipment_type_id,omitempty"`
-	ExecutorID      null.Int    `json:"executor_id,omitempty"`
-	StatusID        null.Int    `json:"status_id,omitempty"`
-	PriorityID      null.Int    `json:"priority_id,omitempty"`
+	ExecutorID      *uint64     `json:"executor_id,omitempty"`
+	StatusID        *uint64     `json:"status_id,omitempty"`
+	PriorityID      *uint64     `json:"priority_id,omitempty"`
 }
 
 type OrderListResponseDTO struct {

@@ -12,11 +12,10 @@ import (
 
 func runRoleRouter(
 	secureGroup *echo.Group,
-	roleService services.RoleServiceInterface, 
+	roleService services.RoleServiceInterface,
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
 ) {
-	
 	roleCtrl := controllers.NewRoleController(roleService, logger)
 
 	roles := secureGroup.Group("/role")

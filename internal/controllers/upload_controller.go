@@ -27,10 +27,10 @@ func (ctrl *UploadController) Upload(c echo.Context) error {
 	if !ok {
 		return utils.ErrorResponse(c,
 			apperrors.NewHttpError(
-				http.StatusBadRequest, // код HTTP
-				"Неизвестный контекст загрузки", // сообщение для пользователя
-				apperrors.ErrBadRequest,                          // внутренняя ошибка для логов (error)
-				map[string]interface{}{"context": uploadContext}, // контекст (можно nil)
+				http.StatusBadRequest,
+				"Неизвестный контекст загрузки",
+				apperrors.ErrBadRequest,
+				map[string]interface{}{"context": uploadContext},
 			),
 			ctrl.logger,
 		)

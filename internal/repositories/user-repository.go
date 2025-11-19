@@ -3,8 +3,10 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -29,13 +31,15 @@ var (
 	userSelectFields = []string{
 		"u.id", "u.fio", "u.email", "u.phone_number", "u.password", "u.position_id", "u.status_id", "s.code as status_code",
 		"u.photo_url", "u.branch_id", "u.department_id", "u.office_id", "u.otdel_id",
-		"u.created_at", "u.updated_at", "u.deleted_at", "u.must_change_password", "u.is_head",
+		"u.created_at", "u.updated_at", "u.deleted_at", "u.must_change_password", "u.is_head", "u.telegram_chat_id",
+		"u.external_id", "u.source_system",
 	}
 	userAllowedFilterFields = map[string]string{
 		"department_id": "u.department_id",
 		"branch_id":     "u.branch_id",
 		"position_id":   "u.position_id",
 		"otdel_id":      "u.otdel_id",
+		"office_id":     "u.office_id",
 	}
 	userAllowedSortFields = map[string]bool{
 		"id":         true,
@@ -47,12 +51,17 @@ var (
 )
 
 type UserRepositoryInterface interface {
+	//  --- Sync ---
+	CreateFromSync(ctx context.Context, tx pgx.Tx, user entities.User) (uint64, error)
+	UpdateFromSync(ctx context.Context, tx pgx.Tx, id uint64, user entities.User) error
+	FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.User, error)
 	// --- Основной CRUD ---
 	GetUsers(ctx context.Context, filter types.Filter) ([]entities.User, uint64, error)
 	FindUserByID(ctx context.Context, id uint64) (*entities.User, error)
 	FindUserByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.User, error)
 	CreateUser(ctx context.Context, tx pgx.Tx, user *entities.User) (uint64, error)
-	UpdateUser(ctx context.Context, tx pgx.Tx, payload dto.UpdateUserDTO) error
+	UpdateUserFull(ctx context.Context, user *entities.User) error
+	UpdateUser(ctx context.Context, tx pgx.Tx, payload dto.UpdateUserDTO, rawRequestBody []byte) error
 	DeleteUser(ctx context.Context, id uint64) error
 
 	// --- Методы для Аутентификации и Авторизации ---
@@ -74,6 +83,10 @@ type UserRepositoryInterface interface {
 	BeginTx(ctx context.Context) (pgx.Tx, error)
 	FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error)
 	IsHeadExistsInDepartment(ctx context.Context, departmentID uint64, excludeUserID uint64) (bool, error)
+
+	// --- Методы-хелперы для Telegram ---
+	UpdateTelegramChatID(ctx context.Context, userID uint64, chatID int64) error
+	FindUserByTelegramChatID(ctx context.Context, chatID int64) (*entities.User, error)
 }
 
 type UserRepository struct {
@@ -93,20 +106,26 @@ func (r *UserRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 func scanUserEntity(row pgx.Row) (*entities.User, error) {
 	var user entities.User
 	var createdAt, updatedAt, deletedAt sql.NullTime
-	var photoURL sql.NullString
-	var branchID, officeID, otdelID sql.NullInt64
+	var photoURL, externalID, sourceSystem sql.NullString
+	var branchID, officeID, otdelID, positionID sql.NullInt64
+
 	err := row.Scan(
 		&user.ID, &user.Fio, &user.Email, &user.PhoneNumber, &user.Password,
-		&user.PositionID, &user.StatusID, &user.StatusCode, &photoURL,
-		&branchID, &user.DepartmentID, &officeID, &otdelID,
-		&createdAt, &updatedAt, &deletedAt, &user.MustChangePassword, &user.IsHead,
+		&positionID, &user.StatusID, &user.StatusCode, &photoURL, &branchID, &user.DepartmentID,
+		&officeID, &otdelID, &createdAt, &updatedAt, &deletedAt,
+		&user.MustChangePassword, &user.IsHead, &user.TelegramChatID,
+		&externalID, &sourceSystem,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
 		}
+		// Для отладки добавляем лог
+		log.Printf("!!! ОШИБКА в scanUserEntity: %v. Проверьте порядок полей в userSelectFields!", err)
 		return nil, err
 	}
+
+	// Обрабатываем nullable поля
 	if createdAt.Valid {
 		user.CreatedAt = &createdAt.Time
 	}
@@ -119,6 +138,8 @@ func scanUserEntity(row pgx.Row) (*entities.User, error) {
 	if photoURL.Valid {
 		user.PhotoURL = &photoURL.String
 	}
+
+	// Конвертируем NullInt64 в *uint64
 	if branchID.Valid {
 		v := uint64(branchID.Int64)
 		user.BranchID = &v
@@ -131,6 +152,17 @@ func scanUserEntity(row pgx.Row) (*entities.User, error) {
 		v := uint64(otdelID.Int64)
 		user.OtdelID = &v
 	}
+	if positionID.Valid {
+		v := uint64(positionID.Int64)
+		user.PositionID = &v
+	}
+	if externalID.Valid {
+		user.ExternalID = &externalID.String
+	}
+	if sourceSystem.Valid {
+		user.SourceSystem = &sourceSystem.String
+	}
+
 	return &user, nil
 }
 
@@ -138,14 +170,12 @@ func (r *UserRepository) CreateUser(ctx context.Context, tx pgx.Tx, entity *enti
 	query := `INSERT INTO users (fio, email, phone_number, password, position_id, status_id, branch_id, 
 								 department_id, office_id, otdel_id, photo_url, must_change_password, is_head,
 								 created_at, updated_at) 
-			  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`
-
+			  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW()) RETURNING id`
 	var createdID uint64
 	err := tx.QueryRow(ctx, query,
 		entity.Fio, entity.Email, entity.PhoneNumber, entity.Password, entity.PositionID,
 		entity.StatusID, entity.BranchID, entity.DepartmentID, entity.OfficeID,
 		entity.OtdelID, entity.PhotoURL, entity.MustChangePassword, entity.IsHead,
-		entity.CreatedAt, entity.UpdatedAt,
 	).Scan(&createdID)
 	if err != nil {
 		if pgErr, ok := err.(*pgconn.PgError); ok {
@@ -164,11 +194,111 @@ func (r *UserRepository) CreateUser(ctx context.Context, tx pgx.Tx, entity *enti
 	return createdID, nil
 }
 
-func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, payload dto.UpdateUserDTO) error {
+func (r *UserRepository) CreateFromSync(ctx context.Context, tx pgx.Tx, user entities.User) (uint64, error) {
+	query := `
+		INSERT INTO users (fio, email, phone_number, password, status_id, position_id, department_id, 
+		                   otdel_id, branch_id, office_id, external_id, source_system,
+						   created_at, updated_at, must_change_password, is_head)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW(), false, false)
+		RETURNING id`
+	var newID uint64
+	err := tx.QueryRow(ctx, query,
+		user.Fio, user.Email, user.PhoneNumber, user.Password, user.StatusID, user.PositionID,
+		user.DepartmentID, user.OtdelID, user.BranchID, user.OfficeID, user.ExternalID, user.SourceSystem,
+	).Scan(&newID)
+	// (Обработка ошибок, например, на дубликат email)
+	return newID, err
+}
+
+func (r *UserRepository) findOneUser(ctx context.Context, querier Querier, where sq.Eq) (*entities.User, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+
+	// Собираем запрос с JOIN'ом, как в ваших других методах
+	query, args, err := psql.Select(userSelectFields...).
+		From("users u").
+		Join("statuses s ON u.status_id = s.id").
+		Where(where).
+		ToSql()
+	if err != nil {
+		r.logger.Error("Failed to build SQL for findOneUser", zap.Error(err))
+		return nil, fmt.Errorf("ошибка сборки запроса для findOneUser: %w", err)
+	}
+
+	row := querier.QueryRow(ctx, query, args...)
+
+	return scanUserEntity(row)
+}
+
+func (r *UserRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.User, error) {
+	var querier Querier = r.storage
+	if tx != nil {
+		querier = tx
+	}
+	return r.findOneUser(ctx, querier, sq.Eq{"u.external_id": externalID, "u.source_system": sourceSystem})
+}
+
+func (r *UserRepository) UpdateFromSync(ctx context.Context, tx pgx.Tx, id uint64, user entities.User) error {
+	query := `
+		UPDATE users SET 
+			fio = $1, email = $2, phone_number = $3, status_id = $4, position_id = $5,
+			department_id = $6, otdel_id = $7, branch_id = $8, office_id = $9, 
+			updated_at = NOW()
+		WHERE id = $10`
+	result, err := tx.Exec(ctx, query,
+		user.Fio, user.Email, user.PhoneNumber, user.StatusID, user.PositionID,
+		user.DepartmentID, user.OtdelID, user.BranchID, user.OfficeID, id)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) UpdateUserFull(ctx context.Context, user *entities.User) error {
+	query := `
+		UPDATE users SET 
+			fio = $1, 
+			email = $2,
+			department_id = $3,
+			position_id = $4,
+            updated_at = NOW()
+		WHERE id = $5`
+
+	result, err := r.storage.Exec(ctx, query,
+		user.Fio,
+		user.Email,
+		user.DepartmentID,
+		user.PositionID,
+		user.ID,
+	)
+	if err != nil {
+		if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+			return apperrors.NewHttpError(http.StatusConflict, "Email уже используется", err, nil)
+		}
+		return err
+	}
+
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, payload dto.UpdateUserDTO, rawRequestBody []byte) error {
 	builder := sq.Update(userTable).
 		PlaceholderFormat(sq.Dollar).
 		Where(sq.Eq{"id": payload.ID, "deleted_at": nil}).
 		Set("updated_at", time.Now())
+
+	wasFieldSent := func(key string) bool {
+		var data map[string]interface{}
+		_ = json.Unmarshal(rawRequestBody, &data)
+		_, exists := data[key]
+		return exists
+	}
 
 	if payload.Fio != nil {
 		builder = builder.Set("fio", *payload.Fio)
@@ -191,10 +321,10 @@ func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, payload dto.
 	if payload.DepartmentID != nil {
 		builder = builder.Set("department_id", *payload.DepartmentID)
 	}
-	if payload.OfficeID != nil {
+	if wasFieldSent("office_id") {
 		builder = builder.Set("office_id", payload.OfficeID)
 	}
-	if payload.OtdelID != nil {
+	if wasFieldSent("otdel_id") {
 		builder = builder.Set("otdel_id", payload.OtdelID)
 	}
 	if payload.PhotoURL != nil {
@@ -633,4 +763,45 @@ func (r *UserRepository) FindActiveUsersByPositionTypeAndOrg(ctx context.Context
 	}
 
 	return users, rows.Err()
+}
+
+func (r *UserRepository) UpdateTelegramChatID(ctx context.Context, userID uint64, chatID int64) error {
+	query := `UPDATE users SET telegram_chat_id = $1, updated_at = NOW() WHERE id = $2`
+
+	tag, err := r.storage.Exec(ctx, query, chatID, userID)
+	if err != nil {
+
+		r.logger.Error(
+			"UserRepository: Ошибка при выполнении SQL-запроса на обновление telegram_chat_id",
+			zap.Uint64("userID", userID),
+			zap.Int64("chatID", chatID),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	if tag.RowsAffected() == 0 {
+		r.logger.Warn(
+			"UserRepository: Попытка обновить telegram_chat_id для несуществующего пользователя",
+			zap.Uint64("userID", userID),
+		)
+		return apperrors.ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *UserRepository) FindUserByTelegramChatID(ctx context.Context, chatID int64) (*entities.User, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select(userSelectFields...).
+		From("users u").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{"u.telegram_chat_id": chatID, "u.deleted_at": nil}).
+		Limit(1).
+		ToSql()
+	if err != nil {
+		return nil, err
+	}
+	row := r.storage.QueryRow(ctx, query, args...)
+	return scanUserEntity(row)
 }

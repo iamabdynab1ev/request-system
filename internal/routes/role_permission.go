@@ -18,7 +18,7 @@ func runRolePermissionRouter(
 ) {
 	rpCtrl := controllers.NewRolePermissionController(rpService, logger)
 
-	rpGroup := secureGroup.Group("/role-permission")
+	rpGroup := secureGroup.Group("/role_permission")
 
 	rpGroup.GET("", rpCtrl.GetRolePermissions, authMW.AuthorizeAny(authz.RolesView))
 	rpGroup.GET("/:id", rpCtrl.FindRolePermission, authMW.AuthorizeAny(authz.RolesView))

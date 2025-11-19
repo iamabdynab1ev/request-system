@@ -7,13 +7,16 @@ import (
 )
 
 type Office struct {
-	ID       uint64    `json:"id"`
-	Name     string    `json:"name"`
-	Address  string    `json:"address"`
-	OpenDate time.Time `json:"open_date"`
-
-	BranchID uint64 `json:"branch_id"`
-	StatusID uint64 `json:"status_id"`
+	ID           uint64
+	Name         string
+	Address      string
+	OpenDate     time.Time
+	BranchID     uint64
+	StatusID     uint64
+	ExternalID   *string
+	SourceSystem *string
+	Branch       *Branch
+	Status       *Status
 
 	types.BaseEntity
 }

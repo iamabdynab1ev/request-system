@@ -69,6 +69,7 @@ var (
 	ErrInvalidCredentials   = NewHttpError(http.StatusUnauthorized, "Неверные учетные данные", nil, nil)
 	ErrInternalServer       = NewHttpError(http.StatusInternalServerError, "Внутренняя ошибка сервера", nil, nil)
 	ErrAccountLocked        = NewHttpError(http.StatusForbidden, "Аккаунт заблокирован", nil, nil)
+	ErrUserDisabled         = NewHttpError(http.StatusForbidden, "Аккаунт неактивен", nil, nil)
 	ErrTokenIsNotAccess     = NewHttpError(http.StatusUnauthorized, "Токен не является access токеном", nil, nil)
 	ErrInvalidAuthHeader    = NewHttpError(http.StatusUnauthorized, "Недействительный заголовок авторизации", nil, nil)
 	ErrEmptyAuthHeader      = NewHttpError(http.StatusUnauthorized, "Отсутствует заголовок авторизации", nil, nil)

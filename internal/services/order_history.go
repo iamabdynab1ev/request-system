@@ -18,32 +18,37 @@ type OrderHistoryServiceInterface interface {
 }
 
 type OrderHistoryService struct {
-	repo         repositories.OrderHistoryRepositoryInterface
-	orderService OrderServiceInterface
-	userRepo     repositories.UserRepositoryInterface
-	logger       *zap.Logger
+	repo              repositories.OrderHistoryRepositoryInterface
+	userRepo          repositories.UserRepositoryInterface
+	departmentService DepartmentServiceInterface
+	otdelService      OtdelServiceInterface
+	statusRepo        repositories.StatusRepositoryInterface
+	priorityRepo      repositories.PriorityRepositoryInterface
+	logger            *zap.Logger
 }
 
 func NewOrderHistoryService(
 	repo repositories.OrderHistoryRepositoryInterface,
-	orderService OrderServiceInterface,
 	userRepo repositories.UserRepositoryInterface,
+	departmentService DepartmentServiceInterface,
+	otdelService OtdelServiceInterface,
+	statusRepo repositories.StatusRepositoryInterface,
+	priorityRepo repositories.PriorityRepositoryInterface,
 	logger *zap.Logger,
 ) OrderHistoryServiceInterface {
 	return &OrderHistoryService{
-		repo:         repo,
-		orderService: orderService,
-		userRepo:     userRepo,
-		logger:       logger,
+		repo:              repo,
+		userRepo:          userRepo,
+		departmentService: departmentService,
+		otdelService:      otdelService,
+		statusRepo:        statusRepo,
+		priorityRepo:      priorityRepo,
+		logger:            logger,
 	}
 }
 
 func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID uint64, limitStr, offsetStr string) ([]dto.TimelineEventDTO, error) {
-	_, err := s.orderService.FindOrderByID(ctx, orderID)
-	if err != nil {
-		s.logger.Error("Доступ к истории запрещен", zap.Uint64("orderID", orderID), zap.Error(err))
-		return nil, err
-	}
+	// ПРОВЕРКА ПРАВ ДОСТУПА УДАЛЕНА ОТСЮДА.
 
 	limit, _ := strconv.Atoi(limitStr)
 	if limit <= 0 || limit > 200 {
@@ -59,81 +64,86 @@ func (s *OrderHistoryService) GetTimelineByOrderID(ctx context.Context, orderID 
 		return []dto.TimelineEventDTO{}, err
 	}
 
-	var timeline []dto.TimelineEventDTO
+	meta := buildHistoryMetadata(historyEvents)
 
-	currentBlock := &dto.TimelineEventDTO{
-		Lines:     []string{},
-		Actor:     getActorFromEvent(historyEvents[0], s, ctx, historyEvents),
-		CreatedAt: historyEvents[0].CreatedAt.Format("02.01.2006 / 15:04"),
-	}
+	var timeline []dto.TimelineEventDTO
+	currentBlock := createTimelineBlock(historyEvents[0], s, ctx, meta)
 	addEventToBlock(ctx, currentBlock, historyEvents[0], s)
 
 	for i := 1; i < len(historyEvents); i++ {
 		event := historyEvents[i]
 		prevEvent := historyEvents[i-1]
 
-		if event.UserID == prevEvent.UserID && event.CreatedAt.Sub(prevEvent.CreatedAt) < 5*time.Second {
+		isSameTransaction := event.TxID != nil && prevEvent.TxID != nil && event.TxID.String() == prevEvent.TxID.String()
+
+		if isSameTransaction {
 			addEventToBlock(ctx, currentBlock, event, s)
 		} else {
 			timeline = append(timeline, *currentBlock)
-			currentBlock = &dto.TimelineEventDTO{
-				Lines:     []string{},
-				Actor:     getActorFromEvent(event, s, ctx, historyEvents),
-				CreatedAt: event.CreatedAt.Format("02.01.2006 / 15:04"),
-			}
+			currentBlock = createTimelineBlock(event, s, ctx, meta)
 			addEventToBlock(ctx, currentBlock, event, s)
 		}
 	}
 
 	timeline = append(timeline, *currentBlock)
-	s.logger.Info("Таймлайн сформирован", zap.Int("blocks", len(timeline)))
+	s.logger.Info("Таймлайн сформирован", zap.Int("blocks", len(timeline)), zap.Uint64("orderID", orderID))
 	return timeline, nil
 }
 
-func getActorFromEvent(event repositories.OrderHistoryItem, s *OrderHistoryService, ctx context.Context, allEvents []repositories.OrderHistoryItem) dto.ShortUserDTO {
+type historyMetadata struct {
+	creatorID    uint64
+	delegatorIDs map[uint64]struct{}
+}
+
+func buildHistoryMetadata(events []repositories.OrderHistoryItem) historyMetadata {
+	meta := historyMetadata{delegatorIDs: make(map[uint64]struct{})}
+	for _, e := range events {
+		if e.EventType == "CREATE" {
+			meta.creatorID = e.UserID
+		}
+		if e.EventType == "DELEGATION" {
+			meta.delegatorIDs[e.UserID] = struct{}{}
+		}
+	}
+	return meta
+}
+
+// createTimelineBlock - хелпер для создания чистого блока таймлайна.
+func createTimelineBlock(event repositories.OrderHistoryItem, s *OrderHistoryService, ctx context.Context, meta historyMetadata) *dto.TimelineEventDTO {
+	return &dto.TimelineEventDTO{
+		Lines:     []string{},
+		Actor:     getActorFromEvent(event, s, ctx, meta),
+		CreatedAt: event.CreatedAt.Format("02.01.2006 / 15:04"),
+	}
+}
+
+// getActorFromEvent - теперь работает за O(1) благодаря заранее собранным мета-данным.
+func getActorFromEvent(event repositories.OrderHistoryItem, s *OrderHistoryService, ctx context.Context, meta historyMetadata) dto.ShortUserDTO {
 	user, err := s.userRepo.FindUserByID(ctx, event.UserID)
-	var fio string
+	fio := "Неизвестный пользователь"
 	if err == nil && user != nil {
 		fio = user.Fio
-	} else {
-		fio = "Неизвестный пользователь"
 	}
 
 	var role string
-	var creatorID uint64
-	for _, e := range allEvents {
-		if e.EventType == "CREATE" {
-			creatorID = e.UserID
-			break
-		}
-	}
-
-	if event.UserID == creatorID {
+	if event.UserID == meta.creatorID {
 		role = "creator"
 	} else {
-
-		isDelegator := false
-		for _, e := range allEvents {
-			if e.UserID == event.UserID && e.EventType == "DELEGATION" {
-				isDelegator = true
-				break
-			}
-		}
-		if isDelegator {
+		if _, isDelegator := meta.delegatorIDs[event.UserID]; isDelegator {
 			role = "delegator"
 		} else {
-			role = "executor"
+			role = "executor" // Если не создатель и не делегатор, значит, исполнитель.
 		}
 	}
 
 	return dto.ShortUserDTO{ID: event.UserID, Fio: fio, Role: role}
 }
 
+// addEventToBlock - эта функция осталась почти без изменений.
 func addEventToBlock(ctx context.Context, block *dto.TimelineEventDTO, event repositories.OrderHistoryItem, s *OrderHistoryService) {
-	fieldMap := map[string]string{"OTDEL_CHANGE": "Отдел", "NAME_CHANGE": "Имя заявки", "ADDRESS_CHANGE": "Адрес"}
-
 	if event.EventType == "COMMENT" && event.Comment.Valid {
-		block.Comment = &event.Comment.String
+		commentText := event.Comment.String
+		block.Comment = &commentText
 	}
 
 	if event.NewValue.Valid || event.EventType == "CREATE" || event.EventType == "COMMENT" {
@@ -157,17 +167,36 @@ func addEventToBlock(ctx context.Context, block *dto.TimelineEventDTO, event rep
 					URL:      "/uploads/" + event.Attachment.FilePath,
 				}
 			}
+		case "DEPARTMENT_CHANGE":
+			id, err := strconv.ParseUint(newValue, 10, 64)
+			if err == nil {
+				if dept, err := s.departmentService.FindDepartment(ctx, id); err == nil {
+					line = fmt.Sprintf("Заявка переведена в департамент: «%s»", dept.Name)
+				} else {
+					s.logger.Warn("Не удалось найти департамент по ID из истории", zap.Uint64("deptID", id))
+					line = fmt.Sprintf("Изменено поле 'Департамент': ID -> %s", newValue)
+				}
+			}
+		case "OTDEL_CHANGE":
+			id, err := strconv.ParseUint(newValue, 10, 64)
+			if err == nil {
+				if otdel, err := s.otdelService.FindOtdel(ctx, id); err == nil {
+					line = fmt.Sprintf("Заявка переведена в отдел: «%s»", otdel.Name)
+				} else {
+					s.logger.Warn("Не удалось найти отдел по ID из истории", zap.Uint64("otdelID", id))
+					line = fmt.Sprintf("Изменено поле 'Отдел': ID -> %s", newValue)
+				}
+			}
 		case "STATUS_CHANGE":
 			newID, _ := strconv.ParseUint(newValue, 10, 64)
-			if newStatus, err := s.orderService.GetStatusByID(ctx, newID); err == nil {
+			if newStatus, err := s.statusRepo.FindStatus(ctx, newID); err == nil {
 				line = fmt.Sprintf("Установлен статус: «%s»", newStatus.Name)
 			}
 		case "PRIORITY_CHANGE":
 			newID, _ := strconv.ParseUint(newValue, 10, 64)
-			if newPriority, err := s.orderService.GetPriorityByID(ctx, newID); err == nil {
+			if newPriority, err := s.priorityRepo.FindByID(ctx, newID); err == nil {
 				line = fmt.Sprintf("Установлен приоритет: «%s»", newPriority.Name)
 			}
-
 		case "DURATION_CHANGE":
 			parsedTime, err := time.Parse(time.RFC3339, newValue)
 			if err == nil {
@@ -175,10 +204,11 @@ func addEventToBlock(ctx context.Context, block *dto.TimelineEventDTO, event rep
 			} else {
 				line = fmt.Sprintf("Срок выполнения изменен на: %s", newValue)
 			}
-
 		case "COMMENT":
-			line = fmt.Sprintf("Добавлен комментарий: %s", newValue)
+
 		default:
+
+			fieldMap := map[string]string{"NAME_CHANGE": "Имя заявки", "ADDRESS_CHANGE": "Адрес"}
 			if humanField, ok := fieldMap[event.EventType]; ok {
 				oldValue := utils.NullStringToString(event.OldValue)
 				line = fmt.Sprintf("Изменено поле '%s': «%s» -> «%s»", humanField, oldValue, newValue)

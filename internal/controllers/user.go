@@ -91,7 +91,6 @@ func (c *UserController) CreateUser(ctx echo.Context) error {
 }
 
 func (c *UserController) GetUserPermissions(ctx echo.Context) error {
-	c.logger.Info("=======> 1. ЗАШЕЛ В КОНТРОЛЛЕР GetUserPermissions")
 	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
@@ -124,7 +123,7 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 			return c.errorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный JSON в поле 'data'", err, nil))
 		}
 	}
-
+	rawRequestBody := []byte(dataString)
 	photoURL, err := c.handlePhotoUpload(ctx, "profile_photo")
 	if err != nil {
 		return c.errorResponse(ctx, err)
@@ -138,10 +137,11 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 		return c.errorResponse(ctx, err)
 	}
 
-	res, err := c.userService.UpdateUser(reqCtx, payload)
+	res, err := c.userService.UpdateUser(reqCtx, payload, rawRequestBody)
 	if err != nil {
 		return c.errorResponse(ctx, err)
 	}
+
 	return utils.SuccessResponse(ctx, res, "Пользователь успешно обновлен", http.StatusOK)
 }
 

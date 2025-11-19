@@ -4,7 +4,7 @@ package controllers
 import (
 	"bytes"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -43,7 +43,7 @@ func (c *OrderRoutingRuleController) Create(ctx echo.Context) error {
 
 func (c *OrderRoutingRuleController) Update(ctx echo.Context) error {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	rawBody, err := ioutil.ReadAll(ctx.Request().Body)
+	rawBody, err := io.ReadAll(ctx.Request().Body)
 	if err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Не удалось прочитать тело запроса", err, nil), c.logger)
 	}
@@ -52,7 +52,7 @@ func (c *OrderRoutingRuleController) Update(ctx echo.Context) error {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверные данные в формате JSON", err, nil), c.logger)
 	}
 
-	ctx.Request().Body = ioutil.NopCloser(bytes.NewBuffer(rawBody))
+	ctx.Request().Body = io.NopCloser(bytes.NewBuffer(rawBody))
 
 	if err := ctx.Validate(&d); err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)

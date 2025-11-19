@@ -3,7 +3,7 @@ package entities
 import "request-system/pkg/types"
 
 type Status struct {
-	ID        int     `json:"id"`
+	ID        uint64  `json:"id"`
 	IconSmall *string `json:"icon_small"`
 	Name      string  `json:"name"`
 	Type      int     `json:"type"`

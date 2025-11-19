@@ -48,9 +48,3 @@ type BranchDTO struct {
 	CreatedAt   string          `json:"created_at"`
 	UpdatedAt   string          `json:"updated_at"`
 }
-
-type ShortBranchDTO struct {
-	ID        uint64 `json:"id"`
-	Name      string `json:"name"`
-	ShortName string `json:"short_name"`
-}

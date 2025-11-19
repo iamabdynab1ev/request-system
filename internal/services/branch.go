@@ -13,11 +13,11 @@ import (
 	"request-system/pkg/types"
 	"request-system/pkg/utils"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
 const (
-	timeLayout     = "2006-01-02"
 	dateTimeLayout = "2006-01-02 15:04:05"
 )
 
@@ -30,13 +30,19 @@ type BranchServiceInterface interface {
 }
 
 type BranchService struct {
+	txManager        repositories.TxManagerInterface
 	branchRepository repositories.BranchRepositoryInterface
 	userRepository   repositories.UserRepositoryInterface
 	logger           *zap.Logger
 }
 
-func NewBranchService(branchRepo repositories.BranchRepositoryInterface, userRepo repositories.UserRepositoryInterface, logger *zap.Logger) BranchServiceInterface {
-	return &BranchService{branchRepository: branchRepo, userRepository: userRepo, logger: logger}
+func NewBranchService(txManager repositories.TxManagerInterface, branchRepo repositories.BranchRepositoryInterface, userRepo repositories.UserRepositoryInterface, logger *zap.Logger) BranchServiceInterface {
+	return &BranchService{
+		txManager:        txManager,
+		branchRepository: branchRepo,
+		userRepository:   userRepo,
+		logger:           logger,
+	}
 }
 
 // Приватный хелпер для проверки прав, чтобы не дублировать код
@@ -70,19 +76,28 @@ func branchEntityToDTO(entity *entities.Branch) *dto.BranchDTO {
 		}
 	}
 
-	return &dto.BranchDTO{
+	dto := &dto.BranchDTO{
 		ID:          entity.ID,
 		Name:        entity.Name,
 		ShortName:   entity.ShortName,
-		Address:     entity.Address,
-		PhoneNumber: entity.PhoneNumber,
-		Email:       entity.Email,
-		EmailIndex:  entity.EmailIndex,
-		OpenDate:    entity.OpenDate.Format(timeLayout),
+		Address:     utils.GetStringFromPtr(entity.Address),
+		PhoneNumber: utils.GetStringFromPtr(entity.PhoneNumber),
+		Email:       utils.GetStringFromPtr(entity.Email),
+		EmailIndex:  utils.GetStringFromPtr(entity.EmailIndex),
 		Status:      dtoStatus,
-		CreatedAt:   entity.CreatedAt.Format(dateTimeLayout),
-		UpdatedAt:   entity.UpdatedAt.Format(dateTimeLayout),
 	}
+
+	if entity.OpenDate != nil {
+		dto.OpenDate = entity.OpenDate.Format(timeLayout)
+	}
+	if entity.CreatedAt != nil {
+		dto.CreatedAt = entity.CreatedAt.Format(dateTimeLayout)
+	}
+	if entity.UpdatedAt != nil {
+		dto.UpdatedAt = entity.UpdatedAt.Format(dateTimeLayout)
+	}
+
+	return dto
 }
 
 // Метод для получения списка с фильтрацией - С ИЗМЕНЕНИЯМИ
@@ -102,18 +117,23 @@ func (s *BranchService) GetBranches(ctx context.Context, filter types.Filter) ([
 
 	dtos := make([]dto.BranchListResponseDTO, 0, len(entities))
 	for _, b := range entities {
-		dtos = append(dtos, dto.BranchListResponseDTO{
+		branchDto := dto.BranchListResponseDTO{
 			ID:          b.ID,
 			Name:        b.Name,
 			ShortName:   b.ShortName,
-			Address:     b.Address,
-			PhoneNumber: b.PhoneNumber,
-			Email:       b.Email,
-			EmailIndex:  b.EmailIndex,
-			OpenDate:    b.OpenDate.Format(timeLayout),
+			Address:     utils.GetStringFromPtr(b.Address),
+			PhoneNumber: utils.GetStringFromPtr(b.PhoneNumber),
+			Email:       utils.GetStringFromPtr(b.Email),
+			EmailIndex:  utils.GetStringFromPtr(b.EmailIndex),
 			StatusID:    b.StatusID,
-			CreatedAt:   b.CreatedAt.Format(dateTimeLayout),
-		})
+		}
+		if b.OpenDate != nil {
+			branchDto.OpenDate = b.OpenDate.Format(timeLayout)
+		}
+		if b.CreatedAt != nil {
+			branchDto.CreatedAt = b.CreatedAt.Format(dateTimeLayout)
+		}
+		dtos = append(dtos, branchDto)
 	}
 	return dtos, total, nil
 }
@@ -144,30 +164,48 @@ func (s *BranchService) CreateBranch(ctx context.Context, payload dto.CreateBran
 		return nil, apperrors.ErrForbidden
 	}
 
-	openDate, err := time.Parse(timeLayout, payload.OpenDate)
-	if err != nil {
-		return nil, apperrors.NewBadRequestError(fmt.Sprintf("Неверный формат даты: %s", payload.OpenDate))
+	var openDatePtr *time.Time
+	if payload.OpenDate != "" {
+		parsedDate, err := time.Parse(timeLayout, payload.OpenDate)
+		if err != nil {
+			return nil, apperrors.NewBadRequestError(fmt.Sprintf("Неверный формат даты: %s", payload.OpenDate))
+		}
+		openDatePtr = &parsedDate
 	}
-
 	entity := entities.Branch{
 		Name:        payload.Name,
 		ShortName:   payload.ShortName,
-		Address:     payload.Address,
-		PhoneNumber: payload.PhoneNumber,
-		Email:       payload.Email,
-		EmailIndex:  payload.EmailIndex,
-		OpenDate:    openDate,
+		Address:     utils.StringToPtr(payload.Address),
+		PhoneNumber: utils.StringToPtr(payload.PhoneNumber),
+		Email:       utils.StringToPtr(payload.Email),
+		EmailIndex:  utils.StringToPtr(payload.EmailIndex),
+		OpenDate:    openDatePtr,
 		StatusID:    payload.StatusID,
 	}
 
-	createdEntity, err := s.branchRepository.CreateBranch(ctx, entity)
+	var newBranchID uint64
+
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		// ИСПРАВЛЕНИЕ: Вызов CreateBranch теперь полностью соответствует интерфейсу
+		newBranchID, txErr = s.branchRepository.CreateBranch(ctx, tx, entity)
+		return txErr
+	})
 	if err != nil {
+		s.logger.Error("Ошибка в транзакции создания филиала", zap.Error(err))
 		return nil, err
 	}
-	return branchEntityToDTO(createdEntity), nil
+
+	createdBranch, err := s.branchRepository.FindBranch(ctx, newBranchID)
+	if err != nil {
+		s.logger.Error("Не удалось найти только что созданный филиал", zap.Uint64("id", newBranchID), zap.Error(err))
+		return nil, err
+	}
+
+	return branchEntityToDTO(createdBranch), nil
 }
 
-// Метод для обновления записи
+// UpdateBranch - ИСПРАВЛЕН
 func (s *BranchService) UpdateBranch(ctx context.Context, id uint64, payload dto.UpdateBranchDTO) (*dto.BranchDTO, error) {
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -182,6 +220,7 @@ func (s *BranchService) UpdateBranch(ctx context.Context, id uint64, payload dto
 		return nil, err
 	}
 
+	// Ваша логика обновления полей
 	if payload.Name != nil {
 		existingEntity.Name = *payload.Name
 	}
@@ -189,16 +228,16 @@ func (s *BranchService) UpdateBranch(ctx context.Context, id uint64, payload dto
 		existingEntity.ShortName = *payload.ShortName
 	}
 	if payload.Address != nil {
-		existingEntity.Address = *payload.Address
+		existingEntity.Address = payload.Address
 	}
 	if payload.PhoneNumber != nil {
-		existingEntity.PhoneNumber = *payload.PhoneNumber
+		existingEntity.PhoneNumber = payload.PhoneNumber
 	}
 	if payload.Email != nil {
-		existingEntity.Email = *payload.Email
+		existingEntity.Email = payload.Email
 	}
 	if payload.EmailIndex != nil {
-		existingEntity.EmailIndex = *payload.EmailIndex
+		existingEntity.EmailIndex = payload.EmailIndex
 	}
 	if payload.StatusID != nil {
 		existingEntity.StatusID = *payload.StatusID
@@ -208,10 +247,18 @@ func (s *BranchService) UpdateBranch(ctx context.Context, id uint64, payload dto
 		if err != nil {
 			return nil, apperrors.NewBadRequestError(fmt.Sprintf("Неверный формат даты: %s", *payload.OpenDate))
 		}
-		existingEntity.OpenDate = openDate
+		existingEntity.OpenDate = &openDate
+	}
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		// ИСПРАВЛЕНИЕ: UpdateBranch теперь возвращает только ошибку
+		return s.branchRepository.UpdateBranch(ctx, tx, id, *existingEntity)
+	})
+	if err != nil {
+		s.logger.Error("Ошибка в транзакции обновления филиала", zap.Error(err))
+		return nil, err
 	}
 
-	updatedEntity, err := s.branchRepository.UpdateBranch(ctx, id, *existingEntity)
+	updatedEntity, err := s.branchRepository.FindBranch(ctx, id)
 	if err != nil {
 		return nil, err
 	}

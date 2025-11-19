@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
@@ -26,20 +27,22 @@ func NewReportController(reportService services.ReportServiceInterface, logger *
 
 func (c *ReportController) GetReport(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-
 	filter, format := c.parseFilters(ctx)
 	c.logger.Debug("Запрос на отчет с фильтрами", zap.Any("filters", filter), zap.String("format", format))
 
-	data, total, err := c.reportService.GetReport(reqCtx, filter)
+	if format == "xlsx" {
+		data, _, err := c.reportService.GetReportForExcel(reqCtx, filter)
+		if err != nil {
+			return utils.ErrorResponse(ctx, err, c.logger)
+		}
+		return c.respondWithXLSX(ctx, data)
+	}
+	dtos, total, err := c.reportService.GetReportDTOs(reqCtx, filter)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
-	if format == "xlsx" {
-		return c.respondWithXLSX(ctx, data)
-	}
-
-	return utils.SuccessResponse(ctx, data, "Отчет успешно сформирован", http.StatusOK, total)
+	return utils.SuccessResponse(ctx, dtos, "Отчет успешно сформирован", http.StatusOK, total)
 }
 
 func (c *ReportController) parseFilters(ctx echo.Context) (entities.ReportFilter, string) {
@@ -92,22 +95,38 @@ var reportHeaders = []string{
 
 func rowToSlice(item entities.ReportItem) []interface{} {
 	dateFmt, timeFmt := "02.01.2006", "15:04"
-	var delegatedAt, completedAt, resHours string
-	if item.DelegatedAt.Valid {
-		delegatedAt = item.DelegatedAt.Time.Format(dateFmt + " " + timeFmt)
+
+	nullStr := func(s sql.NullString) string {
+		if s.Valid {
+			return s.String
+		}
+		return ""
 	}
-	if item.CompletedAt.Valid {
-		completedAt = item.CompletedAt.Time.Format(dateFmt)
-	}
-	if item.ResolutionHours.Valid {
-		resHours = fmt.Sprintf("%.2f", item.ResolutionHours.Float64)
+	nullTime := func(t sql.NullTime, format string) string {
+		if t.Valid {
+			return t.Time.Format(format)
+		}
+		return ""
 	}
 
 	return []interface{}{
-		item.OrderID, item.CreatorFio.String, item.CreatedAt.Format(dateFmt), item.CreatedAt.Format(timeFmt),
-		item.OrderID, item.OrderTypeName.String, item.PriorityName.String, item.StatusName,
-		item.OrderName, item.ExecutorFio.String, delegatedAt, item.ExecutorFio.String,
-		completedAt, resHours, item.SLAStatus, "-", item.Comment.String,
+		item.OrderID,                        //
+		nullStr(item.CreatorFio),            // Заявитель
+		item.CreatedAt.Format(dateFmt),      // Дата обращения
+		item.CreatedAt.Format(timeFmt),      // Время обращения
+		item.OrderID,                        // ID заявки
+		nullStr(item.OrderTypeName),         // Категория
+		nullStr(item.PriorityName),          // Приоритет
+		nullStr(item.StatusName),            // Статус
+		nullStr(item.OrderName),             // Описание проблемы
+		nullStr(item.ResponsibleFio),        // Ответственный
+		nullTime(item.DelegatedAt, dateFmt), // Дата назначения
+		nullStr(item.ExecutorFio),           // Исполнитель
+		nullTime(item.CompletedAt, dateFmt), // Дата решения
+		nullStr(item.ResolutionTimeStr),     // Время решения (часы)
+		nullStr(item.SLAStatus),             // SLA
+		nullStr(item.SourceDepartment),      // Источник
+		nullStr(item.Comment),               // Комментарий
 	}
 }
 

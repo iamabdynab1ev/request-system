@@ -150,7 +150,7 @@ func (r *orderRoutingRuleRepository) FindByTypeID(ctx context.Context, tx pgx.Tx
 }
 
 func (r *orderRoutingRuleRepository) ExistsByOrderTypeID(ctx context.Context, tx pgx.Tx, orderTypeID int) (bool, error) {
-	// СТАЛО (правильно)
+	
 	query := "SELECT EXISTS (SELECT 1 FROM order_routing_rules WHERE order_type_id = $1)"
 	var exists bool
 

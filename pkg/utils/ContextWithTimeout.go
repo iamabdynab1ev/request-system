@@ -262,3 +262,41 @@ func FormatTimePtr(t *time.Time) string {
 	}
 	return ""
 }
+
+func Uint32PtrToNullInt(ptr *uint32) null.Int {
+	if ptr == nil {
+		return null.IntFromPtr(nil)
+	}
+	val := int(*ptr)
+	return null.IntFrom(val)
+}
+
+func StringToUint64(s string) uint64 {
+	val, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0 // Возвращаем 0, если строка не является числом
+	}
+	return val
+}
+
+func StringToPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// TimeToPtr конвертирует time.Time в *time.Time, возвращая nil для нулевого времени.
+func TimeToPtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+func GetStringFromPtr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}

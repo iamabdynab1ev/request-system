@@ -1,3 +1,4 @@
+// Файл: internal/routes/otdel_router.go
 package routes
 
 import (
@@ -12,16 +13,17 @@ import (
 	"go.uber.org/zap"
 )
 
-func runOtdelRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
+func runOtdelRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware, txManager repositories.TxManagerInterface) { // <-- ДОБАВЛЕН txManager
 	otdelRepository := repositories.NewOtdelRepository(dbConn, logger)
-	userRepo := repositories.NewUserRepository(dbConn, logger) // Нужен для проверки прав
+	userRepo := repositories.NewUserRepository(dbConn, logger)
 
-	otdelService := services.NewOtdelService(otdelRepository, userRepo, logger)
+	// ИСПРАВЛЕНИЕ: Передаем txManager в конструктор
+	otdelService := services.NewOtdelService(txManager, otdelRepository, userRepo, logger)
 	otdelCtrl := controllers.NewOtdelController(otdelService, logger)
 
 	otdelGroup := secureGroup.Group("/otdel")
 
-	// Добавляем проверку прав для каждого роута
+	// Роуты (без изменений)
 	otdelGroup.GET("", otdelCtrl.GetOtdels, authMW.AuthorizeAny(authz.OtdelsView))
 	otdelGroup.GET("/:id", otdelCtrl.FindOtdel, authMW.AuthorizeAny(authz.OtdelsView))
 	otdelGroup.POST("", otdelCtrl.CreateOtdel, authMW.AuthorizeAny(authz.OtdelsCreate))

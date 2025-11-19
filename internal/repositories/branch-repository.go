@@ -1,3 +1,4 @@
+// Файл: internal/repositories/branch-repository.go
 package repositories
 
 import (
@@ -5,31 +6,35 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv" // <<<--- 1. ДОБАВЛЯЕМ НУЖНЫЙ ИМПОРТ
 	"strings"
+
+	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"go.uber.org/zap"
 )
 
 const branchTable = "branches"
 
-var (
-	branchAllowedFilterFields = map[string]string{"status_id": "b.status_id"}
-	branchAllowedSortFields   = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true}
-)
+var branchAllowedSortFields = map[string]string{
+	"id":         "b.id",
+	"name":       "b.name",
+	"created_at": "b.created_at",
+	"updated_at": "b.updated_at",
+}
 
+// BranchRepositoryInterface - финальный интерфейс
 type BranchRepositoryInterface interface {
 	GetBranches(ctx context.Context, filter types.Filter) ([]entities.Branch, uint64, error)
 	FindBranch(ctx context.Context, id uint64) (*entities.Branch, error)
-	CreateBranch(ctx context.Context, branch entities.Branch) (*entities.Branch, error)
-	UpdateBranch(ctx context.Context, id uint64, branch entities.Branch) (*entities.Branch, error)
 	DeleteBranch(ctx context.Context, id uint64) error
+	CreateBranch(ctx context.Context, tx pgx.Tx, branch entities.Branch) (uint64, error)
+	UpdateBranch(ctx context.Context, tx pgx.Tx, id uint64, branch entities.Branch) error
+	FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Branch, error)
 }
 
 type BranchRepository struct {
@@ -41,81 +46,18 @@ func NewBranchRepository(storage *pgxpool.Pool, logger *zap.Logger) BranchReposi
 	return &BranchRepository{storage: storage, logger: logger}
 }
 
-func (r *BranchRepository) buildFilterQuery(filter types.Filter) (string, []interface{}) {
-	args := make([]interface{}, 0)
-	conditions := []string{}
-	argCounter := 1
-
-	if filter.Search != "" {
-		searchPattern := "%" + strings.ToLower(filter.Search) + "%"
-		conditions = append(conditions, fmt.Sprintf("(LOWER(b.name) ILIKE $%d OR LOWER(b.short_name) ILIKE $%d)", argCounter, argCounter))
-		args = append(args, searchPattern)
-		argCounter++
-	}
-
-	for key, value := range filter.Filter {
-		dbColumn, isAllowed := branchAllowedFilterFields[key]
-		if !isAllowed {
-			continue
-		}
-
-		// Парсер всегда дает string, поэтому работаем только с этим типом.
-		if itemStr, ok := value.(string); ok && itemStr != "" {
-			// НОВАЯ ЛОГИКА: Проверяем, есть ли в строке запятая
-			if strings.Contains(itemStr, ",") {
-				// Если есть, это IN-запрос (например, "10, 5")
-				items := strings.Split(itemStr, ",")
-				placeholders := []string{}
-
-				for _, item := range items {
-					val, err := strconv.Atoi(strings.TrimSpace(item))
-					if err != nil {
-						continue // Пропускаем невалидные части, например, пустые строки
-					}
-					placeholders = append(placeholders, fmt.Sprintf("$%d", argCounter))
-					args = append(args, val)
-					argCounter++
-				}
-
-				if len(placeholders) > 0 {
-					conditions = append(conditions, fmt.Sprintf("%s IN (%s)", dbColumn, strings.Join(placeholders, ",")))
-				}
-			} else {
-				// Если запятой нет, это обычный запрос с одним значением
-				val, err := strconv.Atoi(strings.TrimSpace(itemStr))
-				if err != nil {
-					continue // Пропускаем, если значение не является числом
-				}
-				conditions = append(conditions, fmt.Sprintf("%s = $%d", dbColumn, argCounter))
-				args = append(args, val)
-				argCounter++
-			}
-		}
-	}
-
-	var whereClause string
-	if len(conditions) > 0 {
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
-	}
-	return whereClause, args
-}
-
-func (r *BranchRepository) scanBranch(row pgx.Row) (*entities.Branch, error) {
+// scanBranch - универсальная функция сканирования, работающая с указателями
+func scanBranch(row pgx.Row) (*entities.Branch, error) {
 	var b entities.Branch
 	var s entities.Status
-
-	// --- ИСПРАВЛЕНИЕ: СОЗДАЕМ ВРЕМЕННЫЕ ПЕРЕМЕННЫЕ ДЛЯ ВСЕХ NULLABLE-ПОЛЕЙ ---
-	var address, phoneNumber, email, emailIndex sql.NullString
+	// Для nullable полей используем специальные типы из пакета "database/sql"
+	var externalId, sourceSystem, address, phone, email, emailIndex sql.NullString
 	var openDate sql.NullTime
 
+	// Сканируем все поля
 	err := row.Scan(
-		&b.ID, &b.Name, &b.ShortName,
-		&address,     // Сканируем в `sql.NullString`
-		&phoneNumber, // Сканируем в `sql.NullString`
-		&email,       // Сканируем в `sql.NullString`
-		&emailIndex,  // Сканируем в `sql.NullString`
-		&openDate,    // Сканируем в `sql.NullTime`
-		&b.StatusID,
+		&b.ID, &b.Name, &b.ShortName, &address, &phone, &email, &emailIndex,
+		&openDate, &b.StatusID, &externalId, &sourceSystem,
 		&b.CreatedAt, &b.UpdatedAt,
 		&s.ID, &s.Name,
 	)
@@ -124,25 +66,30 @@ func (r *BranchRepository) scanBranch(row pgx.Row) (*entities.Branch, error) {
 		return nil, apperrors.ErrNotFound
 	}
 	if err != nil {
-		r.logger.Error("Failed to scan branch row", zap.Error(err))
-		return nil, err
+		return nil, fmt.Errorf("ошибка сканирования branch: %w", err)
 	}
 
-	// --- ПРИСВАИВАЕМ ЗНАЧЕНИЯ, ЕСЛИ ОНИ ЕСТЬ ---
+	// Корректно присваиваем значения указателям
 	if address.Valid {
-		b.Address = address.String
+		b.Address = &address.String
 	}
-	if phoneNumber.Valid {
-		b.PhoneNumber = phoneNumber.String
+	if phone.Valid {
+		b.PhoneNumber = &phone.String
 	}
 	if email.Valid {
-		b.Email = email.String
+		b.Email = &email.String
 	}
 	if emailIndex.Valid {
-		b.EmailIndex = emailIndex.String
+		b.EmailIndex = &emailIndex.String
 	}
 	if openDate.Valid {
-		b.OpenDate = openDate.Time
+		b.OpenDate = &openDate.Time
+	}
+	if externalId.Valid {
+		b.ExternalID = &externalId.String
+	}
+	if sourceSystem.Valid {
+		b.SourceSystem = &sourceSystem.String
 	}
 
 	if s.ID > 0 {
@@ -152,102 +99,72 @@ func (r *BranchRepository) scanBranch(row pgx.Row) (*entities.Branch, error) {
 	return &b, nil
 }
 
-func (r *BranchRepository) GetBranches(ctx context.Context, filter types.Filter) ([]entities.Branch, uint64, error) {
-	whereClause, args := r.buildFilterQuery(filter)
-
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s b %s", branchTable, whereClause)
-	var total uint64
-	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-	if total == 0 {
-		return []entities.Branch{}, 0, nil
-	}
-
-	orderByClause := "ORDER BY b.id DESC"
-
-	limitClause := ""
-	if filter.WithPagination {
-		argCounter := len(args) + 1
-		limitClause = fmt.Sprintf("LIMIT $%d OFFSET $%d", argCounter, argCounter+1)
-		args = append(args, filter.Limit, filter.Offset)
-	}
-
-	query := fmt.Sprintf(`
-		SELECT
-			b.id, b.name, b.short_name, b.address, b.phone_number, b.email, b.email_index,
-			b.open_date, b.status_id, b.created_at, b.updated_at,
-			COALESCE(s.id, 0), COALESCE(s.name, '')
-		FROM branches b
-		LEFT JOIN statuses s ON b.status_id = s.id
-		%s %s %s
-	`, whereClause, orderByClause, limitClause)
-
-	rows, err := r.storage.Query(ctx, query, args...)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	branches := make([]entities.Branch, 0)
-	for rows.Next() {
-		branch, err := r.scanBranch(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		branches = append(branches, *branch)
-	}
-	return branches, total, rows.Err()
-}
-
-func (r *BranchRepository) FindBranch(ctx context.Context, id uint64) (*entities.Branch, error) {
+// CreateBranch - реализация для сохранения в БД
+func (r *BranchRepository) CreateBranch(ctx context.Context, tx pgx.Tx, branch entities.Branch) (uint64, error) {
 	query := `
-		SELECT
-			b.id, b.name, b.short_name, b.address, b.phone_number, b.email, b.email_index,
-			b.open_date, b.status_id, b.created_at, b.updated_at,
-			COALESCE(s.id, 0), COALESCE(s.name, '')
-		FROM branches b
-		LEFT JOIN statuses s ON b.status_id = s.id
-		WHERE b.id = $1
-	`
-	return r.scanBranch(r.storage.QueryRow(ctx, query, id))
-}
-
-func (r *BranchRepository) CreateBranch(ctx context.Context, branch entities.Branch) (*entities.Branch, error) {
-	query := `
-		INSERT INTO branches (name, short_name, address, phone_number, email, email_index, open_date, status_id)
-		VALUES($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO branches (name, short_name, address, phone_number, email, email_index, open_date, status_id, external_id, source_system, created_at, updated_at)
+		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
 		RETURNING id
 	`
 	var newID uint64
-	err := r.storage.QueryRow(ctx, query,
+	err := tx.QueryRow(ctx, query,
 		branch.Name, branch.ShortName, branch.Address, branch.PhoneNumber,
 		branch.Email, branch.EmailIndex, branch.OpenDate, branch.StatusID,
+		branch.ExternalID, branch.SourceSystem,
 	).Scan(&newID)
-	if err != nil {
-		return nil, err
-	}
-	return r.FindBranch(ctx, newID)
+
+	return newID, err
 }
 
-func (r *BranchRepository) UpdateBranch(ctx context.Context, id uint64, branch entities.Branch) (*entities.Branch, error) {
+// UpdateBranch - реализация для обновления в БД
+func (r *BranchRepository) UpdateBranch(ctx context.Context, tx pgx.Tx, id uint64, branch entities.Branch) error {
 	query := `
 		UPDATE branches
 		SET name = $1, short_name = $2, address = $3, phone_number = $4, email = $5,
 		    email_index = $6, open_date = $7, status_id = $8, updated_at = NOW()
 		WHERE id = $9
 	`
-	result, err := r.storage.Exec(ctx, query,
+	result, err := tx.Exec(ctx, query,
 		branch.Name, branch.ShortName, branch.Address, branch.PhoneNumber,
-		branch.Email, branch.EmailIndex, branch.OpenDate, branch.StatusID,
-		id)
+		branch.Email, branch.EmailIndex, branch.OpenDate, branch.StatusID, id,
+	)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+// findOne - хелпер для поиска одной записи, остается без изменений
+func (r *BranchRepository) findOne(ctx context.Context, querier Querier, where sq.Eq) (*entities.Branch, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	queryBuilder := psql.Select(
+		"b.id", "b.name", "b.short_name", "b.address", "b.phone_number", "b.email", "b.email_index",
+		"b.open_date", "b.status_id", "b.external_id", "b.source_system",
+		"b.created_at", "b.updated_at",
+		"COALESCE(s.id, 0)", "COALESCE(s.name, '')",
+	).From("branches b").LeftJoin("statuses s ON b.status_id = s.id").Where(where)
+
+	sql, args, err := queryBuilder.ToSql()
 	if err != nil {
 		return nil, err
 	}
-	if result.RowsAffected() == 0 {
-		return nil, apperrors.ErrNotFound
+	// Используем нашу обновленную функцию сканирования
+	return scanBranch(querier.QueryRow(ctx, sql, args...))
+}
+
+func (r *BranchRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Branch, error) {
+	var querier Querier = r.storage
+	if tx != nil {
+		querier = tx
 	}
-	return r.FindBranch(ctx, id)
+	return r.findOne(ctx, querier, sq.Eq{"b.external_id": externalID, "b.source_system": sourceSystem})
+}
+
+func (r *BranchRepository) FindBranch(ctx context.Context, id uint64) (*entities.Branch, error) {
+	return r.findOne(ctx, r.storage, sq.Eq{"b.id": id})
 }
 
 func (r *BranchRepository) DeleteBranch(ctx context.Context, id uint64) error {
@@ -260,4 +177,83 @@ func (r *BranchRepository) DeleteBranch(ctx context.Context, id uint64) error {
 		return apperrors.ErrNotFound
 	}
 	return nil
+}
+
+func (r *BranchRepository) GetBranches(ctx context.Context, filter types.Filter) ([]entities.Branch, uint64, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	baseBuilder := psql.Select().From("branches AS b")
+
+	if filter.Search != "" {
+		baseBuilder = baseBuilder.Where(sq.Or{
+			sq.ILike{"b.name": "%" + filter.Search + "%"},
+			sq.ILike{"b.short_name": "%" + filter.Search + "%"},
+		})
+	}
+	// Логика фильтрации
+	if statusIDs, ok := filter.Filter["status_id"].(string); ok && statusIDs != "" {
+		baseBuilder = baseBuilder.Where(sq.Eq{"b.status_id": strings.Split(statusIDs, ",")})
+	}
+
+	countBuilder := baseBuilder.Columns("COUNT(b.id)")
+	countQuery, countArgs, err := countBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var total uint64
+	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return []entities.Branch{}, 0, nil
+	}
+
+	selectBuilder := baseBuilder.Columns(
+		"b.id", "b.name", "b.short_name", "b.address", "b.phone_number", "b.email", "b.email_index",
+		"b.open_date", "b.status_id", "b.external_id", "b.source_system",
+		"b.created_at", "b.updated_at",
+		"COALESCE(s.id, 0)", "COALESCE(s.name, '')",
+	).LeftJoin("statuses s ON b.status_id = s.id")
+
+	// Логика сортировки
+	if len(filter.Sort) > 0 {
+		for field, direction := range filter.Sort {
+			if dbColumn, ok := branchAllowedSortFields[field]; ok {
+				safeDirection := "ASC"
+				if strings.ToUpper(direction) == "DESC" {
+					safeDirection = "DESC"
+				}
+				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("%s %s", dbColumn, safeDirection))
+			}
+		}
+	} else {
+		selectBuilder = selectBuilder.OrderBy("b.id DESC")
+	}
+
+	// Логика пагинации
+	if filter.WithPagination {
+		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
+	}
+
+	query, args, err := selectBuilder.ToSql()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := r.storage.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	branches := make([]entities.Branch, 0)
+	for rows.Next() {
+		branch, err := scanBranch(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		branches = append(branches, *branch)
+	}
+
+	return branches, total, rows.Err()
 }

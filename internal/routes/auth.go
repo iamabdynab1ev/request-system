@@ -8,6 +8,7 @@ import (
 	"request-system/pkg/filestorage"
 	"request-system/pkg/middleware"
 	"request-system/pkg/service"
+	"request-system/pkg/telegram"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -36,13 +37,18 @@ func runAuthRouter(
 	userRepository := repositories.NewUserRepository(dbConn, logger)
 	cacheRepository := repositories.NewRedisCacheRepository(redisClient)
 
-	notificationService := services.NewMockNotificationService(logger)
+	// notificationService := services.NewMockNotificationService(logger)
+
+	// 2. Включаем реализацию через Telegram
+	tgService := telegram.NewService(cfg.Telegram.BotToken)
+	notificationService := services.NewTelegramNotificationService(tgService, logger)
 
 	authService := services.NewAuthService(
 		userRepository,
 		cacheRepository,
 		logger,
 		&cfg.Auth,
+		&cfg.LDAP,
 		notificationService,
 		positionService,
 		branchService,
@@ -63,10 +69,12 @@ func runAuthRouter(
 	secureAuthGroup := authGroup.Group("", authMW.Auth)
 	authGroup.POST("/login", authCtrl.Login)
 	authGroup.POST("/refresh_token", authCtrl.RefreshToken)
+
 	passwordGroup := authGroup.Group("/password")
 	passwordGroup.POST("/request", authCtrl.RequestPasswordReset)
 	passwordGroup.POST("/verify_phone", authCtrl.VerifyCode)
 	passwordGroup.POST("/reset", authCtrl.ResetPassword)
+
 	secureAuthGroup.GET("/me", authCtrl.Me)
 	secureAuthGroup.POST("/logout", authCtrl.Logout)
 	secureAuthGroup.PUT("/me", authCtrl.UpdateMe, authMW.Auth)

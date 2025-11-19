@@ -136,4 +136,13 @@ const (
 	OrderTypesDelete = "order_type:delete"
 	// ОТЧЕТЫ
 	ReportView = "report:view"
+
+	// ИНТЕГРАЦИИ
+	IntegrationsView = "integration:view"
+
+	// Дает право запускать процессы синхронизации
+	IntegrationsSyncRun = "integration:sync:run"
+
+	// Дает право изменять настройки интеграций (в будущем)
+	IntegrationsUpdate = "integration:update"
 )

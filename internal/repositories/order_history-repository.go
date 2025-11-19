@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"request-system/internal/entities"
+	"request-system/pkg/types"
 )
 
 type OrderHistoryItem struct {
@@ -36,6 +37,7 @@ type OrderHistoryRepositoryInterface interface {
 	FindByOrderID(ctx context.Context, orderID uint64, limit, offset uint64) ([]OrderHistoryItem, error)
 	CreateInTx(ctx context.Context, tx pgx.Tx, item *OrderHistoryItem) error
 	IsUserParticipant(ctx context.Context, orderID, userID uint64) (bool, error)
+	GetOrderHistory(ctx context.Context, orderID uint64, filter types.Filter) ([]OrderHistoryItem, error)
 }
 
 // OrderHistoryRepository реализует доступ к таблице order_history
@@ -47,6 +49,10 @@ type OrderHistoryRepository struct {
 // NewOrderHistoryRepository создает новый экземпляр OrderHistoryRepository
 func NewOrderHistoryRepository(storage *pgxpool.Pool, logger *zap.Logger) OrderHistoryRepositoryInterface {
 	return &OrderHistoryRepository{storage: storage, logger: logger}
+}
+
+func (r *OrderHistoryRepository) GetOrderHistory(ctx context.Context, orderID uint64, filter types.Filter) ([]OrderHistoryItem, error) {
+	return r.FindByOrderID(ctx, orderID, uint64(filter.Limit), uint64(filter.Offset))
 }
 
 // CreateInTx создает запись в истории в рамках транзакции
@@ -116,14 +122,9 @@ func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint
 	history := make([]OrderHistoryItem, 0, limit)
 	for rows.Next() {
 		var item OrderHistoryItem
-		var attachmentID sql.NullInt64
 		var fileName, filePath, fileType sql.NullString
 		var fileSize sql.NullInt64
 
-		// --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-		// КОММЕНТАРИЙ: Добавили `&item.TxID` в конец, чтобы количество
-		// переменных для сканирования (18) совпадало с количеством
-		// колонок в SELECT (18).
 		err := rows.Scan(
 			&item.ID,
 			&item.OrderID,
@@ -133,7 +134,7 @@ func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint
 			&item.NewValue,
 			&item.Comment,
 			&item.CreatedAt,
-			&attachmentID,
+			&item.AttachmentID, // Сканируем напрямую в поле структуры
 			&item.NewStatusName,
 			&item.CreatorFio,
 			&item.DelegatorFio,
@@ -142,7 +143,7 @@ func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint
 			&filePath,
 			&fileType,
 			&fileSize,
-			&item.TxID, // <-- ИСПРАВЛЕНО: ДОБАВЛЕНО ЭТО ПОЛЕ
+			&item.TxID,
 		)
 		if err != nil {
 			r.logger.Error("Ошибка при сканировании строки истории",
@@ -151,9 +152,9 @@ func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint
 			return nil, err
 		}
 
-		if attachmentID.Valid {
+		if item.AttachmentID.Valid {
 			item.Attachment = &entities.Attachment{
-				ID:       uint64(attachmentID.Int64),
+				ID:       uint64(item.AttachmentID.Int64),
 				FileName: fileName.String,
 				FilePath: filePath.String,
 				FileType: fileType.String,
@@ -162,6 +163,7 @@ func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint
 		} else {
 			item.Attachment = nil
 		}
+
 		history = append(history, item)
 	}
 

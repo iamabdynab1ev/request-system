@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	sq "github.com/Masterminds/squirrel"
@@ -14,6 +15,7 @@ import (
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
+	"request-system/pkg/utils"
 )
 
 const (
@@ -26,7 +28,7 @@ type OrderRepositoryInterface interface {
 	BeginTx(ctx context.Context) (pgx.Tx, error)
 	FindByID(ctx context.Context, orderID uint64) (*entities.Order, error)
 	Create(ctx context.Context, tx pgx.Tx, order *entities.Order) (uint64, error)
-	GetOrders(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.Order, uint64, error)
+	GetOrders(ctx context.Context, filter types.Filter, securityCondition sq.Sqlizer) ([]entities.Order, uint64, error)
 	Update(ctx context.Context, tx pgx.Tx, order *entities.Order) error
 	DeleteOrder(ctx context.Context, orderID uint64) error
 	CountOrdersByOtdelID(ctx context.Context, id uint64) (uint64, error)
@@ -124,20 +126,25 @@ func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities
 	builder = builder.Set("executor_id", order.ExecutorID)
 	builder = builder.Set("duration", order.Duration)
 
+	builder = builder.Set("completed_at", order.CompletedAt)
+	builder = builder.Set("resolution_time_seconds",
+		sq.Expr("CASE WHEN ?::timestamp IS NOT NULL THEN EXTRACT(EPOCH FROM (?::timestamp - created_at)) ELSE NULL END", order.CompletedAt, order.CompletedAt),
+	)
+
 	sql, args, err := builder.ToSql()
 	if err != nil {
-		r.logger.Error("Ошибка сборки UPDATE запроса для заявки", zap.Error(err))
 		return fmt.Errorf("ошибка сборки UPDATE запроса для заявки: %w", err)
 	}
+
 	result, err := tx.Exec(ctx, sql, args...)
 	if err != nil {
 		r.logger.Error("Ошибка выполнения UPDATE запроса", zap.Error(err), zap.String("sql", sql), zap.Any("args", args))
 		return err
 	}
 	if result.RowsAffected() == 0 {
-		r.logger.Warn("Заявка не найдена для обновления", zap.Uint64("orderID", order.ID))
 		return apperrors.ErrNotFound
 	}
+
 	r.logger.Info("Заявка обновлена в БД", zap.Uint64("orderID", order.ID))
 	return nil
 }
@@ -169,28 +176,36 @@ func (r *OrderRepository) CountOrdersByOtdelID(ctx context.Context, id uint64) (
 	return count, nil
 }
 
-func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, securityFilter string, securityArgs []interface{}) ([]entities.Order, uint64, error) {
+func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, securityCondition sq.Sqlizer) ([]entities.Order, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
 	selectBuilder := psql.Select(orderFields).From(orderTable + " AS o").Where(sq.Eq{"o.deleted_at": nil})
 	countBuilder := psql.Select("COUNT(o.id)").From(orderTable + " AS o").Where(sq.Eq{"o.deleted_at": nil})
 
-	// Применяем securityFilter с правильными placeholders
-	if securityFilter != "" {
-		// Заменяем ? на $1, $2 и т.д.
-		placeholderCount := len(securityArgs)
-		newSecurityFilter := securityFilter
-		for i := 0; i < placeholderCount; i++ {
-			newSecurityFilter = strings.Replace(newSecurityFilter, "?", fmt.Sprintf("$%d", i+1), 1)
-		}
-		selectBuilder = selectBuilder.Where(newSecurityFilter, securityArgs...)
-		countBuilder = countBuilder.Where(newSecurityFilter, securityArgs...)
+	if securityCondition != nil {
+		selectBuilder = selectBuilder.Where(securityCondition)
+		countBuilder = countBuilder.Where(securityCondition)
 	}
 
 	for key, value := range filter.Filter {
-		clause := sq.Eq{"o." + key: value}
-		selectBuilder = selectBuilder.Where(clause)
-		countBuilder = countBuilder.Where(clause)
+		if valStr, ok := value.(string); ok && strings.Contains(valStr, ",") {
+
+			ids, err := utils.ParseUint64Slice(strings.Split(valStr, ","))
+			if err != nil {
+
+				r.logger.Warn("Некорректное значение для множественного фильтра", zap.String("key", key), zap.String("value", valStr), zap.Error(err))
+				return nil, 0, apperrors.NewHttpError(http.StatusBadRequest, "Некорректное значение в фильтре: "+key, err, nil)
+			}
+			clause := sq.Eq{"o." + key: ids}
+			selectBuilder = selectBuilder.Where(clause)
+			countBuilder = countBuilder.Where(clause)
+
+		} else {
+
+			clause := sq.Eq{"o." + key: value}
+			selectBuilder = selectBuilder.Where(clause)
+			countBuilder = countBuilder.Where(clause)
+		}
 	}
 
 	if filter.Search != "" {
@@ -204,18 +219,25 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 		r.logger.Error("GetOrders: ошибка сборки запроса подсчета", zap.Error(err))
 		return nil, 0, err
 	}
-
 	var totalCount uint64
 	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount); err != nil {
-		r.logger.Error("Ошибка подсчета заявок", zap.Error(err), zap.String("query", countQuery), zap.Any("args", countArgs))
-		return nil, 0, err
+		if !errors.Is(err, pgx.ErrNoRows) {
+			r.logger.Error("Ошибка подсчета заявок", zap.Error(err), zap.String("query", countQuery), zap.Any("args", countArgs))
+			return nil, 0, err
+		}
 	}
 	if totalCount == 0 {
-		r.logger.Info("Заявки не найдены", zap.Any("filter", filter))
 		return []entities.Order{}, 0, nil
 	}
 
-	selectBuilder = selectBuilder.OrderBy("o.created_at DESC")
+	if len(filter.Sort) > 0 {
+		for field, direction := range filter.Sort {
+			selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("o.%s %s", field, direction))
+		}
+	} else {
+		selectBuilder = selectBuilder.OrderBy("o.created_at DESC")
+	}
+
 	if filter.WithPagination {
 		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
 	}
@@ -239,7 +261,7 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 		order, err := r.scanOrder(rows)
 		if err != nil {
 			r.logger.Error("Ошибка сканирования строки", zap.Error(err))
-			return nil, 0, err
+			continue
 		}
 		orders = append(orders, *order)
 	}

@@ -6,39 +6,29 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/go-redis/redis/v8"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"go.uber.org/zap"
 
+	"request-system/internal/listeners"
 	"request-system/internal/repositories"
 	"request-system/internal/routes"
 	"request-system/internal/services"
 	"request-system/pkg/config"
 	"request-system/pkg/customvalidator"
 	"request-system/pkg/database/postgresql"
+	"request-system/pkg/eventbus"
 	"request-system/pkg/logger"
 	"request-system/pkg/service"
+	"request-system/pkg/telegram"
+	"request-system/pkg/websocket"
 )
-
-type CustomValidator struct {
-	validator *validator.Validate
-}
-
-func NewValidator(v *validator.Validate) echo.Validator {
-	return &CustomValidator{validator: v}
-}
-
-func (cv *CustomValidator) Validate(i interface{}) error {
-	return cv.validator.Struct(i)
-}
 
 func main() {
 	// 1. КОНФИГ
@@ -117,12 +107,8 @@ func main() {
 	}))
 
 	// 4. НАСТРОЙКА MIDDLEWARES
-	allowedOrigins := []string{
-		"http://localhost:4040", "http://10.98.102.66:4040", "http://10.98.102.66",
-		"http://helpdesk.local", "https://a089b2344e17.ngrok-free.app",
-	}
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOriginFunc:  func(origin string) (bool, error) { return slices.Contains(allowedOrigins, origin), nil },
+		AllowOrigins:     cfg.Server.AllowedOrigins,
 		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
 		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "ngrok-skip-browser-warning"},
 		AllowCredentials: true,
@@ -134,7 +120,6 @@ func main() {
 	e.Static("/uploads", absPath)
 	e.Validator = customvalidator.New()
 
-	// 2. !!! А ТЕПЕРЬ РЕГИСТРИРУЕМ NULL-ТИПЫ !!!
 	mainLogger.Info("Регистрация Nullable-типов для валидатора...")
 
 	mainLogger.Info("Nullable-типы успешно зарегистрированы.")
@@ -156,7 +141,38 @@ func main() {
 	permissionRepo := repositories.NewPermissionRepository(dbConn, mainLogger)
 	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
 	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, authLogger, 10*time.Minute)
-	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg)
+
+	//  НОВЫЙ БЛОК ДЛЯ СИСТЕМЫ УВЕДОМЛЕНИЙ ===
+	// 1. Создаем Шину Событий.
+	bus := eventbus.New(mainLogger)
+
+	// 2. Сначала создаем и запускаем WebSocket Хаб.
+	wsHub := websocket.NewHub()
+	go wsHub.Run()
+
+	// 3. Создаем "отправщиков" уведомлений: для Telegram и для WebSocket.
+	tgService := telegram.NewService(cfg.Telegram.BotToken)
+	notificationService := services.NewTelegramNotificationService(tgService, mainLogger)
+	wsNotificationService := services.NewWebSocketNotificationService(wsHub, mainLogger.Named("WebSocketNotifier"))
+
+	//  4. Создаем и регистрируем "Слушателя", передавая ему ОБА сервиса-отправщика.
+	userRepoForListener := repositories.NewUserRepository(dbConn, userLogger)
+	statusRepoForListener := repositories.NewStatusRepository(dbConn)
+	priorityRepoForListener := repositories.NewPriorityRepository(dbConn, mainLogger)
+
+	notificationListener := listeners.NewNotificationListener(
+		notificationService,
+		wsNotificationService,
+		userRepoForListener,
+		statusRepoForListener,
+		priorityRepoForListener,
+		cfg.Frontend,
+		cfg.Server,
+		mainLogger.Named("NotificationListener"),
+	)
+	notificationListener.Register(bus)
+
+	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub)
 
 	mainLogger.Info("🚀 Сервер запущен на :8080")
 	if err := e.Start(":8080"); err != nil {

@@ -29,9 +29,9 @@ type OrderRoutingRuleResponseDTO struct {
 	OrderTypeID      *int     `json:"order_type_id"`
 	DepartmentID     *int     `json:"department_id"`
 	OtdelID          *int     `json:"otdel_id"`
-	PositionID       *int     `json:"position_id,omitempty"`        // Старый ID, который хранится в базе
-	PositionType     string   `json:"position_type,omitempty"`      // Системное имя типа
-	PositionTypeName string   `json:"position_type_name,omitempty"` // Человекочитаемое имя типа
+	PositionID       *int     `json:"position_id,omitempty"`        
+	PositionType     string   `json:"position_type,omitempty"`      
+	PositionTypeName string   `json:"position_type_name,omitempty"` 
 	RequiredFields   []string `json:"required_fields,omitempty"`
 	StatusID         int      `json:"status_id"`
 	CreatedAt        string   `json:"created_at"`

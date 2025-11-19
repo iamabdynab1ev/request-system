@@ -10,9 +10,12 @@ import (
 	"request-system/internal/repositories"
 	"request-system/internal/services"
 	"request-system/pkg/config"
+	"request-system/pkg/eventbus"
 	"request-system/pkg/filestorage"
 	"request-system/pkg/middleware"
 	"request-system/pkg/service"
+	"request-system/pkg/telegram"
+	"request-system/pkg/websocket"
 )
 
 type Loggers struct {
@@ -23,9 +26,8 @@ type Loggers struct {
 	OrderHistory *zap.Logger
 }
 
-func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, jwtSvc service.JWTService, loggers *Loggers, authPermissionService services.AuthPermissionServiceInterface, cfg *config.Config) {
+func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, jwtSvc service.JWTService, loggers *Loggers, authPermissionService services.AuthPermissionServiceInterface, cfg *config.Config, bus *eventbus.Bus, wsHub *websocket.Hub) {
 	loggers.Main.Info("InitRouter: Начало создания маршрутов")
-
 	// --- 0. ОБЩИЕ КОМПОНЕНТЫ ---
 	api := e.Group("/api")
 	authMW := middleware.NewAuthMiddleware(jwtSvc, authPermissionService, loggers.Auth)
@@ -33,10 +35,11 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	if err != nil {
 		loggers.Main.Fatal("не удалось создать файловое хранилище", zap.Error(err))
 	}
-	txManager := repositories.NewTxManager(dbConn)
+	txManager := repositories.NewTxManager(dbConn, loggers.Main)
 
-	// --- 1. РЕПОЗИТОРИИ ---
+	// --- 1. РЕПОЗИТОРИИ (создаем все в одном месте) ---
 	userRepo := repositories.NewUserRepository(dbConn, loggers.User)
+	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
 	roleRepo := repositories.NewRoleRepository(dbConn, loggers.Main)
 	permissionRepo := repositories.NewPermissionRepository(dbConn, loggers.Main)
 	statusRepo := repositories.NewStatusRepository(dbConn)
@@ -45,50 +48,42 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	priorityRepo := repositories.NewPriorityRepository(dbConn, loggers.Main)
 	attachRepo := repositories.NewAttachmentRepository(dbConn)
 	historyRepo := repositories.NewOrderHistoryRepository(dbConn, loggers.OrderHistory)
-	positionRepo := repositories.NewPositionRepository(dbConn)
+	positionRepo := repositories.NewPositionRepository(dbConn, loggers.Main)
 	orderTypeRepo := repositories.NewOrderTypeRepository(dbConn)
 	ruleRepo := repositories.NewOrderRoutingRuleRepository(dbConn)
-	reportRepo := repositories.NewReportRepository(dbConn)
-
-	// <<<--- ДОБАВЛЕНИЕ НЕДОСТАЮЩИХ РЕПОЗИТОРИЕВ
+	reportRepo := repositories.NewReportRepository(dbConn, loggers.Main)
 	branchRepo := repositories.NewBranchRepository(dbConn, loggers.Main)
 	departmentRepo := repositories.NewDepartmentRepository(dbConn, loggers.Main)
 	otdelRepo := repositories.NewOtdelRepository(dbConn, loggers.Main)
-	officeRepo := repositories.NewOfficeRepository(dbConn)
+	officeRepo := repositories.NewOfficeRepository(dbConn, loggers.Main)
 
 	// --- 2. СЕРВИСЫ ---
 	ruleEngineService := services.NewRuleEngineService(ruleRepo, userRepo, positionRepo, loggers.Main)
 	roleService := services.NewRoleService(roleRepo, userRepo, statusRepo, authPermissionService, loggers.Main)
 	permissionService := services.NewPermissionService(permissionRepo, userRepo, loggers.Main)
-	userService := services.NewUserService(userRepo, roleRepo, permissionRepo, statusRepo, authPermissionService, loggers.User)
 	rpService := services.NewRolePermissionService(rpRepo, userRepo, authPermissionService, loggers.Main)
 	orderTypeService := services.NewOrderTypeService(orderTypeRepo, userRepo, txManager, ruleEngineService, loggers.Main)
 	positionService := services.NewPositionService(positionRepo, userRepo, txManager, loggers.Main)
-	orderRuleService := services.NewOrderRoutingRuleService(
-		ruleRepo,
-		userRepo,
-		positionRepo,
-		txManager,
-		loggers.Main,
-		orderTypeRepo,
-	)
-	orderService := services.NewOrderService(
-		txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo,
-		ruleEngineService, historyRepo, fileStorage, loggers.Order, orderTypeRepo,
-	)
-	historyService := services.NewOrderHistoryService(historyRepo, orderService, userRepo, loggers.OrderHistory)
-	reportService := services.NewReportService(reportRepo, userRepo)
+	userService := services.NewUserService(txManager, userRepo, roleRepo, permissionRepo, statusRepo, cacheRepo, authPermissionService, loggers.User)
+	departmentService := services.NewDepartmentService(txManager, departmentRepo, userRepo, loggers.Main)
+	otdelService := services.NewOtdelService(txManager, otdelRepo, userRepo, loggers.Main)
+	orderRuleService := services.NewOrderRoutingRuleService(ruleRepo, userRepo, positionRepo, txManager, loggers.Main, orderTypeRepo)
+	orderService := services.NewOrderService(txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo, ruleEngineService,
+		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService)
+	historyService := services.NewOrderHistoryService(historyRepo, userRepo, departmentService, otdelService, statusRepo, priorityRepo, loggers.OrderHistory)
+	reportService := services.NewReportService(reportRepo, userRepo, loggers.Main)
+	branchService := services.NewBranchService(txManager, branchRepo, userRepo, loggers.Main)
+	officeService := services.NewOfficeService(officeRepo, userRepo, txManager, loggers.Main)
+	tgService := telegram.NewService(cfg.Telegram.BotToken)
 
 	// === 3. КОНТРОЛЛЕРЫ === (НОВЫЙ БЛОК)
 	// Создаем ВСЕ контроллеры здесь, в одном месте.
+
 	userController := controllers.NewUserController(userService, fileStorage, loggers.User)
 	historyController := controllers.NewOrderHistoryController(historyService, orderService, loggers.OrderHistory)
 
-	// <<<--- ДОБАВЛЕНИЕ НЕДОСТАЮЩИХ СЕРВИСОВ
-	branchService := services.NewBranchService(branchRepo, userRepo, loggers.Main)
-	departmentService := services.NewDepartmentService(departmentRepo, otdelRepo, userRepo, loggers.Main)
-	otdelService := services.NewOtdelService(otdelRepo, userRepo, loggers.Main)
-	officeService := services.NewOfficeService(officeRepo, loggers.Main)
+	wsController := controllers.NewWebSocketController(wsHub, jwtSvc, loggers.Main)
+	api.GET("/ws", wsController.ServeWs)
 
 	// --- 3. РОУТЕРЫ ---
 	secureGroup := api.Group("", authMW.Auth)
@@ -111,14 +106,17 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	runStatusRouter(secureGroup, dbConn, loggers.Main, authMW, fileStorage)
 	runOrderHistoryRouter(secureGroup, historyController, authMW)
 	RunPriorityRouter(secureGroup, dbConn, loggers.Main, authMW)
-	runDepartmentRouter(secureGroup, dbConn, loggers.Main, authMW)
-	runOtdelRouter(secureGroup, dbConn, loggers.Main, authMW)
+	runDepartmentRouter(secureGroup, dbConn, loggers.Main, authMW, txManager)
+	runOtdelRouter(secureGroup, dbConn, loggers.Main, authMW, txManager)
 	runEquipmentTypeRouter(secureGroup, dbConn, loggers.Main, authMW)
-	runBranchRouter(secureGroup, dbConn, loggers.Main, authMW)
-
-	runOfficeRouter(secureGroup, officeService, loggers.Main, authMW)
-
 	runEquipmentRouter(secureGroup, dbConn, loggers.Main, authMW)
+
+	runBranchRouter(secureGroup, dbConn, loggers.Main, txManager, authMW)
+	runOfficeRouter(secureGroup, officeService, loggers.Main, authMW)
+	runTelegramRouter(e, userService, orderService, tgService, cacheRepo, statusRepo, userRepo, historyRepo, authPermissionService, authMW, cfg, loggers.Main)
+
+	// для интеграции
+	runSyncRouter(api, dbConn, cfg, loggers)
 
 	loggers.Main.Info("INIT_ROUTER: Создание маршрутов завершено")
 }

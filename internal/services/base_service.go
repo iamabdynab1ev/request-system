@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"time"
 
-	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
 
@@ -30,15 +29,26 @@ func (s *BaseService) CheckPermission(ctx context.Context, permission string) (u
 		s.logger.Error("Пользователь не авторизован", zap.Error(err))
 		return 0, apperrors.ErrUnauthorized
 	}
-	claims, err := utils.GetClaimsFromContext[dto.UserClaims](ctx)
+
+	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
 	if err != nil {
-		s.logger.Error("Ошибка получения claims", zap.Error(err))
-		return 0, apperrors.ErrUnauthorized
+		s.logger.Error("Ошибка получения карты прав из контекста", zap.Error(err))
+		return 0, apperrors.ErrForbidden
 	}
-	if !utils.HasPermission(claims, permission) {
-		s.logger.Warn("Отказано в доступе", zap.Uint64("userID", userID))
+
+	// ЯВНАЯ ПРОВЕРКА ВМЕСТО ВЫЗОВА ФУНКЦИИ:
+	// Проверяем, есть ли требуемое право (permission) как ключ в карте прав.
+	// Также для безопасности проверяем, является ли пользователь суперпользователем.
+	hasPerm, isSuperuser := permissionsMap[permission], permissionsMap["superuser"]
+
+	if !hasPerm && !isSuperuser {
+		s.logger.Warn("Отказано в доступе",
+			zap.Uint64("userID", userID),
+			zap.String("required_permission", permission),
+		)
 		return userID, apperrors.ErrForbidden
 	}
+
 	return userID, nil
 }
 

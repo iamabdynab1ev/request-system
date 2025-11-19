@@ -1,42 +1,71 @@
-// Файл: internal/services/notification_service.go
 package services
 
-import "go.uber.org/zap"
+import (
+	"context"
+	"fmt"
 
-// NotificationServiceInterface - интерфейс нашего сервиса уведомлений
+	"go.uber.org/zap"
+
+	"request-system/pkg/telegram"
+)
+
+// NotificationServiceInterface - Наш главный интерфейс для уведомлений.
 type NotificationServiceInterface interface {
-	SendPasswordResetEmail(to, token string) error
-	SendPasswordResetSMS(to, code string) error
+	// SendPlainMessage отправляет обычный текст, автоматически экранируя его.
+	// Идеально для кодов верификации и простого текста.
+	SendPlainMessage(ctx context.Context, chatID int64, message string) error
+
+	// SendFormattedMessage отправляет текст "как есть", ожидая, что он уже содержит разметку Markdown.
+	// Идеально для красивых уведомлений о заявках.
+	SendFormattedMessage(ctx context.Context, chatID int64, message string) error
 }
 
-// mockNotificationService - это реализация-заглушка (mock), которая пишет в лог
-// вместо реальной отправки сообщений. Идеально для тестирования.
+// ==========================================
+// 1. Mock-реализация
+// ==========================================
 type mockNotificationService struct {
 	logger *zap.Logger
 }
 
-// NewMockNotificationService - конструктор для нашего сервиса-заглушки.
 func NewMockNotificationService(logger *zap.Logger) NotificationServiceInterface {
 	return &mockNotificationService{logger: logger}
 }
 
-// SendPasswordResetEmail имитирует отправку email.
-func (s *mockNotificationService) SendPasswordResetEmail(to, token string) error {
-	// В реальном приложении здесь будет код для интеграции с SendGrid, Mailgun и т.д.
-	s.logger.Info("!!! ИМИТАЦИЯ ОТПРАВКИ EMAIL !!!",
-		zap.String("кому", to),
-		zap.String("токен_сброса", token),
-		zap.String("готовая_ссылка", "https://your-frontend.com/password-reset?token="+token),
-	)
-	return nil // Всегда возвращаем успех для имитации
+func (s *mockNotificationService) SendPlainMessage(ctx context.Context, chatID int64, message string) error {
+	s.logger.Info("!!! MOCK: ОТПРАВКА PLAIN УВЕДОМЛЕНИЯ !!!", zap.Int64("chatID", chatID), zap.String("сообщение", message))
+	return nil
 }
 
-// SendPasswordResetSMS имитирует отправку SMS.
-func (s *mockNotificationService) SendPasswordResetSMS(to, code string) error {
-	// В реальном приложении здесь будет код для интеграции с Twilio или местным SMS-шлюзом.
-	s.logger.Info("!!! ИМИТАЦИЯ ОТПРАВКИ SMS !!!",
-		zap.String("кому", to),
-		zap.String("код_верификации", code),
-	)
+func (s *mockNotificationService) SendFormattedMessage(ctx context.Context, chatID int64, message string) error {
+	s.logger.Info("!!! MOCK: ОТПРАВКА FORMATTED УВЕДОМЛЕНИЯ !!!", zap.Int64("chatID", chatID), zap.String("сообщение (с разметкой)", message))
 	return nil
+}
+
+// ==========================================
+// 2. Telegram-реализация
+// ==========================================
+type telegramNotificationService struct {
+	tgService telegram.ServiceInterface
+	logger    *zap.Logger
+}
+
+func NewTelegramNotificationService(tgService telegram.ServiceInterface, logger *zap.Logger) NotificationServiceInterface {
+	return &telegramNotificationService{tgService: tgService, logger: logger}
+}
+
+func (s *telegramNotificationService) SendPlainMessage(ctx context.Context, chatID int64, message string) error {
+	if chatID == 0 {
+		return fmt.Errorf("chat id не может быть 0")
+	}
+	// Экранируем спецсимволы, так как это простой текст
+	escapedMessage := telegram.EscapeTextForMarkdownV2(message)
+	return s.tgService.SendMessage(ctx, chatID, escapedMessage)
+}
+
+func (s *telegramNotificationService) SendFormattedMessage(ctx context.Context, chatID int64, message string) error {
+	if chatID == 0 {
+		return fmt.Errorf("chat id не может быть 0")
+	}
+	// Отправляем "как есть", доверяя вызывающему коду
+	return s.tgService.SendMessageEx(ctx, chatID, message, telegram.WithMarkdownV2())
 }

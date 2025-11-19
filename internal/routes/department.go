@@ -1,3 +1,4 @@
+// Файл: internal/routes/department_router.go
 package routes
 
 import (
@@ -12,16 +13,15 @@ import (
 	"go.uber.org/zap"
 )
 
-func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware) {
-	// ВАЖНО: Передаем logger в репозиторий
+func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware, txManager repositories.TxManagerInterface) { // <-- ДОБАВЛЕН txManager
 	departmentRepo := repositories.NewDepartmentRepository(dbConn, logger)
 	userRepo := repositories.NewUserRepository(dbConn, logger)
 
-	otdelRepo := repositories.NewOtdelRepository(dbConn, logger)
-	departmentService := services.NewDepartmentService(departmentRepo, otdelRepo, userRepo, logger)
+	// ИСПРАВЛЕНИЕ: Передаем txManager в конструктор
+	departmentService := services.NewDepartmentService(txManager, departmentRepo, userRepo, logger)
 	departmentCtrl := controllers.NewDepartmentController(departmentService, logger)
 
-	// Роуты
+	// Роуты (без изменений)
 	secureGroup.GET("/main", departmentCtrl.GetDepartmentStats, authMW.AuthorizeAny(authz.DepartmentsView))
 	departmentsGroup := secureGroup.Group("/department")
 	departmentsGroup.GET("", departmentCtrl.GetDepartments, authMW.AuthorizeAny(authz.DepartmentsView))

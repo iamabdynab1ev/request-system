@@ -20,17 +20,15 @@ type UpdateEquipmentDTO struct {
 }
 
 type EquipmentDTO struct {
-	ID      uint64 `json:"id"`
-	Name    string `json:"name"`
-	Address string `json:"address"`
-
+	ID            uint64                `json:"id"`
+	Name          string                `json:"name"`
+	Address       string                `json:"address"`
 	Branch        ShortBranchDTO        `json:"branch"`
 	Office        ShortOfficeDTO        `json:"office"`
 	EquipmentType ShortEquipmentTypeDTO `json:"equipment"`
 	StatusID      uint64                `json:"status_id"`
-
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	CreatedAt     string                `json:"created_at"`
+	UpdatedAt     string                `json:"updated_at"`
 }
 type EquipmentListResponseDTO struct {
 	ID              uint64 `json:"id"`

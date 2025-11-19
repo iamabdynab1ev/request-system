@@ -4,7 +4,7 @@ package dto
 type LoginDTO struct {
 	Login      string `json:"login" validate:"required"`
 	Password   string `json:"password" validate:"required,min=6"`
-	RememberMe bool   `json:"rememberMe"` // <<< ДОБАВЛЕНО: Принимаем флаг "Запомнить меня"
+	RememberMe bool   `json:"rememberMe"` 
 }
 
 type ResetPasswordRequestDTO struct {

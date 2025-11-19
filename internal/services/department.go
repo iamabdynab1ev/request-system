@@ -1,9 +1,14 @@
+// Файл: internal/services/department.go
 package services
 
 import (
 	"context"
 	"errors"
 	"net/http"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"go.uber.org/zap"
 
 	"request-system/internal/authz"
 	"request-system/internal/dto"
@@ -12,36 +17,33 @@ import (
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
 	"request-system/pkg/utils"
-
-	"github.com/jackc/pgx/v5/pgconn"
-	"go.uber.org/zap"
 )
 
 type DepartmentServiceInterface interface {
 	GetDepartments(ctx context.Context, filter types.Filter) ([]dto.DepartmentDTO, uint64, error)
 	GetDepartmentStats(ctx context.Context, filter types.Filter) ([]dto.DepartmentStatsDTO, uint64, error)
 	FindDepartment(ctx context.Context, id uint64) (*dto.DepartmentDTO, error)
-	CreateDepartment(ctx context.Context, dto dto.CreateDepartmentDTO) (*dto.DepartmentDTO, error)
-	UpdateDepartment(ctx context.Context, id uint64, dto dto.UpdateDepartmentDTO) (*dto.DepartmentDTO, error)
+	CreateDepartment(ctx context.Context, payload dto.CreateDepartmentDTO) (*dto.DepartmentDTO, error)
+	UpdateDepartment(ctx context.Context, id uint64, payload dto.UpdateDepartmentDTO) (*dto.DepartmentDTO, error)
 	DeleteDepartment(ctx context.Context, id uint64) error
 }
 
 type DepartmentService struct {
+	txManager            repositories.TxManagerInterface
 	departmentRepository repositories.DepartmentRepositoryInterface
-	otdelRepository      repositories.OtdelRepositoryInterface
 	userRepository       repositories.UserRepositoryInterface
 	logger               *zap.Logger
 }
 
 func NewDepartmentService(
+	txManager repositories.TxManagerInterface,
 	depRepo repositories.DepartmentRepositoryInterface,
-	otdelRepo repositories.OtdelRepositoryInterface,
 	userRepo repositories.UserRepositoryInterface,
 	logger *zap.Logger,
 ) DepartmentServiceInterface {
 	return &DepartmentService{
+		txManager:            txManager,
 		departmentRepository: depRepo,
-		otdelRepository:      otdelRepo,
 		userRepository:       userRepo,
 		logger:               logger,
 	}
@@ -60,7 +62,7 @@ func (s *DepartmentService) buildAuthzContext(ctx context.Context) (*authz.Conte
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
-	return &authz.Context{Actor: actor, Permissions: permissionsMap, Target: nil}, nil
+	return &authz.Context{Actor: actor, Permissions: permissionsMap}, nil
 }
 
 func departmentEntityToDTO(entity *entities.Department) *dto.DepartmentDTO {
@@ -68,12 +70,83 @@ func departmentEntityToDTO(entity *entities.Department) *dto.DepartmentDTO {
 		return nil
 	}
 	return &dto.DepartmentDTO{
-		ID:        uint64(entity.ID),
+		ID:        entity.ID,
 		Name:      entity.Name,
-		StatusID:  uint64(entity.StatusID),
+		StatusID:  entity.StatusID,
 		CreatedAt: entity.CreatedAt.Format("2006-01-02 15:04:05"),
 		UpdatedAt: entity.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
+}
+
+func (s *DepartmentService) CreateDepartment(ctx context.Context, payload dto.CreateDepartmentDTO) (*dto.DepartmentDTO, error) {
+	authCtx, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !authz.CanDo(authz.DepartmentsCreate, *authCtx) {
+		return nil, apperrors.ErrForbidden
+	}
+
+	entity := entities.Department{
+		Name:     payload.Name,
+		StatusID: payload.StatusID,
+	}
+
+	var newID uint64
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		newID, txErr = s.departmentRepository.Create(ctx, tx, entity)
+		return txErr
+	})
+	if err != nil {
+		s.logger.Error("Ошибка в транзакции создания департамента", zap.Error(err))
+		return nil, err
+	}
+
+	createdEntity, err := s.departmentRepository.FindDepartment(ctx, newID)
+	if err != nil {
+		s.logger.Error("Не удалось найти только что созданный департамент", zap.Uint64("id", newID), zap.Error(err))
+		return nil, err
+	}
+
+	return departmentEntityToDTO(createdEntity), nil
+}
+
+func (s *DepartmentService) UpdateDepartment(ctx context.Context, id uint64, payload dto.UpdateDepartmentDTO) (*dto.DepartmentDTO, error) {
+	authCtx, err := s.buildAuthzContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !authz.CanDo(authz.DepartmentsUpdate, *authCtx) {
+		return nil, apperrors.ErrForbidden
+	}
+
+	existing, err := s.departmentRepository.FindDepartment(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if payload.Name != nil {
+		existing.Name = *payload.Name
+	}
+	if payload.StatusID != nil {
+		existing.StatusID = *payload.StatusID
+	}
+
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		return s.departmentRepository.Update(ctx, tx, id, *existing)
+	})
+	if err != nil {
+		s.logger.Error("Ошибка в транзакции обновления департамента", zap.Error(err), zap.Uint64("id", id))
+		return nil, err
+	}
+
+	updatedEntity, err := s.departmentRepository.FindDepartment(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return departmentEntityToDTO(updatedEntity), nil
 }
 
 func (s *DepartmentService) GetDepartments(ctx context.Context, filter types.Filter) ([]dto.DepartmentDTO, uint64, error) {
@@ -105,51 +178,11 @@ func (s *DepartmentService) FindDepartment(ctx context.Context, id uint64) (*dto
 	if !authz.CanDo(authz.DepartmentsView, *authCtx) {
 		return nil, apperrors.ErrForbidden
 	}
-
 	entity, err := s.departmentRepository.FindDepartment(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	return departmentEntityToDTO(entity), nil
-}
-
-func (s *DepartmentService) CreateDepartment(ctx context.Context, dto dto.CreateDepartmentDTO) (*dto.DepartmentDTO, error) {
-	authCtx, err := s.buildAuthzContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !authz.CanDo(authz.DepartmentsCreate, *authCtx) {
-		return nil, apperrors.ErrForbidden
-	}
-
-	entity := entities.Department{
-		Name:     dto.Name,
-		StatusID: (dto.StatusID),
-	}
-	createdEntity, err := s.departmentRepository.CreateDepartment(ctx, entity)
-	if err != nil {
-		return nil, err
-	}
-	return departmentEntityToDTO(createdEntity), nil
-}
-
-func (s *DepartmentService) UpdateDepartment(ctx context.Context, id uint64, dto dto.UpdateDepartmentDTO) (*dto.DepartmentDTO, error) {
-	authCtx, err := s.buildAuthzContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !authz.CanDo(authz.DepartmentsUpdate, *authCtx) {
-		return nil, apperrors.ErrForbidden
-	}
-
-	updatedEntity, err := s.departmentRepository.UpdateDepartment(ctx, id, dto)
-	if err != nil {
-
-		s.logger.Error("Ошибка в репозитории при обновлении департамента", zap.Error(err), zap.Uint64("id", id))
-		return nil, err
-	}
-
-	return departmentEntityToDTO(updatedEntity), nil
 }
 
 func (s *DepartmentService) DeleteDepartment(ctx context.Context, id uint64) error {
@@ -164,19 +197,13 @@ func (s *DepartmentService) DeleteDepartment(ctx context.Context, id uint64) err
 	err = s.departmentRepository.DeleteDepartment(ctx, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
-
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			return apperrors.NewHttpError(
-				http.StatusConflict, // 409 Conflict - самый подходящий статус
-				"Невозможно удалить департамент, так как он используется в других частях системы (например, в отделах или заявках).",
-				nil,
-				map[string]interface{}{"department_id": id},
-			)
+			return apperrors.NewHttpError(http.StatusConflict,
+				"Невозможно удалить департамент, так как он используется в других частях системы.",
+				nil, map[string]interface{}{"department_id": id})
 		}
-
 		return err
 	}
-
 	return nil
 }
 

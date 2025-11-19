@@ -6,28 +6,31 @@ import (
 )
 
 type ReportFilter struct {
-	DateFrom     *time.Time
-	DateTo       *time.Time
-	ExecutorIDs  []uint64
-	OrderTypeIDs []uint64
-	PriorityIDs  []uint64
-	Page         int
-	PerPage      int
+	DateFrom       *time.Time
+	DateTo         *time.Time
+	ExecutorIDs    []uint64
+	OrderTypeIDs   []uint64
+	PriorityIDs    []uint64
+	Page           int
+	PerPage        int
+	Actor          *User
+	PermissionsMap map[string]bool
 }
 
-// ReportItem определяет структуру одной строки в итоговом отчете.
 type ReportItem struct {
-	OrderID         uint64          `db:"order_id"`
-	CreatorFio      sql.NullString  `db:"creator_fio"`
-	CreatedAt       time.Time       `db:"created_at"`
-	OrderTypeName   sql.NullString  `db:"order_type_name"`
-	PriorityName    sql.NullString  `db:"priority_name"`
-	StatusName      string          `db:"status_name"`
-	OrderName       string          `db:"order_name"`
-	ExecutorFio     sql.NullString  `db:"executor_fio"`
-	DelegatedAt     sql.NullTime    `db:"delegated_at"`
-	CompletedAt     sql.NullTime    `db:"completed_at"`
-	ResolutionHours sql.NullFloat64 `db:"resolution_hours"`
-	SLAStatus       string          `db:"sla_status"`
-	Comment         sql.NullString  `db:"comment"`
+	OrderID           int64          `db:"order_id"`
+	CreatorFio        sql.NullString `db:"creator_fio"`
+	CreatedAt         time.Time      `db:"created_at"`
+	OrderTypeName     sql.NullString `db:"order_type_name"`
+	PriorityName      sql.NullString `db:"priority_name"`
+	StatusName        sql.NullString `db:"status_name"`
+	OrderName         sql.NullString `db:"order_name"`
+	ResponsibleFio    sql.NullString `db:"responsible_fio"`
+	DelegatedAt       sql.NullTime   `db:"delegated_at"`
+	ExecutorFio       sql.NullString `db:"executor_fio"`
+	CompletedAt       sql.NullTime   `db:"completed_at"`
+	ResolutionTimeStr sql.NullString `db:"resolution_time_str"`
+	SLAStatus         sql.NullString `db:"sla_status"`
+	SourceDepartment  sql.NullString `db:"source_department"`
+	Comment           sql.NullString `db:"comment"`
 }

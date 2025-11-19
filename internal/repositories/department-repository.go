@@ -2,36 +2,43 @@ package repositories
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/zap"
 
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"go.uber.org/zap"
 )
 
 const departmentTable = "departments"
 
 var (
-	departmentAllowedFilterFields = map[string]string{"status_id": "d.status_id"}
-	departmentAllowedSortFields   = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true, "status_id": true}
+	departmentAllowedFilterFields = map[string]string{"d.status_id": "d.status_id"}
+	departmentAllowedSortFields   = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true}
+	departmentSelectFields        = []string{"id", "name", "status_id", "created_at", "updated_at", "external_id", "source_system"}
 )
 
+// DepartmentRepositoryInterface - ЧИСТАЯ ВЕРСИЯ БЕЗ ДУБЛИКАТОВ
 type DepartmentRepositoryInterface interface {
+	// Основные "рабочие" методы для изменения данных
+	Create(ctx context.Context, tx pgx.Tx, department entities.Department) (uint64, error)
+	Update(ctx context.Context, tx pgx.Tx, id uint64, department entities.Department) error
+
+	// Методы для чтения данных
+	FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Department, error)
+	FindDepartment(ctx context.Context, id uint64) (*entities.Department, error)
 	GetDepartments(ctx context.Context, filter types.Filter) ([]entities.Department, uint64, error)
 	GetDepartmentsWithStats(ctx context.Context, filter types.Filter) ([]dto.DepartmentStatsDTO, uint64, error)
-	FindDepartment(ctx context.Context, id uint64) (*entities.Department, error)
-	CreateDepartment(ctx context.Context, department entities.Department) (*entities.Department, error)
-	UpdateDepartment(ctx context.Context, id uint64, dto dto.UpdateDepartmentDTO) (*entities.Department, error)
 	DeleteDepartment(ctx context.Context, id uint64) error
+	FindIDByName(ctx context.Context, name string) (uint64, error)
 }
 
 type DepartmentRepository struct {
@@ -45,14 +52,78 @@ func NewDepartmentRepository(storage *pgxpool.Pool, logger *zap.Logger) Departme
 
 func scanDepartment(row pgx.Row) (*entities.Department, error) {
 	var d entities.Department
-	err := row.Scan(&d.ID, &d.Name, &d.StatusID, &d.CreatedAt, &d.UpdatedAt)
+	var externalID, sourceSystem sql.NullString
+	err := row.Scan(&d.ID, &d.Name, &d.StatusID, &d.CreatedAt, &d.UpdatedAt, &externalID, &sourceSystem)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apperrors.ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("ошибка сканирования department: %w", err)
 	}
+	if externalID.Valid {
+		d.ExternalID = &externalID.String
+	}
+	if sourceSystem.Valid {
+		d.SourceSystem = &sourceSystem.String
+	}
 	return &d, nil
+}
+
+func (r *DepartmentRepository) Create(ctx context.Context, tx pgx.Tx, department entities.Department) (uint64, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Insert(departmentTable).
+		Columns("name", "status_id", "external_id", "source_system", "created_at", "updated_at").
+		Values(department.Name, department.StatusID, department.ExternalID, department.SourceSystem, sq.Expr("NOW()"), sq.Expr("NOW()")).
+		Suffix("RETURNING id").
+		ToSql()
+	if err != nil {
+		return 0, err
+	}
+	var newID uint64
+	err = tx.QueryRow(ctx, query, args...).Scan(&newID)
+	return newID, err
+}
+
+func (r *DepartmentRepository) Update(ctx context.Context, tx pgx.Tx, id uint64, department entities.Department) error {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Update(departmentTable).
+		Set("name", department.Name).
+		Set("status_id", department.StatusID).
+		Set("updated_at", sq.Expr("NOW()")).
+		Where(sq.Eq{"id": id}).
+		ToSql()
+	if err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+func (r *DepartmentRepository) findOne(ctx context.Context, querier Querier, where sq.Eq) (*entities.Department, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select(departmentSelectFields...).From(departmentTable).Where(where).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	return scanDepartment(querier.QueryRow(ctx, query, args...))
+}
+
+func (r *DepartmentRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Department, error) {
+	var querier Querier = r.storage
+	if tx != nil {
+		querier = tx
+	}
+	return r.findOne(ctx, querier, sq.Eq{"external_id": externalID, "source_system": sourceSystem})
+}
+
+func (r *DepartmentRepository) FindDepartment(ctx context.Context, id uint64) (*entities.Department, error) {
+	return r.findOne(ctx, r.storage, sq.Eq{"id": id})
 }
 
 func (r *DepartmentRepository) buildFilterQuery(filter types.Filter, tableAlias string) (string, []interface{}) {
@@ -100,28 +171,21 @@ func (r *DepartmentRepository) CountDepartments(ctx context.Context, filter type
 
 func (r *DepartmentRepository) GetDepartments(ctx context.Context, filter types.Filter) ([]entities.Department, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-
-	// --- 1. БАЗОВЫЙ ЗАПРОС ---
 	baseBuilder := psql.Select().From(departmentTable + " AS d")
-
-	// --- 2. ФИЛЬТРАЦИЯ ---
-	if len(filter.Filter) > 0 {
-		for key, value := range filter.Filter {
-			if dbColumn, ok := departmentAllowedFilterFields[key]; ok {
-				if items, ok := value.(string); ok && strings.Contains(items, ",") {
-					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: strings.Split(items, ",")})
-				} else {
-					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: value})
-				}
-			}
-		}
-	}
 
 	if filter.Search != "" {
 		baseBuilder = baseBuilder.Where(sq.ILike{"d.name": "%" + filter.Search + "%"})
 	}
+	for key, value := range filter.Filter {
+		if dbColumn, ok := departmentAllowedFilterFields[key]; ok {
+			if items, ok := value.(string); ok && strings.Contains(items, ",") {
+				baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: strings.Split(items, ",")})
+			} else {
+				baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: value})
+			}
+		}
+	}
 
-	// --- 3. ПОДСЧЕТ ОБЩЕГО КОЛИЧЕСТВА ---
 	countBuilder := baseBuilder.Columns("COUNT(d.id)")
 	countQuery, countArgs, err := countBuilder.ToSql()
 	if err != nil {
@@ -135,20 +199,16 @@ func (r *DepartmentRepository) GetDepartments(ctx context.Context, filter types.
 		return []entities.Department{}, 0, nil
 	}
 
-	// --- 4. ВЫБОРКА + СОРТИРОВКА + ПАГИНАЦИЯ ---
-	selectBuilder := baseBuilder.Columns("d.id, d.name, d.status_id, d.created_at, d.updated_at")
+	selectBuilder := baseBuilder.Columns("d.id", "d.name", "d.status_id", "d.created_at", "d.updated_at", "d.external_id", "d.source_system")
 
 	if len(filter.Sort) > 0 {
 		for field, direction := range filter.Sort {
-			// Проверяем "белый список"
 			if _, ok := departmentAllowedSortFields[field]; ok {
-				safeDirection := "ASC"
+				order := "ASC"
 				if strings.ToUpper(direction) == "DESC" {
-					safeDirection = "DESC"
+					order = "DESC"
 				}
-				// Безопасно добавляем сортировку, используя `field` напрямую.
-				// Это безопасно, т.к. мы проверили его по "белому списку".
-				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("d.%s %s", field, safeDirection))
+				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("d.%s %s", field, order))
 			}
 		}
 	} else {
@@ -159,7 +219,6 @@ func (r *DepartmentRepository) GetDepartments(ctx context.Context, filter types.
 		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
 	}
 
-	// --- 5. ВЫПОЛНЕНИЕ ---
 	query, args, err := selectBuilder.ToSql()
 	if err != nil {
 		return nil, 0, err
@@ -179,18 +238,15 @@ func (r *DepartmentRepository) GetDepartments(ctx context.Context, filter types.
 		}
 		departments = append(departments, *dept)
 	}
-
 	return departments, total, rows.Err()
 }
 
-func (r *DepartmentRepository) FindDepartment(ctx context.Context, id uint64) (*entities.Department, error) {
-	query := `SELECT id, name, status_id, created_at, updated_at FROM departments WHERE id = $1`
-	return scanDepartment(r.storage.QueryRow(ctx, query, id))
-}
-
 func (r *DepartmentRepository) CreateDepartment(ctx context.Context, department entities.Department) (*entities.Department, error) {
-	query := `INSERT INTO departments (name, status_id) VALUES($1, $2) RETURNING id, name, status_id, created_at, updated_at`
-	return scanDepartment(r.storage.QueryRow(ctx, query, department.Name, department.StatusID))
+	query := `
+		INSERT INTO departments (name, status_id, external_id, source_system) 
+		VALUES($1, $2, $3, $4) 
+		RETURNING id, name, status_id, created_at, updated_at, external_id, source_system`
+	return scanDepartment(r.storage.QueryRow(ctx, query, department.Name, department.StatusID, department.ExternalID, department.SourceSystem))
 }
 
 func (r *DepartmentRepository) UpdateDepartment(ctx context.Context, id uint64, dto dto.UpdateDepartmentDTO) (*entities.Department, error) {
@@ -220,8 +276,12 @@ func (r *DepartmentRepository) UpdateDepartment(ctx context.Context, id uint64, 
 }
 
 func (r *DepartmentRepository) DeleteDepartment(ctx context.Context, id uint64) error {
-	query := `DELETE FROM departments WHERE id = $1`
-	result, err := r.storage.Exec(ctx, query, id)
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Delete(departmentTable).Where(sq.Eq{"id": id}).ToSql()
+	if err != nil {
+		return err
+	}
+	result, err := r.storage.Exec(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -229,6 +289,20 @@ func (r *DepartmentRepository) DeleteDepartment(ctx context.Context, id uint64) 
 		return apperrors.ErrNotFound
 	}
 	return nil
+}
+
+func (r *DepartmentRepository) FindIDByName(ctx context.Context, name string) (uint64, error) {
+	var id uint64
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select("id").From(departmentTable).Where(sq.ILike{"name": name}).Limit(1).ToSql()
+	if err != nil {
+		return 0, err
+	}
+	err = r.storage.QueryRow(ctx, query, args...).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, apperrors.ErrNotFound
+	}
+	return id, err
 }
 
 func (r *DepartmentRepository) GetDepartmentsWithStats(ctx context.Context, filter types.Filter) ([]dto.DepartmentStatsDTO, uint64, error) {

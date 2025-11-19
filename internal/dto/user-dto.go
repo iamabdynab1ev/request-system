@@ -7,8 +7,8 @@ type CreateUserDTO struct {
 	PositionID   uint64   `json:"position_id" validate:"required"`
 	StatusID     uint64   `json:"status_id" validate:"omitempty"`
 	RoleIDs      []uint64 `json:"role_ids" validate:"required,dive,gte=1"`
-	BranchID     uint64   `json:"branch_id" validate:"required"`
-	DepartmentID uint64   `json:"department_id" validate:"required"`
+	BranchID     *uint64  `json:"branch_id" validate:"omitempty"`
+	DepartmentID *uint64  `json:"department_id" validate:"omitempty"`
 	OfficeID     *uint64  `json:"office_id" validate:"omitempty"`
 	OtdelID      *uint64  `json:"otdel_id" validate:"omitempty"`
 	PhotoURL     *string  `json:"photo_url,omitempty"`
@@ -41,13 +41,13 @@ type UserDTO struct {
 	Fio                string   `json:"fio"`
 	Email              string   `json:"email"`
 	PhoneNumber        string   `json:"phone_number"`
-	PositionID         uint64   `json:"position_id"`
+	PositionID         *uint64  `json:"position_id"`
 	StatusID           uint64   `json:"status_id"`
-	BranchID           uint64   `json:"branch_id"`
-	DepartmentID       uint64   `json:"department_id"`
-	RoleIDs            []uint64 `json:"role_ids"`
+	BranchID           *uint64  `json:"branch_id,omitempty"`
+	DepartmentID       *uint64  `json:"department_id,omitempty"`
 	OfficeID           *uint64  `json:"office_id,omitempty"`
 	OtdelID            *uint64  `json:"otdel_id,omitempty"`
+	RoleIDs            []uint64 `json:"role_ids"`
 	PhotoURL           *string  `json:"photo_url,omitempty"`
 	MustChangePassword bool     `json:"must_change_password"`
 	IsHead             bool     `json:"is_head"`
@@ -55,5 +55,5 @@ type UserDTO struct {
 type ShortUserDTO struct {
 	ID   uint64 `json:"id"`
 	Fio  string `json:"fio"`
-	Role string `json:"role,omitempty"` // <-- Теперь это ОБЫЧНАЯ СТРОКА
+	Role string `json:"role,omitempty"`
 }

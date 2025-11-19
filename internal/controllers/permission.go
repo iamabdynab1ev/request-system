@@ -31,10 +31,8 @@ func NewPermissionController(
 func (c *PermissionController) GetPermissions(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 
-	// Используем общий парсер фильтров и пагинации
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 
-	// Вызываем сервис с limit и offset из filter
 	permissions, total, err := c.permService.GetPermissions(reqCtx, uint64(filter.Limit), uint64(filter.Offset), filter.Search)
 	if err != nil {
 		c.logger.Error("GetPermissions: ошибка получения списка привилегий", zap.Error(err))
@@ -49,7 +47,6 @@ func (c *PermissionController) GetPermissions(ctx echo.Context) error {
 		)
 	}
 
-	// Возвращаем с общей функцией SuccessResponse
 	return utils.SuccessResponse(ctx, permissions, "Список привилегий успешно получен", http.StatusOK, total)
 }
 

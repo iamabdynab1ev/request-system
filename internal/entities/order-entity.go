@@ -1,8 +1,8 @@
-// Файл: internal/entities/order-entity.go
 package entities
 
 import "time"
 
+// Order — структура для заявки
 type Order struct {
 	ID                       uint64     `db:"id"`
 	Name                     string     `db:"name"`

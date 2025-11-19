@@ -13,6 +13,7 @@ type Department struct {
 	UpdatedAt time.Time    `db:"updated_at"`
 	DeletedAt sql.NullTime `db:"deleted_at"`
 
-	// Поле для данных из JOIN'а
-	Status *Status `db:"-"`
+	ExternalID   *string `db:"external_id"`
+	SourceSystem *string `db:"source_system"`
+	Status       *Status `db:"-"`
 }

@@ -39,6 +39,7 @@ type RoleRepositoryInterface interface {
 	UnlinkAllPermissionsFromRoleInTx(ctx context.Context, tx pgx.Tx, roleID uint64) error
 	DeleteRole(ctx context.Context, id uint64) error
 	BeginTx(ctx context.Context) (pgx.Tx, error)
+	FindByName(ctx context.Context, tx pgx.Tx, name string) (*entities.Role, error)
 }
 
 type RoleRepository struct {
@@ -263,4 +264,25 @@ func (r *RoleRepository) DeleteRole(ctx context.Context, id uint64) error {
 		return apperrors.ErrNotFound
 	}
 	return nil
+}
+
+func (r *RoleRepository) FindByName(ctx context.Context, tx pgx.Tx, name string) (*entities.Role, error) {
+	// Выбираем только те поля, которые нам нужны для назначения роли.
+	query := `SELECT id, name, status_id FROM roles WHERE name = $1`
+
+	var role entities.Role
+	err := tx.QueryRow(ctx, query, name).Scan(&role.ID, &role.Name, &role.StatusID)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Если роль не найдена, возвращаем специальную ошибку ErrNotFound.
+		// Это не системная ошибка, а ожидаемый результат.
+		return nil, apperrors.ErrNotFound
+	}
+	if err != nil {
+		// А это уже непредвиденная ошибка базы данных. Ее нужно логировать.
+		r.logger.Error("ошибка поиска роли по имени", zap.String("name", name), zap.Error(err))
+		return nil, err
+	}
+
+	return &role, nil
 }

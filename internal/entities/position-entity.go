@@ -13,4 +13,6 @@ type Position struct {
 	Type         *string   `db:"type"`
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
+	ExternalID   *string   `db:"external_id"`
+	SourceSystem *string   `db:"source_system"`
 }

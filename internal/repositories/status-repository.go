@@ -23,7 +23,7 @@ import (
 )
 
 type dbStatus struct {
-	ID        int
+	ID        uint64
 	IconSmall sql.Null[string]
 	IconBig   sql.Null[string]
 	Name      string
@@ -84,6 +84,7 @@ type StatusRepositoryInterface interface {
 	FindByCodeInTx(ctx context.Context, tx pgx.Tx, code string) (*entities.Status, error)
 	FindByIDInTx(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Status, error)
 	FindIDByCode(ctx context.Context, code string) (uint64, error)
+	FindAll(ctx context.Context) ([]entities.Status, error)
 }
 
 type statusRepository struct{ storage *pgxpool.Pool }
@@ -332,4 +333,23 @@ func (r *statusRepository) DeleteStatus(ctx context.Context, id uint64) error {
 		return apperrors.ErrNotFound
 	}
 	return nil
+}
+
+func (r *statusRepository) FindAll(ctx context.Context) ([]entities.Status, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY id ASC", statusFields, statusTable)
+	rows, err := r.storage.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	statuses := make([]entities.Status, 0)
+	for rows.Next() {
+		var dbRow dbStatus
+		if err := rows.Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt); err != nil {
+			return nil, err
+		}
+		statuses = append(statuses, dbRow.ToEntity())
+	}
+	return statuses, rows.Err()
 }

@@ -1,4 +1,3 @@
-// services/otdel_service.go
 package services
 
 import (
@@ -12,25 +11,33 @@ import (
 	"request-system/pkg/types"
 	"request-system/pkg/utils"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
 type OtdelServiceInterface interface {
 	GetOtdels(ctx context.Context, filter types.Filter) ([]dto.OtdelDTO, uint64, error)
 	FindOtdel(ctx context.Context, id uint64) (*dto.OtdelDTO, error)
-	CreateOtdel(ctx context.Context, dto dto.CreateOtdelDTO) (*dto.OtdelDTO, error)
-	UpdateOtdel(ctx context.Context, id uint64, dto dto.UpdateOtdelDTO) (*dto.OtdelDTO, error)
+	CreateOtdel(ctx context.Context, payload dto.CreateOtdelDTO) (*dto.OtdelDTO, error)
+	UpdateOtdel(ctx context.Context, id uint64, payload dto.UpdateOtdelDTO) (*dto.OtdelDTO, error)
 	DeleteOtdel(ctx context.Context, id uint64) error
 }
 
 type OtdelService struct {
+	txManager       repositories.TxManagerInterface
 	otdelRepository repositories.OtdelRepositoryInterface
 	userRepository  repositories.UserRepositoryInterface
 	logger          *zap.Logger
 }
 
-func NewOtdelService(otdelRepo repositories.OtdelRepositoryInterface, userRepo repositories.UserRepositoryInterface, logger *zap.Logger) OtdelServiceInterface {
+func NewOtdelService(
+	txManager repositories.TxManagerInterface,
+	otdelRepo repositories.OtdelRepositoryInterface,
+	userRepo repositories.UserRepositoryInterface,
+	logger *zap.Logger,
+) OtdelServiceInterface {
 	return &OtdelService{
+		txManager:       txManager,
 		otdelRepository: otdelRepo,
 		userRepository:  userRepo,
 		logger:          logger,
@@ -42,7 +49,9 @@ func otdelEntityToDTO(entity *entities.Otdel) *dto.OtdelDTO {
 		return nil
 	}
 	return &dto.OtdelDTO{
-		ID: entity.ID, Name: entity.Name, StatusID: entity.StatusID,
+		ID:            entity.ID,
+		Name:          entity.Name,
+		StatusID:      entity.StatusID,
 		DepartmentsID: entity.DepartmentsID,
 		CreatedAt:     entity.CreatedAt.Format("2006-01-02 15:04:05"),
 		UpdatedAt:     entity.UpdatedAt.Format("2006-01-02 15:04:05"),
@@ -50,7 +59,6 @@ func otdelEntityToDTO(entity *entities.Otdel) *dto.OtdelDTO {
 }
 
 func (s *OtdelService) GetOtdels(ctx context.Context, filter types.Filter) ([]dto.OtdelDTO, uint64, error) {
-	// ... (логика авторизации без изменений)
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -72,7 +80,6 @@ func (s *OtdelService) GetOtdels(ctx context.Context, filter types.Filter) ([]dt
 }
 
 func (s *OtdelService) FindOtdel(ctx context.Context, id uint64) (*dto.OtdelDTO, error) {
-	// ... (логика авторизации без изменений)
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -88,8 +95,7 @@ func (s *OtdelService) FindOtdel(ctx context.Context, id uint64) (*dto.OtdelDTO,
 	return otdelEntityToDTO(entity), nil
 }
 
-func (s *OtdelService) CreateOtdel(ctx context.Context, dto dto.CreateOtdelDTO) (*dto.OtdelDTO, error) {
-	// ... (логика авторизации без изменений)
+func (s *OtdelService) CreateOtdel(ctx context.Context, payload dto.CreateOtdelDTO) (*dto.OtdelDTO, error) {
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -99,20 +105,35 @@ func (s *OtdelService) CreateOtdel(ctx context.Context, dto dto.CreateOtdelDTO) 
 	}
 
 	entity := entities.Otdel{
-		Name:          dto.Name,
-		StatusID:      dto.StatusID,
-		DepartmentsID: dto.DepartmentsID,
+		Name:          payload.Name,
+		StatusID:      payload.StatusID,
+		DepartmentsID: payload.DepartmentsID,
 	}
-	created, err := s.otdelRepository.CreateOtdel(ctx, entity)
+
+	var newOtdelID uint64
+
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		// ИСПРАВЛЕНИЕ: Вызываем репозиторий с pgx.Tx и правильными аргументами.
+		newOtdelID, txErr = s.otdelRepository.CreateOtdel(ctx, tx, entity)
+		return txErr
+	})
 	if err != nil {
+		s.logger.Error("Ошибка в транзакции создания отдела", zap.Error(err))
 		return nil, err
 	}
-	return otdelEntityToDTO(created), nil
+
+	createdOtdel, err := s.otdelRepository.FindOtdel(ctx, newOtdelID)
+	if err != nil {
+		s.logger.Error("Не удалось найти только что созданный отдел", zap.Uint64("id", newOtdelID), zap.Error(err))
+		return nil, err
+	}
+
+	return otdelEntityToDTO(createdOtdel), nil
 }
 
-// --- ИСПРАВЛЕННЫЙ UPDATE ---
-func (s *OtdelService) UpdateOtdel(ctx context.Context, id uint64, dto dto.UpdateOtdelDTO) (*dto.OtdelDTO, error) {
-	// ... (логика авторизации без изменений)
+// UpdateOtdel - ИСПРАВЛЕН
+func (s *OtdelService) UpdateOtdel(ctx context.Context, id uint64, payload dto.UpdateOtdelDTO) (*dto.OtdelDTO, error) {
 	authCtx, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -121,11 +142,37 @@ func (s *OtdelService) UpdateOtdel(ctx context.Context, id uint64, dto dto.Updat
 		return nil, apperrors.ErrForbidden
 	}
 
-	updated, err := s.otdelRepository.UpdateOtdel(ctx, id, dto)
+	existing, err := s.otdelRepository.FindOtdel(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return otdelEntityToDTO(updated), nil
+
+	// Обновляем поля существующей сущности
+	if payload.Name != "" {
+		existing.Name = payload.Name
+	}
+	if payload.StatusID != 0 {
+		existing.StatusID = payload.StatusID
+	}
+	if payload.DepartmentsID != 0 {
+		existing.DepartmentsID = payload.DepartmentsID
+	}
+
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		// ИСПРАВЛЕНИЕ: Вызываем репозиторий с pgx.Tx, ID и обновленной сущностью
+		return s.otdelRepository.UpdateOtdel(ctx, tx, id, *existing)
+	})
+	if err != nil {
+		s.logger.Error("Ошибка в транзакции обновления отдела", zap.Error(err))
+		return nil, err
+	}
+
+	updatedOtdel, err := s.otdelRepository.FindOtdel(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return otdelEntityToDTO(updatedOtdel), nil
 }
 
 func (s *OtdelService) DeleteOtdel(ctx context.Context, id uint64) error {

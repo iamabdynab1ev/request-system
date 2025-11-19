@@ -27,7 +27,6 @@ type OrderTypeServiceInterface interface {
 	Delete(ctx context.Context, id int) error
 	GetByID(ctx context.Context, id int) (*dto.OrderTypeResponseDTO, error)
 	GetAll(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.OrderTypeResponseDTO], error)
-	// --- ИНТЕРФЕЙС ИЗМЕНЕН ---
 	GetConfig(ctx context.Context, orderTypeID uint64) (map[string]interface{}, error)
 }
 
@@ -35,7 +34,7 @@ type OrderTypeService struct {
 	repo       repositories.OrderTypeRepositoryInterface
 	userRepo   repositories.UserRepositoryInterface
 	txManager  repositories.TxManagerInterface
-	ruleEngine RuleEngineServiceInterface // <--- ДОБАВЛЕНО
+	ruleEngine RuleEngineServiceInterface
 	logger     *zap.Logger
 }
 
@@ -43,14 +42,14 @@ func NewOrderTypeService(
 	repo repositories.OrderTypeRepositoryInterface,
 	userRepo repositories.UserRepositoryInterface,
 	txManager repositories.TxManagerInterface,
-	ruleEngine RuleEngineServiceInterface, // <--- ДОБАВЛЕНО
+	ruleEngine RuleEngineServiceInterface,
 	logger *zap.Logger,
 ) OrderTypeServiceInterface {
 	return &OrderTypeService{
 		repo:       repo,
 		userRepo:   userRepo,
 		txManager:  txManager,
-		ruleEngine: ruleEngine, // <--- ДОБАВЛЕНО
+		ruleEngine: ruleEngine,
 		logger:     logger,
 	}
 }
@@ -72,7 +71,6 @@ func (s *OrderTypeService) buildAuthzContext(ctx context.Context) (*authz.Contex
 	return &authz.Context{Actor: actor, Permissions: permissionsMap, Target: nil}, nil
 }
 
-// toResponseDTO конвертирует сущность OrderType в DTO для ответа.
 func toResponseDTO(entity *entities.OrderType) *dto.OrderTypeResponseDTO {
 	if entity == nil {
 		return nil
@@ -93,14 +91,11 @@ func toResponseDTO(entity *entities.OrderType) *dto.OrderTypeResponseDTO {
 	return resp
 }
 
-// Create создает новый тип заявки.
 func (s *OrderTypeService) Create(ctx context.Context, createDTO dto.CreateOrderTypeDTO) (*dto.OrderTypeResponseDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// ПРЕДПОЛОЖЕНИЕ: Мы добавим эти привилегии в сидеры.
-	// Они аналогичны вашим `StatusesCreate`, `PrioritiesCreate` и т.д.
 	if !authz.CanDo("order_type:create", *authContext) {
 		return nil, apperrors.ErrForbidden
 	}
@@ -168,7 +163,6 @@ func (s *OrderTypeService) Update(ctx context.Context, id int, updateDTO dto.Upd
 	}
 	nameChanged := false
 	codeChanged := false
-	// Обновляем поля, только если они были переданы в DTO
 	if updateDTO.Name != nil {
 		existingEntity.Name = *updateDTO.Name
 	}
@@ -183,7 +177,7 @@ func (s *OrderTypeService) Update(ctx context.Context, id int, updateDTO dto.Upd
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		if nameChanged {
-			nameExists, err := s.repo.ExistsByName(ctx, tx, existingEntity.Name, id) // <-- Передаем `id` для исключения
+			nameExists, err := s.repo.ExistsByName(ctx, tx, existingEntity.Name, id)
 			if err != nil {
 				return err
 			}
@@ -194,7 +188,7 @@ func (s *OrderTypeService) Update(ctx context.Context, id int, updateDTO dto.Upd
 
 		// Проверяем код, ТОЛЬКО ЕСЛИ он изменился
 		if codeChanged {
-			codeExists, err := s.repo.ExistsByCode(ctx, tx, existingEntity.Code, id) // <-- Передаем `id` для исключения
+			codeExists, err := s.repo.ExistsByCode(ctx, tx, existingEntity.Code, id)
 			if err != nil {
 				return err
 			}
@@ -213,7 +207,6 @@ func (s *OrderTypeService) Update(ctx context.Context, id int, updateDTO dto.Upd
 	return toResponseDTO(existingEntity), nil
 }
 
-// Delete удаляет тип заявки.
 func (s *OrderTypeService) Delete(ctx context.Context, id int) error {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -222,8 +215,6 @@ func (s *OrderTypeService) Delete(ctx context.Context, id int) error {
 	if !authz.CanDo("order_type:delete", *authContext) {
 		return apperrors.ErrForbidden
 	}
-
-	// Дополнительная проверка, если нужно: убедиться, что тип заявки не используется в заявках
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		return s.repo.Delete(ctx, tx, id)
@@ -235,7 +226,6 @@ func (s *OrderTypeService) Delete(ctx context.Context, id int) error {
 	return err
 }
 
-// GetByID находит тип заявки по ID.
 func (s *OrderTypeService) GetByID(ctx context.Context, id int) (*dto.OrderTypeResponseDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -253,7 +243,6 @@ func (s *OrderTypeService) GetByID(ctx context.Context, id int) (*dto.OrderTypeR
 	return toResponseDTO(entity), nil
 }
 
-// GetAll получает список типов заявок.
 func (s *OrderTypeService) GetAll(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.OrderTypeResponseDTO], error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
@@ -286,10 +275,6 @@ func (s *OrderTypeService) GetAll(ctx context.Context, limit, offset uint64, sea
 }
 
 func (s *OrderTypeService) GetConfig(ctx context.Context, orderTypeID uint64) (map[string]interface{}, error) {
-	// Для этой операции не нужна полная транзакция, мы будем использовать read-only
-	// но для простоты передадим `nil`, репозиторий сам разберется
-
-	// Обернем вызов в транзакцию для консистентности
 	var result *RuleEngineResult
 	err := s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		res, errTx := s.ruleEngine.GetPredefinedRoute(ctx, tx, orderTypeID)
