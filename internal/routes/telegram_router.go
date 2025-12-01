@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"context"
+
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 
@@ -25,6 +27,7 @@ func runTelegramRouter(
 	authMW *middleware.AuthMiddleware,
 	cfg *config.Config,
 	logger *zap.Logger,
+	appCtx context.Context,
 ) {
 	tgController := controllers.NewTelegramController(
 		userService,
@@ -40,12 +43,15 @@ func runTelegramRouter(
 		cfg.Telegram,
 	)
 
+	go tgController.StartCleanup(appCtx)
+
 	api := e.Group("/api")
 	secureGroup := api.Group("", authMW.Auth)
 
 	secureGroup.POST("/profile/telegram/generate-token", tgController.HandleGenerateLinkToken)
 	api.POST("/webhooks/telegram", tgController.HandleTelegramWebhook)
 
+	// Регистрация webhook
 	go func() {
 		err := tgController.RegisterWebhook(cfg.Server.BaseURL)
 		if err != nil {

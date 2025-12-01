@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"context"
+
 	"github.com/go-redis/redis/v8"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
@@ -26,8 +28,20 @@ type Loggers struct {
 	OrderHistory *zap.Logger
 }
 
-func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, jwtSvc service.JWTService, loggers *Loggers, authPermissionService services.AuthPermissionServiceInterface, cfg *config.Config, bus *eventbus.Bus, wsHub *websocket.Hub) {
+func InitRouter(
+	e *echo.Echo,
+	dbConn *pgxpool.Pool,
+	redisClient *redis.Client,
+	jwtSvc service.JWTService,
+	loggers *Loggers,
+	authPermissionService services.AuthPermissionServiceInterface,
+	cfg *config.Config,
+	bus *eventbus.Bus,
+	wsHub *websocket.Hub,
+	appCtx context.Context,
+) {
 	loggers.Main.Info("InitRouter: Начало создания маршрутов")
+
 	// --- 0. ОБЩИЕ КОМПОНЕНТЫ ---
 	api := e.Group("/api")
 	authMW := middleware.NewAuthMiddleware(jwtSvc, authPermissionService, loggers.Auth)
@@ -56,6 +70,7 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	departmentRepo := repositories.NewDepartmentRepository(dbConn, loggers.Main)
 	otdelRepo := repositories.NewOtdelRepository(dbConn, loggers.Main)
 	officeRepo := repositories.NewOfficeRepository(dbConn, loggers.Main)
+	dashboardRepo := repositories.NewDashboardRepository(dbConn, loggers.Main)
 
 	// --- 2. СЕРВИСЫ ---
 	ruleEngineService := services.NewRuleEngineService(ruleRepo, userRepo, positionRepo, loggers.Main)
@@ -69,21 +84,23 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	otdelService := services.NewOtdelService(txManager, otdelRepo, userRepo, loggers.Main)
 	orderRuleService := services.NewOrderRoutingRuleService(ruleRepo, userRepo, positionRepo, txManager, loggers.Main, orderTypeRepo)
 	orderService := services.NewOrderService(txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo, ruleEngineService,
-		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService)
+		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService, nil)
 	historyService := services.NewOrderHistoryService(historyRepo, userRepo, departmentService, otdelService, statusRepo, priorityRepo, loggers.OrderHistory)
 	reportService := services.NewReportService(reportRepo, userRepo, loggers.Main)
 	branchService := services.NewBranchService(txManager, branchRepo, userRepo, loggers.Main)
 	officeService := services.NewOfficeService(officeRepo, userRepo, txManager, loggers.Main)
 	tgService := telegram.NewService(cfg.Telegram.BotToken)
+	notificationService := services.NewTelegramNotificationService(tgService, loggers.Main)
+	orderService = services.NewOrderService(txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo, ruleEngineService,
+		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService, notificationService)
+	dashboardService := services.NewDashboardService(dashboardRepo, userRepo, loggers.Main)
 
-	// === 3. КОНТРОЛЛЕРЫ === (НОВЫЙ БЛОК)
+	// --- 3. КОНТРОЛЛЕРЫ ---
 	// Создаем ВСЕ контроллеры здесь, в одном месте.
-
 	userController := controllers.NewUserController(userService, fileStorage, loggers.User)
 	historyController := controllers.NewOrderHistoryController(historyService, orderService, loggers.OrderHistory)
-
 	wsController := controllers.NewWebSocketController(wsHub, jwtSvc, loggers.Main)
-	api.GET("/ws", wsController.ServeWs)
+	dashboardController := controllers.NewDashboardController(dashboardService, loggers.Main.Named("Dashboard"))
 
 	// --- 3. РОУТЕРЫ ---
 	secureGroup := api.Group("", authMW.Auth)
@@ -93,6 +110,8 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 	// <<<--- ИСПРАВЛЕННЫЙ ВЫЗОВ runAuthRouter
 	runAuthRouter(api, dbConn, redisClient, jwtSvc, loggers.Auth, authMW, fileStorage, authPermissionService, cfg,
 		positionService, branchService, departmentService, otdelService, officeService)
+
+	api.GET("/ws", wsController.ServeWs)
 
 	runUserRouter(secureGroup, userController, authMW)
 	runRoleRouter(secureGroup, roleService, loggers.Main, authMW)
@@ -113,10 +132,13 @@ func InitRouter(e *echo.Echo, dbConn *pgxpool.Pool, redisClient *redis.Client, j
 
 	runBranchRouter(secureGroup, dbConn, loggers.Main, txManager, authMW)
 	runOfficeRouter(secureGroup, officeService, loggers.Main, authMW)
-	runTelegramRouter(e, userService, orderService, tgService, cacheRepo, statusRepo, userRepo, historyRepo, authPermissionService, authMW, cfg, loggers.Main)
+	runTelegramRouter(e, userService, orderService, tgService, cacheRepo, statusRepo, userRepo, historyRepo, authPermissionService, authMW, cfg, loggers.Main, appCtx)
 
 	// для интеграции
 	runSyncRouter(api, dbConn, cfg, loggers)
+
+	// Регистрируем новый маршрут для дашборда
+	secureGroup.GET("/dashboard", dashboardController.GetDashboardStats)
 
 	loggers.Main.Info("INIT_ROUTER: Создание маршрутов завершено")
 }

@@ -35,6 +35,7 @@ type TelegramController struct {
 	tgService             telegram.ServiceInterface
 	cacheRepo             repositories.CacheRepositoryInterface
 	authPermissionService services.AuthPermissionServiceInterface
+	deduplicator          *RequestDeduplicator
 	botToken              string
 	logger                *zap.Logger
 	cfg                   config.TelegramConfig
@@ -68,6 +69,7 @@ func NewTelegramController(
 		userRepo:              userRepo,
 		orderHistoryRepo:      orderHistoryRepo,
 		authPermissionService: authPermissionService,
+		deduplicator:          NewRequestDeduplicator(5 * time.Second),
 		botToken:              botToken,
 		logger:                logger,
 		cfg:                   cfg,
@@ -75,10 +77,7 @@ func NewTelegramController(
 	}
 }
 
-// === Константы ===
-const telegramStateKey = "tg_user_state:%d" // %d заменяется на chatID
-
-// === Точка входа: Вебхук ===
+const telegramStateKey = "tg_user_state:%d"
 
 func (c *TelegramController) HandleTelegramWebhook(ctx echo.Context) error {
 	var update TelegramUpdate
@@ -92,9 +91,23 @@ func (c *TelegramController) HandleTelegramWebhook(ctx echo.Context) error {
 		if !c.cfg.AdvancedMode {
 			return ctx.NoContent(http.StatusOK)
 		}
-		// Отвечаем Telegram, чтобы убрать часики с кнопки
-		_ = c.tgService.AnswerCallbackQuery(ctx.Request().Context(), update.CallbackQuery.ID, "")
-		return c.handleCallbackQuery(ctx.Request().Context(), update.CallbackQuery)
+
+		// Create a new background context for the goroutine to prevent it from being
+		// canceled when the HTTP request handler returns.
+		go func() {
+			bgCtx := context.Background()
+			_ = c.tgService.AnswerCallbackQuery(bgCtx, update.CallbackQuery.ID, "")
+			if err := c.handleCallbackQuery(bgCtx, update.CallbackQuery); err != nil {
+				c.logger.Error("Error handling callback query", zap.Error(err))
+			}
+		}()
+
+		chatID := update.CallbackQuery.Message.Chat.ID
+		if !c.deduplicator.TryAcquire(chatID, "callback") {
+			c.logger.Warn("Дублирующийся callback запрос игнорирован", zap.Int64("chatID", chatID))
+			return ctx.NoContent(http.StatusOK)
+		}
+		defer c.deduplicator.Release(chatID, "callback")
 	}
 
 	// 2. Обрабатываем текстовые сообщения и команды
@@ -103,31 +116,120 @@ func (c *TelegramController) HandleTelegramWebhook(ctx echo.Context) error {
 		text := update.Message.Text
 		c.logger.Info("Получено сообщение от Telegram", zap.Int64("chatID", chatID), zap.String("text", text))
 
-		// Команды ("/start", "/my_tasks")
-		if strings.HasPrefix(text, "/") {
-			if strings.HasPrefix(text, "/start") {
-				return c.handleStartCommand(ctx.Request().Context(), chatID, text)
-			}
-			if c.cfg.AdvancedMode && strings.HasPrefix(text, "/my_tasks") {
-				return c.handleMyTasksCommand(ctx.Request().Context(), chatID)
-			}
-			// Можно добавить другие команды...
-			return ctx.NoContent(http.StatusOK)
-		}
+		// Launch message processing in a goroutine to respond to Telegram quickly.
+		go func(msg *TelegramMessage) {
+			bgCtx := context.Background()
+			chatID := msg.Chat.ID
+			text := msg.Text
 
-		// Если это не команда, возможно, это ответ на наш вопрос (комментарий, срок)
-		if c.cfg.AdvancedMode {
-			if text == "📋 Мои Заявки" {
-				return c.handleMyTasksCommand(ctx.Request().Context(), chatID)
+			// Команды ("/start", "/my_tasks", "/stats")
+			if strings.HasPrefix(text, "/") {
+
+				if !c.deduplicator.TryAcquire(chatID, text) {
+					c.logger.Warn("Дублирующаяся команда игнорирована", zap.Int64("chatID", chatID), zap.String("command", text))
+					return
+				}
+				defer c.deduplicator.Release(chatID, text)
+
+				if strings.HasPrefix(text, "/start") {
+					_ = c.handleStartCommand(bgCtx, chatID, text)
+					return
+				}
+				if c.cfg.AdvancedMode && strings.HasPrefix(text, "/my_tasks") {
+					_ = c.handleMyTasksCommand(bgCtx, chatID)
+					return
+				}
+				if c.cfg.AdvancedMode && strings.HasPrefix(text, "/stats") {
+					_ = c.handleStatsCommand(bgCtx, chatID)
+					return
+				}
+				return
 			}
 
-			return c.handleTextMessage(ctx.Request().Context(), chatID, text)
-		}
+			// Если это не команда, возможно, это ответ на наш вопрос (комментарий, срок)
+			if c.cfg.AdvancedMode {
+				if text == "📋 Мои Заявки" {
 
-		return ctx.NoContent(http.StatusOK)
+					if !c.deduplicator.TryAcquire(chatID, "my_tasks_button") {
+						c.logger.Warn("Дублирующееся нажатие кнопки игнорировано", zap.Int64("chatID", chatID))
+						return
+					}
+					defer c.deduplicator.Release(chatID, "my_tasks_button")
+
+					_ = c.handleMyTasksCommand(bgCtx, chatID)
+					return
+				}
+
+				_ = c.handleTextMessage(bgCtx, chatID, text)
+			}
+		}(update.Message)
 	}
 
-	return ctx.NoContent(http.StatusOK)
+	return ctx.NoContent(http.StatusOK) // Always respond immediately.
+}
+
+func (c *TelegramController) handleStatsCommand(ctx context.Context, chatID int64, messageID ...int) error {
+	c.logger.Info("handleStatsCommand: НАЧАЛО", zap.Int64("chatID", chatID))
+
+	user, _, err := c.prepareUserContext(ctx, chatID)
+	if err != nil {
+		c.logger.Error("handleStatsCommand: ошибка prepareUserContext", zap.Error(err))
+		return err
+	}
+
+	// Получаем статистику
+	stats, err := c.orderService.GetUserStats(ctx, user.ID)
+	if err != nil {
+		c.logger.Error("handleStatsCommand: ошибка получения статистики", zap.Error(err))
+		return c.tgService.SendMessage(ctx, chatID, "❌ Ошибка при получении статистики\\.")
+	}
+
+	// Вычисляем среднее время
+	avgHours := int(stats.AvgResolutionSeconds / 3600)
+	avgMinutes := int((stats.AvgResolutionSeconds - float64(avgHours*3600)) / 60)
+
+	// Формируем красивое сообщение
+	var text strings.Builder
+	text.WriteString("📊 *Ваша статистика*\n")
+	text.WriteString("_за последний месяц_\n")
+	text.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+
+	// Общее количество
+	text.WriteString(fmt.Sprintf("📝 *Всего заявок:* %d\n\n", stats.TotalCount))
+
+	// Детализация по статусам
+	text.WriteString("*По статусам:*\n")
+	text.WriteString(fmt.Sprintf("⚙️ В работе: %d\n", stats.InProgressCount))
+	text.WriteString(fmt.Sprintf("✅ Выполнено: %d\n", stats.CompletedCount))
+	text.WriteString(fmt.Sprintf("🔒 Закрыто: %d\n\n", stats.ClosedCount))
+
+	// Просроченные (если есть)
+	if stats.OverdueCount > 0 {
+		text.WriteString(fmt.Sprintf("⚠️ *Просрочено:* %d \n\n", stats.OverdueCount))
+	}
+
+	// Среднее время выполнения
+	if avgHours > 0 || avgMinutes > 0 {
+		text.WriteString(fmt.Sprintf("⏱️ *Среднее время:*\n"))
+		if avgHours > 0 {
+			text.WriteString(fmt.Sprintf("%d ч ", avgHours))
+		}
+		if avgMinutes > 0 {
+			text.WriteString(fmt.Sprintf("%d мин", avgMinutes))
+		}
+		text.WriteString("\n")
+	}
+
+	text.WriteString("\n━━━━━━━━━━━━━━━━━━━━")
+
+	var msgIDToEdit int
+	if len(messageID) > 0 {
+		msgIDToEdit = messageID[0]
+	}
+
+	return c.tgService.EditOrSendMessage(ctx, chatID, msgIDToEdit, text.String(),
+		telegram.WithMarkdownV2(),
+	)
 }
 
 func (c *TelegramController) handleStartCommand(ctx context.Context, chatID int64, text string) error {
@@ -187,17 +289,20 @@ func (c *TelegramController) sendMainMenu(ctx context.Context, chatID int64) err
 		return c.tgService.SendMessage(ctx, chatID, "✅ Вы успешно подключены к боту\\!")
 	}
 
-	text := "🏠 *Главное меню*\n\nВыберите действие из меню ниже:"
+	text := "🏠 *Главное меню*\n\n" +
+		"Добро пожаловать в систему заявок\\!\n" +
+		"Выберите нужное действие из меню ниже\\."
 
-	// Создаем постоянную клавиатуру
-	keyboard := [][]telegram.ReplyKeyboardButton{
+	// ИЗМЕНЕНИЕ: Переносим все основные действия в постоянные кнопки.
+	// Это делает интерфейс более интуитивным и быстрым для пользователя.
+	replyKeyboard := [][]telegram.ReplyKeyboardButton{
 		{{Text: "📋 Мои Заявки"}},
-		// Можно добавить другие кнопки:
-		// {{Text: "📊 Статистика"}, {Text: "⚙️ Настройки"}},
+		{{Text: "⏰ На сегодня"}, {Text: "🔴 Просроченные"}},
+		{{Text: "🔍 Поиск"}, {Text: "📊 Статистика"}},
 	}
 
 	return c.tgService.SendMessageEx(ctx, chatID, text,
-		telegram.WithReplyKeyboard(keyboard),
+		telegram.WithReplyKeyboard(replyKeyboard),
 		telegram.WithMarkdownV2(),
 	)
 }
@@ -288,15 +393,12 @@ func (c *TelegramController) handleMyTasksCommand(ctx context.Context, chatID in
 	)
 }
 
-// === Обработчик текстовых ответов ===
-
+// В файле: internal/controllers/telegram_controller.go
 func (c *TelegramController) handleTextMessage(ctx context.Context, chatID int64, text string) error {
 	// 1. Проверяем, не является ли это токеном привязки (UUID формат)
 	text = strings.TrimSpace(text)
 
-	// Простая проверка на UUID формат (8-4-4-4-12 символов)
 	if isUUIDFormat(text) {
-		// Пытаемся привязать аккаунт
 		err := c.userService.ConfirmTelegramLink(ctx, text, chatID)
 		if err != nil {
 			_ = c.tgService.SendMessage(ctx, chatID, "❌ Неверный код или истекло время его действия\\. Попробуйте получить новый код на сайте\\.")
@@ -307,10 +409,37 @@ func (c *TelegramController) handleTextMessage(ctx context.Context, chatID int64
 		return nil
 	}
 
-	// 2. Проверяем, есть ли у пользователя активное состояние в Redis
+	if text == "📊 Статистика" {
+		if !c.deduplicator.TryAcquire(chatID, "stats_button") {
+			return nil
+		}
+		defer c.deduplicator.Release(chatID, "stats_button")
+
+		return c.handleStatsCommand(ctx, chatID)
+	}
+
+	// ИЗМЕНЕНИЕ: Добавляем обработку новых постоянных кнопок.
+	if text == "⏰ На сегодня" {
+		return c.handleTodayTasksCommand(ctx, chatID)
+	}
+	if text == "🔴 Просроченные" {
+		return c.handleOverdueTasksCommand(ctx, chatID)
+	}
+	if text == "🔍 Поиск" {
+		return c.handleSearchStart(ctx, chatID, 0) // 0 т.к. нет сообщения для редактирования
+	}
+
+	if text == "📋 Мои Заявки" {
+		if !c.deduplicator.TryAcquire(chatID, "my_tasks_button") {
+			return nil
+		}
+		defer c.deduplicator.Release(chatID, "my_tasks_button")
+
+		return c.handleMyTasksCommand(ctx, chatID)
+	}
+
 	state, err := c.getUserState(ctx, chatID)
 	if err != nil || state == nil {
-		// Состояния нет, возможно, это просто случайное сообщение
 		return nil
 	}
 
@@ -322,9 +451,381 @@ func (c *TelegramController) handleTextMessage(ctx context.Context, chatID int64
 		return c.handleSetDuration(ctx, chatID, text)
 	case "awaiting_executor":
 		return c.handleSetExecutorFromText(ctx, chatID, text)
+	case "awaiting_search":
+		return c.handleSearchQuery(ctx, chatID, text)
 	}
 
 	return nil
+}
+
+func (c *TelegramController) handleTodayTasksCommand(ctx context.Context, chatID int64, messageID ...int) error {
+	_, userCtx, err := c.prepareUserContext(ctx, chatID)
+	if err != nil {
+		return err
+	}
+
+	// Получаем заявки со сроком на сегодня
+	now := time.Now().In(c.loc)
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, c.loc)
+	endOfDay := startOfDay.Add(24 * time.Hour)
+
+	filter := types.Filter{
+		Limit: 50,
+		Page:  1,
+		Filter: map[string]interface{}{
+			"duration_from": startOfDay,
+			"duration_to":   endOfDay,
+		},
+	}
+
+	orderListResponse, err := c.orderService.GetOrders(userCtx, filter, true)
+	if err != nil {
+		c.logger.Error("handleTodayTasksCommand: orderService.GetOrders error", zap.Error(err))
+		return c.tgService.SendMessage(ctx, chatID, "❌ Произошла ошибка при получении заявок\\.")
+	}
+
+	var text strings.Builder
+	var keyboardRows [][]telegram.InlineKeyboardButton
+
+	if len(orderListResponse.List) == 0 {
+		text.WriteString("✅ *Заявок на сегодня нет\\!*\n\n")
+		text.WriteString("_Можете отдохнуть_ 😊")
+	} else {
+		text.WriteString(fmt.Sprintf("⏰ *Заявки на сегодня* \\(%d\\):\n\n", len(orderListResponse.List)))
+
+		// Получаем статусы для эмодзи
+		statusesMap := make(map[uint64]*entities.Status)
+		allStatuses, err := c.statusRepo.FindAll(ctx)
+		if err == nil {
+			for i := range allStatuses {
+				statusesMap[allStatuses[i].ID] = &allStatuses[i]
+			}
+		}
+
+		// Формируем список
+		for _, order := range orderListResponse.List {
+			var statusEmoji string
+			if status, ok := statusesMap[order.StatusID]; ok {
+				statusEmoji = getStatusEmoji(status)
+			} else {
+				statusEmoji = "🔵"
+			}
+
+			// Время дедлайна
+			timeStr := ""
+			if order.Duration.Valid {
+				timeStr = order.Duration.Time.Format("15:04")
+			}
+
+			text.WriteString(fmt.Sprintf("%s *№%d* • %s",
+				statusEmoji,
+				order.ID,
+				telegram.EscapeTextForMarkdownV2(order.Name),
+			))
+			if timeStr != "" {
+				text.WriteString(fmt.Sprintf(" ⏱ _%s_", timeStr))
+			}
+			text.WriteString("\n")
+		}
+
+		text.WriteString("\n_Выберите заявку для подробностей:_")
+
+		// Кнопки для заявок (5 в ряд)
+		currentRow := []telegram.InlineKeyboardButton{}
+		for _, order := range orderListResponse.List {
+			buttonText := fmt.Sprintf("№%d", order.ID)
+			callbackData := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, order.ID)
+
+			currentRow = append(currentRow, telegram.InlineKeyboardButton{
+				Text:         buttonText,
+				CallbackData: callbackData,
+			})
+
+			if len(currentRow) == 5 {
+				keyboardRows = append(keyboardRows, currentRow)
+				currentRow = []telegram.InlineKeyboardButton{}
+			}
+		}
+		if len(currentRow) > 0 {
+			keyboardRows = append(keyboardRows, currentRow)
+		}
+	}
+
+	// Кнопка "Назад"
+	keyboardRows = append(keyboardRows, []telegram.InlineKeyboardButton{
+		{Text: "🏠 Главное меню", CallbackData: `{"action":"main_menu"}`},
+	})
+
+	var msgIDToEdit int
+	if len(messageID) > 0 {
+		msgIDToEdit = messageID[0]
+	}
+
+	return c.tgService.EditOrSendMessage(ctx, chatID, msgIDToEdit, text.String(),
+		telegram.WithKeyboard(keyboardRows),
+		telegram.WithMarkdownV2(),
+	)
+}
+
+// handleOverdueTasksCommand - Просроченные заявки
+func (c *TelegramController) handleOverdueTasksCommand(ctx context.Context, chatID int64, messageID ...int) error {
+	_, userCtx, err := c.prepareUserContext(ctx, chatID)
+	if err != nil {
+		return err
+	}
+
+	// Получаем просроченные заявки
+	now := time.Now().In(c.loc)
+
+	filter := types.Filter{
+		Limit: 50,
+		Page:  1,
+		Filter: map[string]interface{}{
+			"overdue": true, // Предполагаю, что у вас есть такой фильтр
+		},
+	}
+
+	orderListResponse, err := c.orderService.GetOrders(userCtx, filter, true)
+	if err != nil {
+		c.logger.Error("handleOverdueTasksCommand: orderService.GetOrders error", zap.Error(err))
+		return c.tgService.SendMessage(ctx, chatID, "❌ Произошла ошибка при получении заявок\\.")
+	}
+
+	var overdueOrders []dto.OrderResponseDTO
+	for _, order := range orderListResponse.List {
+		if order.Duration.Valid && order.Duration.Time.Before(now) {
+
+			status, err := c.statusRepo.FindStatus(ctx, order.StatusID)
+			if err == nil && status.Code != nil && *status.Code != "CLOSED" && *status.Code != "REJECTED" {
+				overdueOrders = append(overdueOrders, order)
+			}
+		}
+	}
+
+	var text strings.Builder
+	var keyboardRows [][]telegram.InlineKeyboardButton
+
+	if len(overdueOrders) == 0 {
+		text.WriteString("✅ *Просроченных заявок нет\\!*\n\n")
+		text.WriteString("_Отличная работа_ 👍")
+	} else {
+		text.WriteString(fmt.Sprintf("🔴 *Просроченные заявки* \\(%d\\):\n\n", len(overdueOrders)))
+		text.WriteString("⚠️ _Требуют срочного внимания\\!_\n\n")
+
+		// Получаем статусы для эмодзи
+		statusesMap := make(map[uint64]*entities.Status)
+		allStatuses, err := c.statusRepo.FindAll(ctx)
+		if err == nil {
+			for i := range allStatuses {
+				statusesMap[allStatuses[i].ID] = &allStatuses[i]
+			}
+		}
+
+		// Формируем список
+		for _, order := range overdueOrders {
+			var statusEmoji string
+			if status, ok := statusesMap[order.StatusID]; ok {
+				statusEmoji = getStatusEmoji(status)
+			} else {
+				statusEmoji = "🔵"
+			}
+
+			// Вычисляем, насколько просрочено
+			overdueDuration := now.Sub(order.Duration.Time)
+			overdueStr := ""
+			if overdueDuration.Hours() >= 24 {
+				days := int(overdueDuration.Hours() / 24)
+				overdueStr = fmt.Sprintf("\\(%d дн\\.", days)
+			} else {
+				hours := int(overdueDuration.Hours())
+				overdueStr = fmt.Sprintf("\\(%dч", hours)
+			}
+
+			text.WriteString(fmt.Sprintf("%s *№%d* • %s 🔴_%s назад_\n",
+				statusEmoji,
+				order.ID,
+				telegram.EscapeTextForMarkdownV2(order.Name),
+				overdueStr,
+			))
+		}
+
+		text.WriteString("\n_Выберите заявку:_")
+
+		// Кнопки для заявок (5 в ряд)
+		currentRow := []telegram.InlineKeyboardButton{}
+		for _, order := range overdueOrders {
+			buttonText := fmt.Sprintf("№%d", order.ID)
+			callbackData := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, order.ID)
+
+			currentRow = append(currentRow, telegram.InlineKeyboardButton{
+				Text:         buttonText,
+				CallbackData: callbackData,
+			})
+
+			if len(currentRow) == 5 {
+				keyboardRows = append(keyboardRows, currentRow)
+				currentRow = []telegram.InlineKeyboardButton{}
+			}
+		}
+		if len(currentRow) > 0 {
+			keyboardRows = append(keyboardRows, currentRow)
+		}
+	}
+
+	// Кнопка "Назад"
+	keyboardRows = append(keyboardRows, []telegram.InlineKeyboardButton{
+		{Text: "🏠 Главное меню", CallbackData: `{"action":"main_menu"}`},
+	})
+
+	var msgIDToEdit int
+	if len(messageID) > 0 {
+		msgIDToEdit = messageID[0]
+	}
+
+	return c.tgService.EditOrSendMessage(ctx, chatID, msgIDToEdit, text.String(),
+		telegram.WithKeyboard(keyboardRows),
+		telegram.WithMarkdownV2(),
+	)
+}
+
+// handleSearchStart - Начало поиска
+func (c *TelegramController) handleSearchStart(ctx context.Context, chatID int64, messageID int) error {
+	state, err := c.getUserState(ctx, chatID)
+	if err != nil {
+		// Создаём новое состояние
+		state = &dto.TelegramState{
+			Mode:      "awaiting_search",
+			MessageID: messageID,
+			Changes:   make(map[string]string),
+		}
+	} else {
+		state.Mode = "awaiting_search"
+		state.MessageID = messageID
+	}
+
+	if err := c.setUserState(ctx, chatID, state); err != nil {
+		return c.sendInternalError(ctx, chatID)
+	}
+
+	text := "🔍 *Поиск заявки*\n\n" +
+		"Введите:\n" +
+		"• Номер заявки \\(например: `123`\\)\n" +
+		"• Или текст из описания"
+
+	keyboard := [][]telegram.InlineKeyboardButton{
+		{{Text: "❌ Отменить", CallbackData: `{"action":"main_menu"}`}},
+	}
+
+	return c.tgService.EditMessageText(ctx, chatID, messageID, text,
+		telegram.WithKeyboard(keyboard),
+		telegram.WithMarkdownV2(),
+	)
+}
+
+// handleSearchQuery - Обработка поискового запроса
+func (c *TelegramController) handleSearchQuery(ctx context.Context, chatID int64, text string) error {
+	_, userCtx, err := c.prepareUserContext(ctx, chatID)
+	if err != nil {
+		return err
+	}
+
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return c.tgService.SendMessage(ctx, chatID, "❌ Поисковый запрос не может быть пустым\\.")
+	}
+
+	// Очищаем состояние
+	_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
+
+	// Пытаемся найти по номеру
+	var orderID uint64
+	if _, err := fmt.Sscanf(text, "%d", &orderID); err == nil {
+		// ИСПРАВЛЕНИЕ: Получаем userID из контекста, а не используем 0.
+		userID, _ := utils.GetUserIDFromCtx(userCtx)
+		// Это номер заявки
+		order, err := c.orderService.FindOrderByIDForTelegram(userCtx, userID, orderID)
+		if err == nil {
+			return c.sendEditMenu(ctx, chatID, 0, order)
+		}
+	}
+
+	// Поиск по тексту
+	// ИСПРАВЛЕНИЕ: Помещаем `text` в поле `Search`, а не в `Filter`.
+	filter := types.Filter{
+		Limit:  20,
+		Page:   1,
+		Search: text,
+	}
+
+	orderListResponse, err := c.orderService.GetOrders(userCtx, filter, true)
+	if err != nil {
+		c.logger.Error("handleSearchQuery: orderService.GetOrders error", zap.Error(err))
+		return c.tgService.SendMessage(ctx, chatID, "❌ Произошла ошибка при поиске\\.")
+	}
+
+	if len(orderListResponse.List) == 0 {
+		return c.tgService.SendMessage(ctx, chatID, fmt.Sprintf("❌ По запросу `%s` ничего не найдено\\.", telegram.EscapeTextForMarkdownV2(text)))
+	}
+
+	// Показываем результаты
+	var resultText strings.Builder
+	resultText.WriteString(fmt.Sprintf("🔍 *Результаты поиска* \\(%d\\):\n\n", len(orderListResponse.List)))
+
+	// Получаем статусы
+	statusesMap := make(map[uint64]*entities.Status)
+	allStatuses, err := c.statusRepo.FindAll(ctx)
+	if err == nil {
+		for i := range allStatuses {
+			statusesMap[allStatuses[i].ID] = &allStatuses[i]
+		}
+	}
+
+	var keyboardRows [][]telegram.InlineKeyboardButton
+	for _, order := range orderListResponse.List {
+		var statusEmoji string
+		if status, ok := statusesMap[order.StatusID]; ok {
+			statusEmoji = getStatusEmoji(status)
+		} else {
+			statusEmoji = "🔵"
+		}
+
+		resultText.WriteString(fmt.Sprintf("%s *№%d* • %s\n",
+			statusEmoji,
+			order.ID,
+			telegram.EscapeTextForMarkdownV2(order.Name),
+		))
+	}
+
+	resultText.WriteString("\n_Выберите заявку:_")
+
+	// Кнопки
+	currentRow := []telegram.InlineKeyboardButton{}
+	for _, order := range orderListResponse.List {
+		buttonText := fmt.Sprintf("№%d", order.ID)
+		callbackData := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, order.ID)
+
+		currentRow = append(currentRow, telegram.InlineKeyboardButton{
+			Text:         buttonText,
+			CallbackData: callbackData,
+		})
+
+		if len(currentRow) == 5 {
+			keyboardRows = append(keyboardRows, currentRow)
+			currentRow = []telegram.InlineKeyboardButton{}
+		}
+	}
+	if len(currentRow) > 0 {
+		keyboardRows = append(keyboardRows, currentRow)
+	}
+
+	keyboardRows = append(keyboardRows, []telegram.InlineKeyboardButton{
+		{Text: "🏠 Главное меню", CallbackData: `{"action":"main_menu"}`},
+	})
+
+	return c.tgService.SendMessageEx(ctx, chatID, resultText.String(),
+		telegram.WithKeyboard(keyboardRows),
+		telegram.WithMarkdownV2(),
+	)
 }
 
 func (c *TelegramController) handleSetExecutorFromText(ctx context.Context, chatID int64, text string) error {
@@ -359,7 +860,23 @@ func (c *TelegramController) handleCallbackQuery(ctx context.Context, query *Tel
 	messageID := query.Message.MessageID
 
 	switch action {
+	// ✅ ДОБАВЬТЕ ЭТИ НОВЫЕ ОБРАБОТЧИКИ:
+	case "main_menu":
+		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
+		return c.sendMainMenu(ctx, chatID)
 
+	case "today_tasks":
+		return c.handleTodayTasksCommand(ctx, chatID, messageID)
+
+	case "overdue_tasks":
+		return c.handleOverdueTasksCommand(ctx, chatID, messageID)
+
+	case "search_start":
+		return c.handleSearchStart(ctx, chatID, messageID)
+
+	// СУЩЕСТВУЮЩИЕ ОБРАБОТЧИКИ (не меняйте):
+	case "show_my_tasks":
+		return c.handleMyTasksCommand(ctx, chatID)
 	case "select_order":
 		orderID, _ := data["order_id"].(float64)
 		return c.handleSelectOrderAction(ctx, chatID, messageID, uint64(orderID))
@@ -694,8 +1211,8 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 
 	userFilter := types.Filter{Filter: make(map[string]interface{}), WithPagination: false}
 
-	if order.DepartmentID > 0 {
-		userFilter.Filter["department_id"] = order.DepartmentID
+	if order.DepartmentID != nil && *order.DepartmentID > 0 {
+		userFilter.Filter["department_id"] = *order.DepartmentID
 	}
 	if order.OtdelID != nil {
 		userFilter.Filter["otdel_id"] = *order.OtdelID
@@ -891,7 +1408,6 @@ func (c *TelegramController) prepareUserContext(ctx context.Context, chatID int6
 		permissionsMap[p] = true
 	}
 	userCtx = context.WithValue(userCtx, contextkeys.UserPermissionsMapKey, permissionsMap)
-
 	return user, userCtx, nil
 }
 
@@ -1043,7 +1559,7 @@ func getStatusEmoji(status *entities.Status) string {
 
 	switch *status.Code {
 	case "OPEN":
-		return "🟧" // Открыто
+		return "❗" // Открыто (требует внимания)
 	case "IN_PROGRESS":
 		return "⚙️" // В работе
 	case "REFINEMENT":
@@ -1131,6 +1647,14 @@ func (c *TelegramController) RegisterWebhook(baseURL string) error {
 	}
 	c.logger.Info("Telegram Webhook успешно зарегистрирован", zap.String("url", webhookURL))
 	return nil
+}
+
+func (c *TelegramController) StartCleanup(ctx context.Context) {
+	if c.deduplicator != nil {
+		c.logger.Info("Запуск фоновой очистки дедупликатора...")
+		c.deduplicator.Cleanup(ctx, 1*time.Minute)
+		c.logger.Info("Фоновая очистка дедупликатора остановлена")
+	}
 }
 
 // -- Вспомогательные структуры (остаются без изменений) --

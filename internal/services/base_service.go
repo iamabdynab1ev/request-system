@@ -36,9 +36,6 @@ func (s *BaseService) CheckPermission(ctx context.Context, permission string) (u
 		return 0, apperrors.ErrForbidden
 	}
 
-	// ЯВНАЯ ПРОВЕРКА ВМЕСТО ВЫЗОВА ФУНКЦИИ:
-	// Проверяем, есть ли требуемое право (permission) как ключ в карте прав.
-	// Также для безопасности проверяем, является ли пользователь суперпользователем.
 	hasPerm, isSuperuser := permissionsMap[permission], permissionsMap["superuser"]
 
 	if !hasPerm && !isSuperuser {

@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type BranchController struct {
+type BranchController struct {	
 	branchService services.BranchServiceInterface
 	logger        *zap.Logger
 }

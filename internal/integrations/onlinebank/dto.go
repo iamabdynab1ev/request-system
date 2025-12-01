@@ -44,5 +44,5 @@ type OfficeDTO struct {
 	Longitude               float64 `json:"Longitude"`
 }
 
-// GetID добавляет соответствие интерфейсу для generic-функции.
+
 func (o OfficeDTO) GetID() int { return o.ID }

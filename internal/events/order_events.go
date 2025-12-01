@@ -1,8 +1,6 @@
 package events
 
-import (
-	"request-system/internal/repositories"
-)
+import "request-system/internal/repositories"
 
 // OrderHistoryCreatedEvent - событие, которое возникает после создания новой записи в истории.
 type OrderHistoryCreatedEvent struct {

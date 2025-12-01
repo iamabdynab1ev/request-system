@@ -25,5 +25,6 @@
     "@",
     "."
   ],
-  "database-client.confirmWhenUpdateWithoutWhere": true
+  "database-client.confirmWhenUpdateWithoutWhere": true,
+  "claudeCodeChat.permissions.yoloMode": true
 }

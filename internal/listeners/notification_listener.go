@@ -177,22 +177,23 @@ func (l *NotificationListener) determineRecipients(ctx context.Context, groupEve
 
 	userIDs := make(map[uint64]struct{})
 
-	// 1. Добавляем создателя заявки
+	// 1. Добавляем создателя и текущего исполнителя заявки
 	userIDs[order.CreatorID] = struct{}{}
-
-	// 2. Добавляем ТЕКУЩЕГО исполнителя (из итогового состояния заявки)
 	if order.ExecutorID != nil {
 		userIDs[*order.ExecutorID] = struct{}{}
 	}
 
-	// 3. Ищем событие переназначения, чтобы добавить СТАРОГО исполнителя.
+	// 2. Добавляем всех, кто когда-либо участвовал в истории заявки
+	// (старые исполнители, авторы комментариев и т.д.)
 	for _, e := range groupEvents {
+		// Добавляем автора события в истории
+		if e.HistoryItem.UserID > 0 {
+			userIDs[e.HistoryItem.UserID] = struct{}{}
+		}
+		// Если это было переназначение, добавляем и старого исполнителя
 		if e.HistoryItem.EventType == "DELEGATION" && e.HistoryItem.OldValue.Valid {
-			// <<-- 3. ИСПРАВЛЕНА КОНВЕРТАЦИЯ СТРОКИ В ЧИСЛО
-			oldExecutorID, err := strconv.ParseUint(e.HistoryItem.OldValue.String, 10, 64)
-			if err == nil && oldExecutorID > 0 {
-				userIDs[oldExecutorID] = struct{}{}
-			}
+			oldExecutorID, _ := strconv.ParseUint(e.HistoryItem.OldValue.String, 10, 64)
+			userIDs[oldExecutorID] = struct{}{}
 		}
 	}
 

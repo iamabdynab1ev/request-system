@@ -3,4 +3,4 @@
 production:
   driver: postgres
  
-  dsn: postgresql://postgres:postgres@10.98.102.66:5432/request-system?sslmode=disable
+  dsn: postgresql://postgres:postgres@192.168.10.79:5432/request-system?sslmode=disable

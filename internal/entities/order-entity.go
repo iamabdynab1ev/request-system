@@ -6,7 +6,7 @@ import "time"
 type Order struct {
 	ID                       uint64     `db:"id"`
 	Name                     string     `db:"name"`
-	DepartmentID             uint64     `db:"department_id"`
+	DepartmentID             *uint64    `db:"department_id"`
 	StatusID                 uint64     `db:"status_id"`
 	CreatorID                uint64     `db:"user_id"`
 	OrderTypeID              *uint64    `db:"order_type_id"`
@@ -23,7 +23,7 @@ type Order struct {
 	UpdatedAt                time.Time  `db:"updated_at"`
 	DeletedAt                *time.Time `db:"deleted_at"`
 	CompletedAt              *time.Time `db:"completed_at"`
-	ResolutionTimeSeconds    *uint64    `db:"resolution_time_seconds"`
 	FirstResponseTimeSeconds *uint64    `db:"first_response_time_seconds"`
+	ResolutionTimeSeconds    *uint64    `db:"resolution_time_seconds"`
 	IsFirstContactResolution *bool      `db:"is_first_contact_resolution"`
 }

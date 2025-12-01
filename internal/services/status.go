@@ -15,6 +15,7 @@ import (
 	"request-system/pkg/filestorage"
 	"request-system/pkg/types"
 	"request-system/pkg/utils"
+	"request-system/pkg/validation"
 
 	"go.uber.org/zap"
 )
@@ -141,7 +142,7 @@ func (s *StatusService) CreateStatus(
 		}
 		defer file.Close()
 
-		if err = utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
+		if err = validation.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
 			return nil, apperrors.NewHttpError(
 				http.StatusBadRequest,
 				"Маленькая иконка: "+err.Error(),
@@ -167,7 +168,7 @@ func (s *StatusService) CreateStatus(
 		}
 		defer file.Close()
 
-		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
+		if err := validation.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
 			return nil, apperrors.NewHttpError(
 				http.StatusBadRequest,
 				"Большая иконка: "+err.Error(),
@@ -204,7 +205,7 @@ func (s *StatusService) UpdateStatus(ctx context.Context, id uint64, updateDTO d
 		file, _ := iconSmallHeader.Open()
 		defer file.Close()
 
-		if err := utils.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
+		if err := validation.ValidateFile(iconSmallHeader, file, "icon_small"); err != nil {
 			return nil, err
 		}
 
@@ -221,7 +222,7 @@ func (s *StatusService) UpdateStatus(ctx context.Context, id uint64, updateDTO d
 		file, _ := iconBigHeader.Open()
 		defer file.Close()
 
-		if err := utils.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
+		if err := validation.ValidateFile(iconBigHeader, file, "icon_big"); err != nil {
 			return nil, err
 		}
 

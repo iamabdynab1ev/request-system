@@ -87,6 +87,7 @@ type UserRepositoryInterface interface {
 	// --- Методы-хелперы для Telegram ---
 	UpdateTelegramChatID(ctx context.Context, userID uint64, chatID int64) error
 	FindUserByTelegramChatID(ctx context.Context, chatID int64) (*entities.User, error)
+	FindActiveUsersByBranch(ctx context.Context, tx pgx.Tx, posType string, branchID uint64, officeID *uint64) ([]entities.User, error)
 }
 
 type UserRepository struct {
@@ -706,63 +707,54 @@ func (r *UserRepository) SyncUserDeniedPermissions(ctx context.Context, tx pgx.T
 	return err
 }
 
+// FindActiveUsersByPositionTypeAndOrg ищет активных сотрудников в Департаменте/Отделе
 func (r *UserRepository) FindActiveUsersByPositionTypeAndOrg(ctx context.Context, tx pgx.Tx, posType string, departmentID *uint64, otdelID *uint64) ([]entities.User, error) {
-	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-
-	// КОММЕНТАРИЙ: Удалена логика получения человекочитаемого имени.
-	// Мы будем использовать `posType` ("HEAD_OF_OTDEL", "SPECIALIST" и т.д.) напрямую.
-
-	builder := psql.Select(userSelectFields...).
+	// 1. Явный SELECT всех нужных полей, включая внешние таблицы
+	// "s.code as status_code" нужен, чтобы не было ошибки "cannot find field StatusCode"
+	query := sq.Select("u.*", "s.code as status_code", "p.type as position_type").
 		From("users u").
 		Join("statuses s ON u.status_id = s.id").
-		Join("positions p ON u.position_id = p.id"). // Соединяем с должностями, чтобы получить их тип
+		Join("positions p ON u.position_id = p.id").
 		Where(sq.Eq{
-			"s.code":       "ACTIVE", // Ищем только активных пользователей
-			"u.deleted_at": nil,
-			"p.type":       posType, // <-- ИСПРАВЛЕНО: Теперь ищем по системному полю `p.type`
+			// Используем UPPER, чтобы избежать проблем с регистром "Active"/"active"
+			//"s.code": "ACTIVE", <--- Было так, меняем на надежное сравнение:
 		}).
-		OrderBy("u.id")
+		Where(sq.Expr("UPPER(s.code) = ?", "ACTIVE")).
+		Where(sq.Eq{"u.deleted_at": nil}).
+		Where(sq.Eq{"p.type": posType}).
+		OrderBy("u.id").
+		PlaceholderFormat(sq.Dollar)
 
+	// 2. Условия по иерархии
 	if departmentID != nil {
-		builder = builder.Where(sq.Eq{"u.department_id": *departmentID})
+		query = query.Where(sq.Eq{"u.department_id": *departmentID})
 	}
 	if otdelID != nil {
-		builder = builder.Where(sq.Eq{"u.otdel_id": *otdelID})
+		query = query.Where(sq.Eq{"u.otdel_id": *otdelID})
 	}
 
-	query, args, err := builder.ToSql()
+	sqlStr, args, err := query.ToSql()
 	if err != nil {
-		r.logger.Error("Failed to build SQL query for FindActiveUsersByPositionTypeAndOrg", zap.Error(err))
+		r.logger.Error("Ошибка генерации SQL в FindActiveUsersByPositionTypeAndOrg", zap.Error(err))
 		return nil, err
 	}
 
-	// КОММЕНТАРИЙ: В `RuleEngineService` мы используем транзакцию (tx).
-	// Нужно убедиться, что мы выполняем запрос именно в ней.
+	// 3. Выполнение в транзакции (если передана) или через пул
 	var rows pgx.Rows
 	if tx != nil {
-		rows, err = tx.Query(ctx, query, args...)
+		rows, err = tx.Query(ctx, sqlStr, args...)
 	} else {
-		// Запасной вариант, если транзакции нет (хотя в нашем случае она всегда есть)
-		rows, err = r.storage.Query(ctx, query, args...)
+		rows, err = r.storage.Query(ctx, sqlStr, args...)
 	}
 
 	if err != nil {
-		r.logger.Error("Error querying users by position type", zap.String("query", query), zap.Error(err))
-		return nil, fmt.Errorf("ошибка запроса пользователей по типу должности: %w", err)
+		r.logger.Error("Ошибка выполнения запроса пользователей", zap.Error(err))
+		return nil, err
 	}
 	defer rows.Close()
 
-	var users []entities.User
-	for rows.Next() {
-		user, err := scanUserEntity(rows)
-		if err != nil {
-			r.logger.Error("Error scanning user entity", zap.Error(err))
-			return nil, err
-		}
-		users = append(users, *user)
-	}
-
-	return users, rows.Err()
+	// 4. Автоматический скан (как в методе для Филиала)
+	return pgx.CollectRows(rows, pgx.RowToStructByName[entities.User])
 }
 
 func (r *UserRepository) UpdateTelegramChatID(ctx context.Context, userID uint64, chatID int64) error {
@@ -804,4 +796,34 @@ func (r *UserRepository) FindUserByTelegramChatID(ctx context.Context, chatID in
 	}
 	row := r.storage.QueryRow(ctx, query, args...)
 	return scanUserEntity(row)
+}
+
+func (r *UserRepository) FindActiveUsersByBranch(ctx context.Context, tx pgx.Tx, posType string, branchID uint64, officeID *uint64) ([]entities.User, error) {
+	query := sq.Select("u.*", "s.code as status_code", "p.type as position_type").
+		From("users u").
+		Join("positions p ON u.position_id = p.id").
+		Join("statuses s ON u.status_id = s.id").
+		Where(sq.Eq{"u.branch_id": branchID}).
+		Where(sq.Eq{"p.type": posType}).
+		Where(sq.Eq{"u.deleted_at": nil}).
+		Where(sq.Expr("UPPER(s.code) = ?", "ACTIVE")).
+		PlaceholderFormat(sq.Dollar)
+
+	if officeID != nil {
+		query = query.Where(sq.Eq{"u.office_id": *officeID})
+	}
+
+	sqlStr, args, err := query.ToSql()
+	if err != nil {
+		r.logger.Error("Ошибка генерации SQL", zap.Error(err))
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return pgx.CollectRows(rows, pgx.RowToStructByName[entities.User])
 }

@@ -33,13 +33,11 @@ func getAction(permission string) string {
 func canAccessOrder(ctx Context, target *entities.Order) bool {
 	action := getAction(ctx.CurrentPermission)
 	actor := ctx.Actor
-
-	// --- Логика для ДЕЙСТВИЙ ПРОСМОТРА (`order:view`) ---
 	if action == "view" {
 		if ctx.HasPermission(ScopeAllView) || ctx.HasPermission(ScopeAll) {
 			return true
 		}
-		if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID == *actor.DepartmentID {
+		if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
 			return true
 		}
 		if ctx.HasPermission(ScopeBranch) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
@@ -69,7 +67,7 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 	}
 
 	// Уровень 2: Управленческий доступ
-	if ctx.HasPermission(OrdersUpdateInDepartmentScope) && actor.DepartmentID != nil && target.DepartmentID == *actor.DepartmentID {
+	if ctx.HasPermission(OrdersUpdateInDepartmentScope) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
 		return true
 	}
 	if ctx.HasPermission(OrdersUpdateInBranchScope) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
@@ -149,6 +147,5 @@ func CanDo(permission string, ctx Context) bool {
 		return canAccessUser(ctx, target)
 	}
 
-	// Если для этого типа объекта нет правил, по умолчанию разрешаем (если базовое право есть)
 	return true
 }

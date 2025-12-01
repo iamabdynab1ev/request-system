@@ -61,6 +61,12 @@ type TelegramConfig struct {
 	BotToken     string
 	AdvancedMode bool
 }
+type NotificationConfig struct {
+	Enabled              bool
+	OverdueCheckInterval int
+	ReminderThreshold    int
+}
+
 type LDAPConfig struct {
 	Enabled bool
 	Host    string

@@ -34,7 +34,6 @@ var PositionTypeNames = map[PositionType]string{
 
 func GetAscendingHierarchy() []PositionType {
 	return []PositionType{
-		PositionTypeSpecialist,
 		PositionTypeManager,
 		PositionTypeDeputyHeadOfOtdel,
 		PositionTypeHeadOfOtdel,
@@ -45,6 +44,27 @@ func GetAscendingHierarchy() []PositionType {
 
 func GetDescendingHierarchy() []PositionType {
 	asc := GetAscendingHierarchy()
+	desc := make([]PositionType, len(asc))
+	for i := 0; i < len(asc); i++ {
+		desc[i] = asc[len(asc)-1-i]
+	}
+	return desc
+}
+
+func GetAscendingBranchHierarchy() []PositionType {
+	return []PositionType{
+		PositionTypeSpecialist,
+		PositionTypeManager,
+		PositionTypeDeputyHeadOfOffice,
+		PositionTypeHeadOfOffice,
+		PositionTypeDeputyBranchDirector,
+		PositionTypeBranchDirector,
+	}
+}
+
+// Добавляем: Иерархия для ФИЛИАЛОВ (Сверху-Вниз) - для автоназначения
+func GetDescendingBranchHierarchy() []PositionType {
+	asc := GetAscendingBranchHierarchy()
 	desc := make([]PositionType, len(asc))
 	for i := 0; i < len(asc); i++ {
 		desc[i] = asc[len(asc)-1-i]

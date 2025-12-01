@@ -1,14 +1,20 @@
 package types
 
+import "time"
+
 // Filter represents query parameters for filtering and pagination.
 type Filter struct {
 	Search         string                 `json:"search,omitempty"`
 	Sort           map[string]string      `json:"sort,omitempty"`
 	Filter         map[string]interface{} `json:"filter,omitempty"`
-	Limit          int                    `json:"limit"`
-	Offset         int                    `json:"offset"`
-	Page           int                    `json:"page"`
-	WithPagination bool                   `json:"with_pagination"`
+	Limit          int                    `json:"limit,omitempty"`
+	Offset         int                    `json:"offset,omitempty"`
+	Page           int                    `json:"page,omitempty"`
+	WithPagination bool                   `json:"with_pagination,omitempty"`
+
+	DateFrom    *time.Time `json:"date_from,omitempty"`
+	DateTo      *time.Time `json:"date_to,omitempty"`
+	ExecutorIDs []uint64   `json:"executor_ids,omitempty"`
 }
 
 // Pagination represents pagination metadata.

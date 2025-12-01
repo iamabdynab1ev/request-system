@@ -139,6 +139,7 @@ func (s *Service) EditMessageText(ctx context.Context, chatID int64, messageID i
 	return s.sendRequest(ctx, "editMessageText", editReq)
 }
 
+
 func (s *Service) SendMessage(ctx context.Context, chatID int64, text string) error {
 	escapedText := EscapeTextForMarkdownV2(text)
 	return s.SendMessageEx(ctx, chatID, escapedText, WithMarkdownV2())

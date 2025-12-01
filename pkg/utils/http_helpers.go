@@ -41,10 +41,8 @@ func MergeOrders(original *entities.Order, changes entities.Order) (*entities.Or
 		merged.Name = changes.Name
 		hasChanges = true
 	}
-	if changes.DepartmentID != 0 && merged.DepartmentID != changes.DepartmentID {
-		merged.DepartmentID = changes.DepartmentID
-		hasChanges = true
-	}
+	// ВНИМАНИЕ: DepartmentID отсюда УБРАЛИ, так как теперь это указатель!
+
 	if changes.StatusID != 0 && merged.StatusID != changes.StatusID {
 		merged.StatusID = changes.StatusID
 		hasChanges = true
@@ -55,6 +53,13 @@ func MergeOrders(original *entities.Order, changes entities.Order) (*entities.Or
 	}
 
 	// --- 2. ОБРАБОТКА УКАЗАТЕЛЕЙ (*uint64) ---
+
+	// ДОБАВИЛИ СЮДА DepartmentID:
+	if changes.DepartmentID != nil && (merged.DepartmentID == nil || *merged.DepartmentID != *changes.DepartmentID) {
+		merged.DepartmentID = changes.DepartmentID
+		hasChanges = true
+	}
+
 	if changes.OrderTypeID != nil && (merged.OrderTypeID == nil || *merged.OrderTypeID != *changes.OrderTypeID) {
 		merged.OrderTypeID = changes.OrderTypeID
 		hasChanges = true
@@ -101,7 +106,7 @@ func MergeOrders(original *entities.Order, changes entities.Order) (*entities.Or
 		merged.Address = changes.Address
 		hasChanges = true
 	}
-	if changes.Duration != nil && (merged.Duration == nil || !merged.Duration.Equal(*changes.Duration)) {
+	if changes.Duration != nil && (merged.Duration == nil || !(*merged.Duration).Equal(*changes.Duration)) {
 		merged.Duration = changes.Duration
 		hasChanges = true
 	}

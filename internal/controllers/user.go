@@ -12,6 +12,7 @@ import (
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/filestorage"
 	"request-system/pkg/utils"
+	"request-system/pkg/validation"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
@@ -158,7 +159,7 @@ func (c *UserController) handlePhotoUpload(ctx echo.Context, uploadContext strin
 		return nil, apperrors.ErrInternalServer
 	}
 	defer src.Close()
-	if err := utils.ValidateFile(file, src, uploadContext); err != nil {
+	if err := validation.ValidateFile(file, src, uploadContext); err != nil {
 		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Файл не прошел валидацию", err, nil)
 	}
 	rules, _ := config.UploadContexts[uploadContext]

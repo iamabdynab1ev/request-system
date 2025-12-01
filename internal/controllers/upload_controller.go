@@ -9,6 +9,7 @@ import (
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/filestorage"
 	"request-system/pkg/utils"
+	"request-system/pkg/validation"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
@@ -63,7 +64,7 @@ func (ctrl *UploadController) Upload(c echo.Context) error {
 	}
 	defer src.Close()
 
-	if err := utils.ValidateFile(fileHeader, src, uploadContext); err != nil {
+	if err := validation.ValidateFile(fileHeader, src, uploadContext); err != nil {
 		return utils.ErrorResponse(c,
 			apperrors.NewHttpError(
 				http.StatusBadRequest,

@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -21,12 +23,12 @@ import (
 	"request-system/internal/routes"
 	"request-system/internal/services"
 	"request-system/pkg/config"
-	"request-system/pkg/customvalidator"
 	"request-system/pkg/database/postgresql"
 	"request-system/pkg/eventbus"
 	"request-system/pkg/logger"
 	"request-system/pkg/service"
 	"request-system/pkg/telegram"
+	"request-system/pkg/validation"
 	"request-system/pkg/websocket"
 )
 
@@ -118,11 +120,7 @@ func main() {
 		mainLogger.Fatal("Не удалось получить путь к ./uploads", zap.Error(err))
 	}
 	e.Static("/uploads", absPath)
-	e.Validator = customvalidator.New()
-
-	mainLogger.Info("Регистрация Nullable-типов для валидатора...")
-
-	mainLogger.Info("Nullable-типы успешно зарегистрированы.")
+	e.Validator = validation.New()
 
 	dbConn := postgresql.ConnectDB(cfg.Postgres.DSN)
 	defer dbConn.Close()
@@ -172,10 +170,34 @@ func main() {
 	)
 	notificationListener.Register(bus)
 
-	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub)
+	appCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Инициализируем роутеры (включая Telegram), передаём контекст
+	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, appCtx)
 
 	mainLogger.Info("🚀 Сервер запущен на :8080")
-	if err := e.Start(":8080"); err != nil {
-		mainLogger.Fatal("Не удалось запустить сервер", zap.Error(err))
+
+	go func() {
+		if err := e.Start(":8080"); err != nil && err != http.ErrServerClosed {
+			mainLogger.Fatal("Не удалось запустить сервер", zap.Error(err))
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+
+	mainLogger.Info("🛑 Получен сигнал завершения, начинаем graceful shutdown...")
+
+	cancel()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		mainLogger.Error("Ошибка при остановке сервера", zap.Error(err))
 	}
+
+	mainLogger.Info("✅ Сервер корректно остановлен")
 }
