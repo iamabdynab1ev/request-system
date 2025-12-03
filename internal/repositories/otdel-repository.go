@@ -21,8 +21,13 @@ import (
 const otdelTable = "otdels"
 
 var (
-	otdelAllowedFilterFields = map[string]string{"status_id": "status_id", "department_id": "department_id"}
-	otdelAllowedSortFields   = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true}
+	otdelAllowedFilterFields = map[string]string{
+		"status_id":      "status_id",
+		"departments_id": "departments_id",
+		"branch_id":      "branch_id",
+		"parent_id":      "parent_id",
+	}
+	otdelAllowedSortFields = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true}
 )
 
 // OtdelRepositoryInterface - полный и актуальный интерфейс.
@@ -30,8 +35,6 @@ type OtdelRepositoryInterface interface {
 	GetOtdels(ctx context.Context, filter types.Filter) ([]entities.Otdel, uint64, error)
 	FindOtdel(ctx context.Context, id uint64) (*entities.Otdel, error)
 	DeleteOtdel(ctx context.Context, id uint64) error
-
-	// Методы для синхронизации
 	CreateOtdel(ctx context.Context, tx pgx.Tx, otdel entities.Otdel) (uint64, error)
 	UpdateOtdel(ctx context.Context, tx pgx.Tx, id uint64, otdel entities.Otdel) error
 	FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Otdel, error)
@@ -51,11 +54,14 @@ func scanOtdel(row pgx.Row) (*entities.Otdel, error) {
 	var o entities.Otdel
 	var externalID, sourceSystem sql.NullString
 
+	// ИЗМЕНЕНИЕ: Добавлены o.BranchID и o.ParentID
 	err := row.Scan(
 		&o.ID,
 		&o.Name,
 		&o.StatusID,
 		&o.DepartmentsID,
+		&o.BranchID,
+		&o.ParentID,
 		&o.CreatedAt,
 		&o.UpdatedAt,
 		&externalID,
@@ -79,17 +85,15 @@ func scanOtdel(row pgx.Row) (*entities.Otdel, error) {
 	return &o, nil
 }
 
-// --- РЕАЛИЗАЦИЯ МЕТОДОВ ДЛЯ СИНХРОНИЗАЦИИ ---
-
 func (r *OtdelRepository) CreateOtdel(ctx context.Context, tx pgx.Tx, otdel entities.Otdel) (uint64, error) {
 	query := `
-		INSERT INTO otdels (name, status_id, department_id, external_id, source_system, created_at, updated_at)
-		VALUES($1, $2, $3, $4, $5, NOW(), NOW())
+		INSERT INTO otdels (name, status_id, departments_id, branch_id, parent_id, external_id, source_system, created_at, updated_at)
+		VALUES($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
 		RETURNING id
 	`
 	var newID uint64
 	err := tx.QueryRow(ctx, query,
-		otdel.Name, otdel.StatusID, otdel.DepartmentsID,
+		otdel.Name, otdel.StatusID, otdel.DepartmentsID, otdel.BranchID, otdel.ParentID,
 		otdel.ExternalID, otdel.SourceSystem,
 	).Scan(&newID)
 	return newID, err
@@ -98,11 +102,11 @@ func (r *OtdelRepository) CreateOtdel(ctx context.Context, tx pgx.Tx, otdel enti
 func (r *OtdelRepository) UpdateOtdel(ctx context.Context, tx pgx.Tx, id uint64, otdel entities.Otdel) error {
 	query := `
 		UPDATE otdels
-		SET name = $1, status_id = $2, department_id = $3, updated_at = NOW()
-		WHERE id = $4
+		SET name = $1, status_id = $2, departments_id = $3, branch_id = $4, parent_id = $5, updated_at = NOW()
+		WHERE id = $6
 	`
 	result, err := tx.Exec(ctx, query,
-		otdel.Name, otdel.StatusID, otdel.DepartmentsID, id,
+		otdel.Name, otdel.StatusID, otdel.DepartmentsID, otdel.BranchID, otdel.ParentID, id,
 	)
 	if err != nil {
 		return err
@@ -115,7 +119,8 @@ func (r *OtdelRepository) UpdateOtdel(ctx context.Context, tx pgx.Tx, id uint64,
 
 func (r *OtdelRepository) findOneOtdel(ctx context.Context, querier Querier, where sq.Eq) (*entities.Otdel, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	queryBuilder := psql.Select("id, name, status_id, department_id, created_at, updated_at, external_id, source_system").
+
+	queryBuilder := psql.Select("id, name, status_id, departments_id, branch_id, parent_id, created_at, updated_at, external_id, source_system").
 		From(otdelTable).
 		Where(where)
 
@@ -134,8 +139,6 @@ func (r *OtdelRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, exter
 	}
 	return r.findOneOtdel(ctx, querier, sq.Eq{"external_id": externalID, "source_system": sourceSystem})
 }
-
-// --- РЕАЛИЗАЦИЯ СУЩЕСТВУЮЩИХ МЕТОДОВ (ПОЛНАЯ) ---
 
 func (r *OtdelRepository) FindOtdel(ctx context.Context, id uint64) (*entities.Otdel, error) {
 	return r.findOneOtdel(ctx, r.storage, sq.Eq{"id": id})
@@ -185,7 +188,7 @@ func (r *OtdelRepository) GetOtdels(ctx context.Context, filter types.Filter) ([
 		return []entities.Otdel{}, 0, nil
 	}
 
-	selectBuilder := baseBuilder.Columns("id, name, status_id, department_id, created_at, updated_at, external_id, source_system")
+	selectBuilder := baseBuilder.Columns("id, name, status_id, departments_id, branch_id, parent_id, created_at, updated_at, external_id, source_system")
 
 	if len(filter.Sort) > 0 {
 		for field, direction := range filter.Sort {
@@ -226,5 +229,3 @@ func (r *OtdelRepository) GetOtdels(ctx context.Context, filter types.Filter) ([
 	}
 	return otdels, total, rows.Err()
 }
-
-// Старый метод обновления через DTO. Переименован для избежания конфликтов.

@@ -23,8 +23,14 @@ import (
 const officeTable = "offices"
 
 var (
-	officeAllowedFilterFields = map[string]string{"status_id": "o.status_id", "branch_id": "o.branch_id"}
-	officeAllowedSortFields   = map[string]string{"id": "o.id", "name": "o.name", "open_date": "o.open_date", "created_at": "o.created_at"}
+	officeAllowedFilterFields = map[string]string{
+		"status_id": "o.status_id",
+		"branch_id": "o.branch_id",
+		"parent_id": "o.parent_id",
+	}
+	officeAllowedSortFields = map[string]string{
+		"id": "o.id", "name": "o.name", "open_date": "o.open_date", "created_at": "o.created_at",
+	}
 )
 
 type OfficeRepositoryInterface interface {
@@ -48,14 +54,13 @@ func NewOfficeRepository(storage *pgxpool.Pool, logger *zap.Logger) OfficeReposi
 	return &OfficeRepository{storage: storage, logger: logger}
 }
 
-// --- НОВАЯ ФУНКЦИЯ SCAN ---
 func (r *OfficeRepository) scanOffice(row pgx.Row) (*entities.Office, error) {
 	var o entities.Office
 	var externalID, sourceSystem sql.NullString
 
 	err := row.Scan(
-		&o.ID, &o.Name, &o.Address, &o.OpenDate, &o.BranchID, &o.StatusID,
-		&o.CreatedAt, &o.UpdatedAt, &externalID, &sourceSystem,
+		&o.ID, &o.Name, &o.Address, &o.OpenDate, &o.BranchID, &o.ParentID,
+		&o.StatusID, &o.CreatedAt, &o.UpdatedAt, &externalID, &sourceSystem,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -65,32 +70,28 @@ func (r *OfficeRepository) scanOffice(row pgx.Row) (*entities.Office, error) {
 		r.logger.Error("Failed to scan office row", zap.Error(err))
 		return nil, err
 	}
-
 	if externalID.Valid {
 		o.ExternalID = &externalID.String
 	}
 	if sourceSystem.Valid {
 		o.SourceSystem = &sourceSystem.String
 	}
-
 	return &o, nil
 }
 
-// --- МЕТОДЫ ДЛЯ СИНХРОНИЗАЦИИ ---
-
 func (r *OfficeRepository) CreateOffice(ctx context.Context, tx pgx.Tx, office entities.Office) (uint64, error) {
-	query := `INSERT INTO offices (name, address, open_date, branch_id, status_id, external_id, source_system, created_at, updated_at) 
-			  VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING id`
+	query := `INSERT INTO offices (name, address, open_date, branch_id, parent_id, status_id, external_id, source_system, created_at, updated_at) 
+			  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()) RETURNING id`
 	var newID uint64
 	err := tx.QueryRow(ctx, query,
-		office.Name, office.Address, office.OpenDate, office.BranchID, office.StatusID, office.ExternalID, office.SourceSystem).Scan(&newID)
+		office.Name, office.Address, office.OpenDate, office.BranchID, office.ParentID, office.StatusID, office.ExternalID, office.SourceSystem).Scan(&newID)
 	return newID, err
 }
 
 func (r *OfficeRepository) UpdateOffice(ctx context.Context, tx pgx.Tx, id uint64, office entities.Office) error {
-	query := `UPDATE offices SET name = $1, address = $2, open_date = $3, branch_id = $4, status_id = $5, updated_at = NOW() WHERE id = $6`
+	query := `UPDATE offices SET name = $1, address = $2, open_date = $3, branch_id = $4, parent_id = $5, status_id = $6, updated_at = NOW() WHERE id = $7`
 	result, err := tx.Exec(ctx, query,
-		office.Name, office.Address, office.OpenDate, office.BranchID, office.StatusID, id)
+		office.Name, office.Address, office.OpenDate, office.BranchID, office.ParentID, office.StatusID, id)
 	if err != nil {
 		return err
 	}
@@ -102,7 +103,7 @@ func (r *OfficeRepository) UpdateOffice(ctx context.Context, tx pgx.Tx, id uint6
 
 func (r *OfficeRepository) findOneOffice(ctx context.Context, querier Querier, where sq.Eq) (*entities.Office, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	query, args, err := psql.Select("id, name, address, open_date, branch_id, status_id, created_at, updated_at, external_id, source_system").
+	query, args, err := psql.Select("id, name, address, open_date, branch_id, parent_id, status_id, created_at, updated_at, external_id, source_system").
 		From(officeTable).Where(where).ToSql()
 	if err != nil {
 		return nil, err
@@ -118,9 +119,6 @@ func (r *OfficeRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, exte
 	return r.findOneOffice(ctx, querier, sq.Eq{"external_id": externalID, "source_system": sourceSystem})
 }
 
-// --- ИСПРАВЛЕННЫЕ СТАРЫЕ МЕТОДЫ ---
-
-// ИСПРАВЛЕНИЕ: Сигнатура теперь принимает pgx.Tx
 func (r *OfficeRepository) FindByName(ctx context.Context, tx pgx.Tx, name string) (*entities.Office, error) {
 	var querier Querier = r.storage
 	if tx != nil {
@@ -147,9 +145,14 @@ func (r *OfficeRepository) scanOfficeWithRelations(row pgx.Row) (*entities.Offic
 	var o entities.Office
 	var b entities.Branch
 	var s entities.Status
-	err := row.Scan(&o.ID, &o.Name, &o.Address, &o.OpenDate, &o.CreatedAt, &o.UpdatedAt,
+	var p entities.Office
+	var parentName sql.NullString
+
+	err := row.Scan(
+		&o.ID, &o.Name, &o.Address, &o.OpenDate, &o.CreatedAt, &o.UpdatedAt,
 		&o.BranchID, &b.Name, &b.ShortName,
 		&o.StatusID, &s.Name,
+		&o.ParentID, &parentName,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apperrors.ErrNotFound
@@ -158,10 +161,19 @@ func (r *OfficeRepository) scanOfficeWithRelations(row pgx.Row) (*entities.Offic
 		r.logger.Error("Failed to scan office row with relations", zap.Error(err))
 		return nil, err
 	}
-	b.ID = o.BranchID
-	o.Branch = &b
+	if o.BranchID != nil {
+		b.ID = *o.BranchID
+		o.Branch = &b
+	}
 	s.ID = o.StatusID
 	o.Status = &s
+	if o.ParentID != nil {
+		p.ID = *o.ParentID
+		if parentName.Valid {
+			p.Name = parentName.String
+		}
+		o.Parent = &p
+	}
 	return &o, nil
 }
 
@@ -207,8 +219,11 @@ func (r *OfficeRepository) GetOffices(ctx context.Context, filter types.Filter) 
 		"o.id", "o.name", "o.address", "o.open_date", "o.created_at", "o.updated_at",
 		"o.branch_id", "COALESCE(b.name, '')", "COALESCE(b.short_name, '')",
 		"o.status_id", "COALESCE(s.name, '')",
-	).LeftJoin("branches b ON o.branch_id = b.id").LeftJoin("statuses s ON o.status_id = s.id")
-
+		"o.parent_id", "COALESCE(p_o.name, '') AS parent_name",
+	).
+		LeftJoin("branches b ON o.branch_id = b.id").
+		LeftJoin("statuses s ON o.status_id = s.id").
+		LeftJoin(officeTable + " p_o ON o.parent_id = p_o.id")
 	if len(filter.Sort) > 0 {
 		for field, direction := range filter.Sort {
 			if dbColumn, ok := officeAllowedSortFields[field]; ok {
@@ -255,10 +270,12 @@ func (r *OfficeRepository) FindOffice(ctx context.Context, id uint64) (*entities
 		"o.id", "o.name", "o.address", "o.open_date", "o.created_at", "o.updated_at",
 		"o.branch_id", "COALESCE(b.name, '')", "COALESCE(b.short_name, '')",
 		"o.status_id", "COALESCE(s.name, '')",
+		"o.parent_id", "COALESCE(p_o.name, '') AS parent_name",
 	).
 		From(officeTable + " AS o").
 		LeftJoin("branches b ON o.branch_id = b.id").
 		LeftJoin("statuses s ON o.status_id = s.id").
+		LeftJoin(officeTable + " p_o ON o.parent_id = p_o.id").
 		Where(sq.Eq{"o.id": id}).
 		ToSql()
 	if err != nil {
@@ -282,7 +299,11 @@ func (r *OfficeRepository) UpdateOfficeWithDTO(ctx context.Context, id uint64, d
 		hasChanges = true
 	}
 	if dto.BranchID != nil {
-		updateBuilder = updateBuilder.Set("branch_id", *dto.BranchID)
+		updateBuilder = updateBuilder.Set("branch_id", *dto.BranchID).Set("parent_id", nil)
+		hasChanges = true
+	}
+	if dto.ParentID != nil {
+		updateBuilder = updateBuilder.Set("parent_id", *dto.ParentID).Set("branch_id", nil)
 		hasChanges = true
 	}
 	if dto.StatusID != nil {

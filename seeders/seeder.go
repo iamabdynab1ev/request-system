@@ -1,3 +1,4 @@
+// Файл: seeders/seeder.go
 package seeders
 
 import (
@@ -7,11 +8,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func SeedAll(db *pgxpool.Pool) {
+// SeedCoreDictionaries наполняет самые базовые справочники, не имеющие зависимостей.
+func SeedCoreDictionaries(db *pgxpool.Pool) {
 	ctx := context.Background()
-	log.Println("▶️ Запуск наполнения базы начальными данными...")
+	log.Println("▶️ Запуск наполнения базовых справочников...")
 
-	// --- 1. Базовая конфигурация системы (справочники) ---
 	if err := seedPermissions(ctx, db); err != nil {
 		log.Fatalf("Ошибка наполнения Прав (Permissions): %v", err)
 	}
@@ -24,32 +25,40 @@ func SeedAll(db *pgxpool.Pool) {
 	if err := seedOrderTypes(ctx, db); err != nil {
 		log.Fatalf("Ошибка наполнения Типов Заявок (OrderTypes): %v", err)
 	}
+	log.Println("✅ Наполнение базовых справочников завершено!")
+}
 
-	// --- 2. Справочники по оборудованию (зависят от уже созданных офисов/филиалов) ---
-	// ПРИМЕЧАНИЕ: Эти сидеры покажут ПРЕДУПРЕЖДЕНИЯ, если филиалы и офисы еще не были созданы через интеграцию.
-	// Это нормально.
+// SeedEquipmentData наполняет справочники, связанные с оборудованием.
+// ВАЖНО: Требует наличия в БД офисов и филиалов.
+func SeedEquipmentData(db *pgxpool.Pool) {
+	ctx := context.Background()
+	log.Println("▶️ Запуск наполнения справочников оборудования...")
+
 	if err := seedEquipmentTypes(ctx, db); err != nil {
 		log.Fatalf("Ошибка наполнения Типов оборудования: %v", err)
 	}
 	if err := seedEquipments(ctx, db); err != nil {
-		log.Fatalf("Ошибка наполнения Оборудования: %v", err)
+		// Эта ошибка теперь не будет фатальной для всего сидера,
+		// так как она вызывается отдельно.
+		log.Printf("ПРЕДУПРЕЖДЕНИЕ: Ошибка наполнения Оборудования: %v", err)
+		log.Println("ℹ️ Это может быть нормально, если оргструктура (офисы, филиалы) еще не загружена.")
 	}
+	log.Println("✅ Наполнение справочников оборудования завершено!")
+}
 
-	// --- 3. Настройка ролей и их связей ---
+// SeedRolesAndAdmin настраивает роли, их связи и создает суперпользователя.
+// ВАЖНО: Требует наличия базовых справочников (Permissions, Statuses).
+func SeedRolesAndAdmin(db *pgxpool.Pool) {
+	ctx := context.Background()
+	log.Println("▶️ Запуск настройки ролей и администратора...")
 	if err := seedRoles(ctx, db); err != nil {
 		log.Fatalf("Ошибка наполнения Ролей (Roles): %v", err)
 	}
 	if err := seedRolePermissions(ctx, db); err != nil {
 		log.Fatalf("Ошибка наполнения Связей Ролей и Прав: %v", err)
 	}
-
-	// --- 4. Создание единственного Супер-Администратора в самом конце ---
-	// Он зависит от созданных ролей и статусов.
 	if err := seedSuperAdmin(ctx, db); err != nil {
 		log.Fatalf("Ошибка создания Супер-Администратора: %v", err)
 	}
-
-	// Мы УБРАЛИ вызовы seedBaseDictionaries и seedAdminIB, так как они больше не нужны.
-
-	log.Println("✅ Наполнение базы начальными данными успешно завершено!")
+	log.Println("✅ Настройка ролей и администратора завершена!")
 }

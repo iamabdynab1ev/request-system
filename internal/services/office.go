@@ -84,17 +84,21 @@ func officeEntityToDetailDTO(entity *entities.Office) *dto.OfficeDTO {
 		Name:      entity.Name,
 		Address:   entity.Address,
 		OpenDate:  entity.OpenDate,
+		BranchID:  entity.BranchID,
+		ParentID:  entity.ParentID,
+		StatusID:  entity.StatusID,
 		CreatedAt: createdAt,
-
 		UpdatedAt: updatedAt,
 	}
 
 	if entity.Branch != nil {
-		dto.BranchID = entity.Branch.ID
-		dto.BranchName = entity.Branch.Name
+		dto.BranchName = &entity.Branch.Name
+	}
+
+	if entity.Parent != nil {
+		dto.ParentName = &entity.Parent.Name
 	}
 	if entity.Status != nil {
-		dto.StatusID = entity.Status.ID
 		dto.StatusName = entity.Status.Name
 	}
 
@@ -170,6 +174,7 @@ func (s *OfficeService) CreateOffice(ctx context.Context, payload dto.CreateOffi
 		OpenDate: openDate,
 		BranchID: payload.BranchID,
 		StatusID: payload.StatusID,
+		ParentID: payload.ParentID,
 	}
 
 	var newID uint64
@@ -217,7 +222,15 @@ func (s *OfficeService) UpdateOffice(ctx context.Context, id uint64, payload dto
 		existing.Address = *payload.Address
 	}
 	if payload.BranchID != nil {
-		existing.BranchID = *payload.BranchID
+		existing.BranchID = payload.BranchID
+		existing.ParentID = nil
+	}
+	if payload.ParentID != nil {
+		if *payload.ParentID == id {
+			return nil, apperrors.NewBadRequestError("Офис не может быть родителем для самого себя")
+		}
+		existing.ParentID = payload.ParentID
+		existing.BranchID = nil
 	}
 	if payload.StatusID != nil {
 		existing.StatusID = *payload.StatusID
@@ -231,7 +244,6 @@ func (s *OfficeService) UpdateOffice(ctx context.Context, id uint64, payload dto
 	}
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		// ИСПРАВЛЕНИЕ: Вызываем UpdateOffice с pgx.Tx, ID и полной обновленной сущностью
 		return s.officeRepository.UpdateOffice(ctx, tx, id, *existing)
 	})
 	if err != nil {

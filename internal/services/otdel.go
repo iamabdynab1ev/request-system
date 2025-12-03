@@ -53,6 +53,8 @@ func otdelEntityToDTO(entity *entities.Otdel) *dto.OtdelDTO {
 		Name:          entity.Name,
 		StatusID:      entity.StatusID,
 		DepartmentsID: entity.DepartmentsID,
+		BranchID:      entity.BranchID,
+		ParentID:      entity.ParentID,
 		CreatedAt:     entity.CreatedAt.Format("2006-01-02 15:04:05"),
 		UpdatedAt:     entity.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
@@ -108,13 +110,14 @@ func (s *OtdelService) CreateOtdel(ctx context.Context, payload dto.CreateOtdelD
 		Name:          payload.Name,
 		StatusID:      payload.StatusID,
 		DepartmentsID: payload.DepartmentsID,
+		BranchID:      payload.BranchID,
+		ParentID:      payload.ParentID,
 	}
 
 	var newOtdelID uint64
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		var txErr error
-		// ИСПРАВЛЕНИЕ: Вызываем репозиторий с pgx.Tx и правильными аргументами.
 		newOtdelID, txErr = s.otdelRepository.CreateOtdel(ctx, tx, entity)
 		return txErr
 	})
@@ -125,7 +128,6 @@ func (s *OtdelService) CreateOtdel(ctx context.Context, payload dto.CreateOtdelD
 
 	createdOtdel, err := s.otdelRepository.FindOtdel(ctx, newOtdelID)
 	if err != nil {
-		s.logger.Error("Не удалось найти только что созданный отдел", zap.Uint64("id", newOtdelID), zap.Error(err))
 		return nil, err
 	}
 
@@ -147,23 +149,40 @@ func (s *OtdelService) UpdateOtdel(ctx context.Context, id uint64, payload dto.U
 		return nil, err
 	}
 
-	// Обновляем поля существующей сущности
+	// Обновляем простые поля
 	if payload.Name != "" {
 		existing.Name = payload.Name
 	}
 	if payload.StatusID != 0 {
 		existing.StatusID = payload.StatusID
 	}
-	if payload.DepartmentsID != 0 {
+
+	// Обновляем родительские связи с автоматическим обнулением других родителей,
+	// чтобы соответствовать правилу CHECK в базе данных.
+	if payload.DepartmentsID != nil {
 		existing.DepartmentsID = payload.DepartmentsID
+		existing.BranchID = nil
+		existing.ParentID = nil
+	}
+	if payload.BranchID != nil {
+		existing.DepartmentsID = nil
+		existing.BranchID = payload.BranchID
+		existing.ParentID = nil
+	}
+	if payload.ParentID != nil {
+		if *payload.ParentID == id {
+			return nil, apperrors.NewBadRequestError("Отдел не может быть родителем для самого себя")
+		}
+		existing.DepartmentsID = nil
+		existing.BranchID = nil
+		existing.ParentID = payload.ParentID
 	}
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		// ИСПРАВЛЕНИЕ: Вызываем репозиторий с pgx.Tx, ID и обновленной сущностью
 		return s.otdelRepository.UpdateOtdel(ctx, tx, id, *existing)
 	})
 	if err != nil {
-		s.logger.Error("Ошибка в транзакции обновления отдела", zap.Error(err))
+		s.logger.Error("Ошибка в транзакции обновления отдела", zap.Error(err), zap.Uint64("id", id))
 		return nil, err
 	}
 

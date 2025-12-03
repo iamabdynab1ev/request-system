@@ -136,7 +136,6 @@ func (h *DBHandler) ProcessBranches(ctx context.Context, data []dto.Branch1CDTO)
 				statusID = inactiveStatus.ID
 			}
 
-			// ИЗМЕНЕНИЕ: Используем хелперы для преобразования в указатели
 			entity := entities.Branch{
 				Name:         item.Name,
 				ShortName:    item.ShortName,
@@ -173,17 +172,40 @@ func (h *DBHandler) ProcessOtdels(ctx context.Context, data []dto.Otdel1CDTO) er
 		activeStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
 		inactiveStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
 		if activeStatus == nil || inactiveStatus == nil {
-			return fmt.Errorf("не найдены статусы ACTIVE/INACTIVE")
+			return fmt.Errorf("статусы не найдены")
 		}
 
 		for _, item := range data {
-			if item.DepartmentExternalID == "" {
-				return fmt.Errorf("для отдела '%s' не указан обязательный ID департамента (departmentExternalId). Синхронизация отделов отменена", item.Name)
-			}
-			parentDep, err := h.departmentRepo.FindByExternalID(ctx, tx, item.DepartmentExternalID, sourceSystem1C)
-			if err != nil {
-				return fmt.Errorf("для отдела '%s' указан несуществующий департамент (external_id: '%s'). Убедитесь, что справочник департаментов синхронизирован первым. Синхронизация отделов отменена",
-					item.Name, item.DepartmentExternalID)
+			var depID, branchID, parentID *uint64
+
+			parentExtID := item.ParentExternalID
+			depExtID := item.DepartmentExternalID
+			branchExtID := item.BranchExternalID
+
+			// Новая иерархическая логика проверки родителей
+			if parentExtID != "" {
+				// Приоритет №1: ищем родителя-отдела
+				parent, err := h.otdelRepo.FindByExternalID(ctx, tx, parentExtID, sourceSystem1C)
+				if err != nil {
+					return fmt.Errorf("для вложенного отдела '%s' указан несуществующий родительский отдел (external_id: '%s')", item.Name, parentExtID)
+				}
+				parentID = &parent.ID
+			} else if depExtID != "" {
+				// Приоритет №2: ищем родителя-департамента
+				parent, err := h.departmentRepo.FindByExternalID(ctx, tx, depExtID, sourceSystem1C)
+				if err != nil {
+					return fmt.Errorf("для отдела '%s' указан несуществующий департамент (external_id: '%s')", item.Name, depExtID)
+				}
+				depID = &parent.ID
+			} else if branchExtID != "" {
+				// Приоритет №3: ищем родителя-филиала
+				parent, err := h.branchRepo.FindByExternalID(ctx, tx, branchExtID, sourceSystem1C)
+				if err != nil {
+					return fmt.Errorf("для отдела '%s' указан несуществующий филиал (external_id: '%s')", item.Name, branchExtID)
+				}
+				branchID = &parent.ID
+			} else {
+				return fmt.Errorf("для отдела '%s' не указан ни один из возможных родителей", item.Name)
 			}
 
 			statusID := activeStatus.ID
@@ -194,11 +216,14 @@ func (h *DBHandler) ProcessOtdels(ctx context.Context, data []dto.Otdel1CDTO) er
 			entity := entities.Otdel{
 				Name:          item.Name,
 				StatusID:      statusID,
-				DepartmentsID: parentDep.ID,
+				DepartmentsID: depID,
+				BranchID:      branchID,
+				ParentID:      parentID, // <-- Новое
 				ExternalID:    stringToPtr(item.ExternalID),
 				SourceSystem:  stringToPtr(sourceSystem1C),
 			}
 
+			// (логика Create/Update)
 			existing, err := h.otdelRepo.FindByExternalID(ctx, tx, item.ExternalID, sourceSystem1C)
 			if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
 				return fmt.Errorf("ошибка поиска отдела '%s': %w", item.ExternalID, err)
@@ -223,17 +248,31 @@ func (h *DBHandler) ProcessOffices(ctx context.Context, data []dto.Office1CDTO) 
 		activeStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
 		inactiveStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
 		if activeStatus == nil || inactiveStatus == nil {
-			return fmt.Errorf("не найдены статусы ACTIVE/INACTIVE")
+			return fmt.Errorf("статусы не найдены")
 		}
 
 		for _, item := range data {
-			if item.BranchExternalID == "" {
-				return fmt.Errorf("для офиса '%s' не указан обязательный ID филиала (branchExternalId). Синхронизация офисов отменена", item.Name)
-			}
-			parentBranch, err := h.branchRepo.FindByExternalID(ctx, tx, item.BranchExternalID, sourceSystem1C)
-			if err != nil {
-				return fmt.Errorf("для офиса '%s' указан несуществующий филиал (external_id: '%s'). Убедитесь, что справочник филиалов синхронизирован первым. Синхронизация офисов отменена",
-					item.Name, item.BranchExternalID)
+			var branchID, parentID *uint64
+
+			parentExtID := item.ParentExternalID
+			branchExtID := item.BranchExternalID
+
+			if parentExtID != "" {
+
+				parent, err := h.officeRepo.FindByExternalID(ctx, tx, parentExtID, sourceSystem1C)
+				if err != nil {
+					return fmt.Errorf("для вложенного офиса '%s' указан несуществующий родительский офис (external_id: '%s')", item.Name, parentExtID)
+				}
+				parentID = &parent.ID
+			} else if branchExtID != "" {
+
+				parent, err := h.branchRepo.FindByExternalID(ctx, tx, branchExtID, sourceSystem1C)
+				if err != nil {
+					return fmt.Errorf("для офиса '%s' указан несуществующий филиал (external_id: '%s')", item.Name, branchExtID)
+				}
+				branchID = &parent.ID
+			} else {
+				return fmt.Errorf("для офиса '%s' не указан ни один из родителей (ни parent, ни branch)", item.Name)
 			}
 
 			statusID := activeStatus.ID
@@ -246,7 +285,8 @@ func (h *DBHandler) ProcessOffices(ctx context.Context, data []dto.Office1CDTO) 
 				Address:      item.Address,
 				OpenDate:     item.OpenDate,
 				StatusID:     statusID,
-				BranchID:     parentBranch.ID,
+				BranchID:     branchID,
+				ParentID:     parentID,
 				ExternalID:   stringToPtr(item.ExternalID),
 				SourceSystem: stringToPtr(sourceSystem1C),
 			}
@@ -275,34 +315,35 @@ func (h *DBHandler) ProcessPositions(ctx context.Context, data []dto.Position1CD
 		activeStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
 		inactiveStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
 		if activeStatus == nil || inactiveStatus == nil {
-			return fmt.Errorf("не найдены статусы ACTIVE/INACTIVE")
+			return fmt.Errorf("статусы не найдены")
 		}
 
 		for _, item := range data {
 			var depID, otdelID, branchID, officeID *uint64
 
+			// Логика осталась прежней: должность может быть привязана к любому уровню оргструктуры
 			if id := item.DepartmentExternalID; id != nil && *id != "" {
 				parent, err := h.departmentRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
 				if err != nil {
-					return fmt.Errorf("для должности '%s' указан несуществующий департамент (external_id: '%s')", item.Name, *id)
+					return fmt.Errorf("для должности '%s' указан несуществующий департамент ('%s')", item.Name, *id)
 				}
 				depID = &parent.ID
 			} else if id := item.OtdelExternalID; id != nil && *id != "" {
 				parent, err := h.otdelRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
 				if err != nil {
-					return fmt.Errorf("для должности '%s' указан несуществующий отдел (external_id: '%s')", item.Name, *id)
+					return fmt.Errorf("для должности '%s' указан несуществующий отдел ('%s')", item.Name, *id)
 				}
 				otdelID = &parent.ID
 			} else if id := item.BranchExternalID; id != nil && *id != "" {
 				parent, err := h.branchRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
 				if err != nil {
-					return fmt.Errorf("для должности '%s' указан несуществующий филиал (external_id: '%s')", item.Name, *id)
+					return fmt.Errorf("для должности '%s' указан несуществующий филиал ('%s')", item.Name, *id)
 				}
 				branchID = &parent.ID
 			} else if id := item.OfficeExternalID; id != nil && *id != "" {
 				parent, err := h.officeRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
 				if err != nil {
-					return fmt.Errorf("для должности '%s' указан несуществующий офис (external_id: '%s')", item.Name, *id)
+					return fmt.Errorf("для должности '%s' указан несуществующий офис ('%s')", item.Name, *id)
 				}
 				officeID = &parent.ID
 			}

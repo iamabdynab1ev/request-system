@@ -59,8 +59,6 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 		return false
 	}
 
-	// --- Логика для ДЕЙСТВИЙ РЕДАКТИРОВАНИЯ (`order:update`) ---
-
 	// Уровень 1: Полный доступ на редактирование
 	if ctx.HasPermission(ScopeAll) {
 		return true

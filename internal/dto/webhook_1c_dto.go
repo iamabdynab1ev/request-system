@@ -25,6 +25,8 @@ type Otdel1CDTO struct {
 	ExternalID           string `json:"externalId"`
 	Name                 string `json:"name"`
 	DepartmentExternalID string `json:"departmentExternalId"`
+	BranchExternalID     string `json:"branchExternalId"`
+	ParentExternalID     string `json:"parentExternalId"`
 	IsActive             bool   `json:"isActive"`
 }
 
@@ -48,6 +50,7 @@ type Office1CDTO struct {
 	Address          string    `json:"address"`
 	OpenDate         time.Time `json:"openDate"`
 	BranchExternalID string    `json:"branchExternalId"`
+	ParentExternalID string    `json:"parentExternalId"`
 	IsActive         bool      `json:"isActive"`
 }
 

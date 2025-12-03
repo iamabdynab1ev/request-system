@@ -18,15 +18,15 @@ const (
 )
 
 var PositionTypeNames = map[PositionType]string{
-	PositionTypeHeadOfDepartment:       "Руководитель Департамента",
-	PositionTypeDeputyHeadOfDepartment: "Заместитель Руководителя Департамента",
-	PositionTypeHeadOfOtdel:            "Руководитель Отдела",
-	PositionTypeDeputyHeadOfOtdel:      "Заместитель Руководителя Отдела",
+	PositionTypeHeadOfDepartment:       "Директор Департамента",
+	PositionTypeDeputyHeadOfDepartment: "Заместитель Директора Департамента",
+	PositionTypeHeadOfOtdel:            "Менеджер Отдела",
+	PositionTypeDeputyHeadOfOtdel:      "",
 
 	PositionTypeDeputyBranchDirector: "Заместитель Директора Филиала",
 	PositionTypeBranchDirector:       "Директор Филиала",
-	PositionTypeDeputyHeadOfOffice:   "Заместитель Руководителя Офиса",
-	PositionTypeHeadOfOffice:         "Руководитель Офиса",
+	PositionTypeDeputyHeadOfOffice:   "Заместитель Руководителя ЦБО",
+	PositionTypeHeadOfOffice:         "Руководитель ЦБО",
 
 	PositionTypeManager:    "Менеджер",
 	PositionTypeSpecialist: "Специалист",
