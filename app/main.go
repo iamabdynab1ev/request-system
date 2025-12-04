@@ -34,7 +34,7 @@ import (
 
 func main() {
 	// 1. КОНФИГ
-	cfg := config.New() // Загружает конфиг, включая DATABASE_URL из .env
+	cfg := config.New()
 
 	// 2. ЛОГГЕРЫ
 	logLevel := os.Getenv("LOG_LEVEL")

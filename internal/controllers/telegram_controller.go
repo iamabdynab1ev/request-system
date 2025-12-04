@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aarondl/null/v8"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 
@@ -513,8 +512,8 @@ func (c *TelegramController) handleTodayTasksCommand(ctx context.Context, chatID
 
 			// Время дедлайна
 			timeStr := ""
-			if order.Duration.Valid {
-				timeStr = order.Duration.Time.Format("15:04")
+			if order.Duration != nil {
+				timeStr = order.Duration.Format("15:04")
 			}
 
 			text.WriteString(fmt.Sprintf("%s *№%d* • %s",
@@ -593,7 +592,7 @@ func (c *TelegramController) handleOverdueTasksCommand(ctx context.Context, chat
 
 	var overdueOrders []dto.OrderResponseDTO
 	for _, order := range orderListResponse.List {
-		if order.Duration.Valid && order.Duration.Time.Before(now) {
+		if order.Duration != nil && order.Duration.Before(now) {
 
 			status, err := c.statusRepo.FindStatus(ctx, order.StatusID)
 			if err == nil && status.Code != nil && *status.Code != "CLOSED" && *status.Code != "REJECTED" {
@@ -631,7 +630,7 @@ func (c *TelegramController) handleOverdueTasksCommand(ctx context.Context, chat
 			}
 
 			// Вычисляем, насколько просрочено
-			overdueDuration := now.Sub(order.Duration.Time)
+			overdueDuration := now.Sub(*order.Duration)
 			overdueStr := ""
 			if overdueDuration.Hours() >= 24 {
 				days := int(overdueDuration.Hours() / 24)
@@ -1329,7 +1328,7 @@ func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64
 		return nil
 	}
 
-	// Собираем DTO для обновления, используя типизированные методы
+	// Собираем DTO для обновления (ИСПОЛЬЗУЕМ УКАЗАТЕЛИ, БЕЗ NULL-типов)
 	updateDTO := dto.UpdateOrderDTO{}
 
 	// StatusID
@@ -1350,24 +1349,26 @@ func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64
 
 	// Comment
 	if comment, exists := state.GetComment(); exists {
-		if comment != "" {
-			updateDTO.Comment = null.StringFrom(comment)
-		} else {
-			updateDTO.Comment = null.NewString("", false)
-		}
+		// Копируем значение, чтобы взять его адрес
+		commentVal := comment
+		updateDTO.Comment = &commentVal
 	}
 
 	// Duration
-	if duration, err := state.GetDuration(); err != nil {
+	duration, err := state.GetDuration()
+	if err != nil {
 		c.logger.Error("handleSaveChanges: ошибка парсинга duration", zap.Error(err))
 		return c.tgService.EditMessageText(ctx, chatID, messageID, "❌ Ошибка обработки срока.")
-	} else if duration == nil {
-		// Проверяем, был ли явно задан пустой срок
-		if _, exists := state.Changes["duration"]; exists {
-			updateDTO.Duration = null.NewTime(time.Time{}, false)
-		}
-	} else {
-		updateDTO.Duration = null.TimeFrom(*duration)
+	}
+
+	if duration != nil {
+		// Если есть новая дата — ставим указатель
+		updateDTO.Duration = duration
+	} else if _, exists := state.Changes["duration"]; exists {
+		// Если было "очищение" даты: отправляем zero time
+		// (Это компромисс новой системы обновлений)
+		zeroTime := time.Time{}
+		updateDTO.Duration = &zeroTime
 	}
 
 	// Вызываем сервис для обновления
@@ -1387,8 +1388,6 @@ func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64
 
 	return c.handleMyTasksCommand(ctx, chatID, messageID)
 }
-
-// === Вспомогательные функции (Хелперы) ===
 
 func (c *TelegramController) prepareUserContext(ctx context.Context, chatID int64) (*entities.User, context.Context, error) {
 	user, err := c.userService.FindUserByTelegramChatID(ctx, chatID)
@@ -1561,9 +1560,9 @@ func getStatusEmoji(status *entities.Status) string {
 	case "OPEN":
 		return "❗" // Открыто (требует внимания)
 	case "IN_PROGRESS":
-		return "⚙️" // В работе
+		return "⏳" // В работе
 	case "REFINEMENT":
-		return "🔁" // Доработка
+		return "🔺" // Доработка
 	case "CLARIFICATION":
 		return "❓" // Уточнение
 	case "COMPLETED":

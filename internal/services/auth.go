@@ -39,11 +39,12 @@ type AuthServiceInterface interface {
 }
 
 type AuthService struct {
+	txManager         repositories.TxManagerInterface
 	userRepo          repositories.UserRepositoryInterface
 	cacheRepo         repositories.CacheRepositoryInterface
 	logger            *zap.Logger
 	cfg               *config.AuthConfig
-	ldapCfg           *config.LDAPConfig // <-- ДОБАВЛЕНО
+	ldapCfg           *config.LDAPConfig
 	notifySvc         NotificationServiceInterface
 	positionService   PositionServiceInterface
 	branchService     BranchServiceInterface
@@ -53,6 +54,7 @@ type AuthService struct {
 }
 
 func NewAuthService(
+	txManager repositories.TxManagerInterface,
 	userRepo repositories.UserRepositoryInterface,
 	cacheRepo repositories.CacheRepositoryInterface,
 	logger *zap.Logger,
@@ -66,6 +68,7 @@ func NewAuthService(
 	officeService OfficeServiceInterface,
 ) AuthServiceInterface {
 	return &AuthService{
+		txManager:         txManager,
 		userRepo:          userRepo,
 		cacheRepo:         cacheRepo,
 		logger:            logger,
@@ -456,45 +459,52 @@ func (s *AuthService) UpdateMyProfile(ctx context.Context, payload dto.UpdateMyP
 		return nil, apperrors.ErrForbidden
 	}
 
-	// Шаг 2: Выполняем обновление через репозиторий
-	updatePayload := dto.UpdateUserDTO{
-		ID:          userID,
-		Fio:         payload.Fio,
-		PhoneNumber: payload.PhoneNumber,
-		Email:       payload.Email,
-		PhotoURL:    payload.PhotoURL,
+	userEntity, err := s.userRepo.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if payload.Fio != nil {
+		userEntity.Fio = *payload.Fio
+	}
+	if payload.PhoneNumber != nil {
+		userEntity.PhoneNumber = *payload.PhoneNumber
+	}
+	if payload.Email != nil {
+		userEntity.Email = *payload.Email
+	}
+	if payload.PhotoURL != nil {
+		userEntity.PhotoURL = payload.PhotoURL
 	}
 
 	tx, err := s.userRepo.BeginTx(ctx)
 	if err != nil {
-		s.logger.Error("UpdateMyProfile: не удалось начать транзакцию", zap.Error(err))
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
-	if err := s.userRepo.UpdateUser(ctx, tx, updatePayload, []byte("{}")); err != nil {
-		s.logger.Error("UpdateMyProfile: ошибка при вызове userRepo.UpdateUser", zap.Uint64("userID", userID), zap.Error(err))
+	if err := s.userRepo.UpdateUser(ctx, tx, userEntity); err != nil {
 		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		s.logger.Error("UpdateMyProfile: не удалось закоммитить транзакцию", zap.Error(err))
 		return nil, err
 	}
 
-	updatedUser, err := s.userRepo.FindUserByID(ctx, userID)
+	return s.FindUser(ctx, userID)
+}
+
+func (s *AuthService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error) {
+	user, err := s.userRepo.FindUserByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	roles, _ := s.userRepo.GetRolesByUserID(ctx, userID)
-	roleIDs := make([]uint64, len(roles))
-	for i, r := range roles {
-		roleIDs[i] = r.ID
+	roles, _ := s.userRepo.GetRolesByUserID(ctx, id)
+	d := userEntityToUserDTO(user)
+	for _, r := range roles {
+		d.RoleIDs = append(d.RoleIDs, r.ID)
 	}
 
-	userDTO := userEntityToUserDTO(updatedUser)
-	userDTO.RoleIDs = roleIDs
-
-	return userDTO, nil
+	return d, nil
 }

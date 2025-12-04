@@ -77,3 +77,12 @@ var (
 	ErrChangePasswordWithToken = NewHttpErrorWithDetails(http.StatusAccepted, "Требуется смена пароля", nil, nil, nil)
 	ErrNoChanges               = NewHttpError(http.StatusBadRequest, "Нет изменений в запросе", nil, nil)
 )
+
+func IsNotFound(err error) bool {
+	e, ok := err.(*HttpError)
+	return ok && e.Code == http.StatusNotFound
+}
+
+func NewInternalError(msg string) *HttpError {
+	return NewHttpError(http.StatusInternalServerError, msg, nil, nil)
+}

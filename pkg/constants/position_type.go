@@ -5,69 +5,63 @@ type PositionType string
 const (
 	PositionTypeHeadOfDepartment       PositionType = "HEAD_OF_DEPARTMENT"
 	PositionTypeDeputyHeadOfDepartment PositionType = "DEPUTY_HEAD_OF_DEPARTMENT"
-	PositionTypeHeadOfOtdel            PositionType = "HEAD_OF_OTDEL"
-	PositionTypeDeputyHeadOfOtdel      PositionType = "DEPUTY_HEAD_OF_OTDEL"
 
-	PositionTypeDeputyBranchDirector PositionType = "DEPUTY_BRANCH_DIRECTOR"
+	// Один руководитель на Отдел
+	PositionTypeManagerOfOtdel PositionType = "MANAGER_OF_OTDEL"
+
 	PositionTypeBranchDirector       PositionType = "BRANCH_DIRECTOR"
-	PositionTypeDeputyHeadOfOffice   PositionType = "DEPUTY_HEAD_OF_OFFICE"
-	PositionTypeHeadOfOffice         PositionType = "HEAD_OF_OFFICE"
+	PositionTypeDeputyBranchDirector PositionType = "DEPUTY_BRANCH_DIRECTOR"
 
-	PositionTypeManager    PositionType = "MANAGER"
+	PositionTypeHeadOfOffice       PositionType = "HEAD_OF_OFFICE"
+	PositionTypeDeputyHeadOfOffice PositionType = "DEPUTY_HEAD_OF_OFFICE"
+
 	PositionTypeSpecialist PositionType = "SPECIALIST"
 )
 
+// Русские названия для фронтенда
 var PositionTypeNames = map[PositionType]string{
 	PositionTypeHeadOfDepartment:       "Директор Департамента",
 	PositionTypeDeputyHeadOfDepartment: "Заместитель Директора Департамента",
-	PositionTypeHeadOfOtdel:            "Менеджер Отдела",
-	PositionTypeDeputyHeadOfOtdel:      "",
+	PositionTypeManagerOfOtdel:         "Менеджер Отдела",
 
-	PositionTypeDeputyBranchDirector: "Заместитель Директора Филиала",
 	PositionTypeBranchDirector:       "Директор Филиала",
-	PositionTypeDeputyHeadOfOffice:   "Заместитель Руководителя ЦБО",
-	PositionTypeHeadOfOffice:         "Руководитель ЦБО",
+	PositionTypeDeputyBranchDirector: "Заместитель Директора Филиала",
 
-	PositionTypeManager:    "Менеджер",
+	PositionTypeHeadOfOffice:       "Руководитель ЦБО",
+	PositionTypeDeputyHeadOfOffice: "Заместитель Руководителя ЦБО",
+
 	PositionTypeSpecialist: "Специалист",
 }
 
-func GetAscendingHierarchy() []PositionType {
+// ---- Новые Чистые Иерархии ----
+
+// ИЕРАРХИЯ 1: Департамент
+func GetDepartmentHierarchy() []PositionType {
 	return []PositionType{
-		PositionTypeManager,
-		PositionTypeDeputyHeadOfOtdel,
-		PositionTypeHeadOfOtdel,
-		PositionTypeDeputyHeadOfDepartment,
 		PositionTypeHeadOfDepartment,
+		PositionTypeDeputyHeadOfDepartment,
 	}
 }
 
-func GetDescendingHierarchy() []PositionType {
-	asc := GetAscendingHierarchy()
-	desc := make([]PositionType, len(asc))
-	for i := 0; i < len(asc); i++ {
-		desc[i] = asc[len(asc)-1-i]
-	}
-	return desc
-}
-
-func GetAscendingBranchHierarchy() []PositionType {
+// ИЕРАРХИЯ 2: Отдел (Только 1 уровень!)
+func GetOtdelHierarchy() []PositionType {
 	return []PositionType{
-		PositionTypeSpecialist,
-		PositionTypeManager,
-		PositionTypeDeputyHeadOfOffice,
-		PositionTypeHeadOfOffice,
-		PositionTypeDeputyBranchDirector,
-		PositionTypeBranchDirector,
+		PositionTypeManagerOfOtdel,
 	}
 }
 
-// Добавляем: Иерархия для ФИЛИАЛОВ (Сверху-Вниз) - для автоназначения
-func GetDescendingBranchHierarchy() []PositionType {
-	asc := GetAscendingBranchHierarchy()
-	desc := make([]PositionType, len(asc))
-	for i := 0; i < len(asc); i++ {
-		desc[i] = asc[len(asc)-1-i]
+// ИЕРАРХИЯ 3: Филиал
+func GetBranchHierarchy() []PositionType {
+	return []PositionType{
+		PositionTypeBranchDirector,
+		PositionTypeDeputyBranchDirector,
 	}
-	return desc
+}
+
+// ИЕРАРХИЯ 4: Офис
+func GetOfficeHierarchy() []PositionType {
+	return []PositionType{
+		PositionTypeHeadOfOffice,
+		PositionTypeDeputyHeadOfOffice,
+	}
 }

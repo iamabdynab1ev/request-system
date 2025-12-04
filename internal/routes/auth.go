@@ -37,13 +37,13 @@ func runAuthRouter(
 	userRepository := repositories.NewUserRepository(dbConn, logger)
 	cacheRepository := repositories.NewRedisCacheRepository(redisClient)
 
-	// notificationService := services.NewMockNotificationService(logger)
-
 	// 2. Включаем реализацию через Telegram
 	tgService := telegram.NewService(cfg.Telegram.BotToken)
 	notificationService := services.NewTelegramNotificationService(tgService, logger)
+	txManager := repositories.NewTxManager(dbConn, logger)
 
 	authService := services.NewAuthService(
+		txManager,
 		userRepository,
 		cacheRepository,
 		logger,
