@@ -10,6 +10,8 @@ type CreateOrderRoutingRuleDTO struct {
 	OrderTypeID  *int   `json:"order_type_id"`
 	DepartmentID *int   `json:"department_id"`
 	OtdelID      *int   `json:"otdel_id"`
+	BranchID     *int   `json:"branch_id"`
+	OfficeID     *int   `json:"office_id"`
 	PositionType string `json:"position_type" validate:"required"`
 	StatusID     int    `json:"status_id" validate:"required"`
 }
@@ -17,8 +19,10 @@ type CreateOrderRoutingRuleDTO struct {
 type UpdateOrderRoutingRuleDTO struct {
 	RuleName     null.String `json:"name,omitempty"`
 	OrderTypeID  null.Int    `json:"order_type_id"`
-	DepartmentID null.Int    `json:"department_id,omitempty"` // <-- 1. ДОБАВЬТЕ ПРЕФИКС utils.NullableInt `json:"department_id,omitempty"` // <-- 2. ДОБАВЬТЕ ПРЕФИКС utils.
-	OtdelID      null.Int    `json:"otdel_id,omitempty"`      // <-- 2. ДОБАВЬТЕ ПРЕФИКС utils.
+	DepartmentID null.Int    `json:"department_id,omitempty"`
+	OtdelID      null.Int    `json:"otdel_id,omitempty"`
+	BranchID     null.Int    `json:"branch_id,omitempty"`
+	OfficeID     null.Int    `json:"office_id,omitempty"`
 	PositionType null.String `json:"position_type,omitempty"`
 	StatusID     null.Int    `json:"status_id,omitempty"`
 }
@@ -29,9 +33,11 @@ type OrderRoutingRuleResponseDTO struct {
 	OrderTypeID      *int     `json:"order_type_id"`
 	DepartmentID     *int     `json:"department_id"`
 	OtdelID          *int     `json:"otdel_id"`
-	PositionID       *int     `json:"position_id,omitempty"`        
-	PositionType     string   `json:"position_type,omitempty"`      
-	PositionTypeName string   `json:"position_type_name,omitempty"` 
+	BranchID         *int     `json:"branch_id"`
+	OfficeID         *int     `json:"office_id"`
+	PositionID       *int     `json:"position_id,omitempty"`
+	PositionType     string   `json:"position_type,omitempty"`
+	PositionTypeName string   `json:"position_type_name,omitempty"`
 	RequiredFields   []string `json:"required_fields,omitempty"`
 	StatusID         int      `json:"status_id"`
 	CreatedAt        string   `json:"created_at"`

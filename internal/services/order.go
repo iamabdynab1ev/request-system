@@ -20,6 +20,7 @@ import (
 	"request-system/internal/entities"
 	"request-system/internal/events"
 	"request-system/internal/repositories"
+	"request-system/pkg/constants"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/eventbus"
 	"request-system/pkg/filestorage"
@@ -32,12 +33,10 @@ type ValidationRule struct {
 	ErrorMessage string
 }
 
-// Этот реестр раньше был тут или в validation_registry.go
 var OrderValidationRules = map[string][]string{
 	"EQUIPMENT": {"equipment_id", "equipment_type_id", "priority_id"},
 }
 
-// Для API конфига фронтенда
 var ValidationRegistry = map[string][]ValidationRule{
 	"EQUIPMENT": {
 		{FieldName: "equipment_id", ErrorMessage: "Пожалуйста, укажите оборудование."},
@@ -50,7 +49,7 @@ type OrderServiceInterface interface {
 	CreateOrder(ctx context.Context, createDTO dto.CreateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error)
 	GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool) (*dto.OrderListResponseDTO, error)
 	FindOrderByID(ctx context.Context, orderID uint64) (*dto.OrderResponseDTO, error)
-	UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error)
+	UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader, explicitFields map[string]interface{}) (*dto.OrderResponseDTO, error)
 	DeleteOrder(ctx context.Context, orderID uint64) error
 
 	GetStatusByID(ctx context.Context, id uint64) (*entities.Status, error)
@@ -188,7 +187,7 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyP
 	}
 
 	// 6. Обогащение данных (Users, Attachments)
-	dtos := s.bulkMapOrders(ctx, orders)
+	dtos := s.mapOrdersToDTOs(ctx, orders)
 
 	return &dto.OrderListResponseDTO{List: dtos, TotalCount: totalCount}, nil
 }
@@ -205,15 +204,9 @@ func (s *OrderService) FindOrderByID(ctx context.Context, orderID uint64) (*dto.
 
 	order := authCtx.Target.(*entities.Order)
 
-	// Загружаем связи
-	creator, _ := s.userRepo.FindUserByID(ctx, order.CreatorID)
-	var executor *entities.User
-	if order.ExecutorID != nil {
-		executor, _ = s.userRepo.FindUserByID(ctx, *order.ExecutorID)
-	}
 	attachments, _ := s.attachRepo.FindAllByOrderID(ctx, order.ID, 100, 0)
 
-	return s.toResponseDTO(order, creator, executor, attachments), nil
+	return s.toResponseDTO(order, nil, nil, attachments), nil
 }
 
 func (s *OrderService) FindOrderByIDForTelegram(ctx context.Context, userID uint64, orderID uint64) (*entities.Order, error) {
@@ -290,6 +283,12 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 		routingResult, err := s.ruleEngine.ResolveExecutor(ctx, tx, orderCtx, explicitExecutor)
 		if err != nil {
 			return err
+		}
+		if routingResult.Executor.ID == 0 {
+			return apperrors.NewHttpError(
+				http.StatusBadRequest,
+				"Не найден руководитель для выбранной структуры. Настройте правила маршрутизации или укажите исполнителя вручную.",
+				nil, nil)
 		}
 
 		// 4. Defaults
@@ -369,15 +368,10 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 		return nil, err
 	}
 
-	// Возвращаем полностью заполненную структуру
 	return s.FindOrderByID(ctx, createdID)
 }
 
-// =========================================================================
-// UPDATE OPERATION (CLEAN ARCHITECTURE)
-// =========================================================================
-
-func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error) {
+func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader, explicitFields map[string]interface{}) (*dto.OrderResponseDTO, error) {
 	currentOrder, err := s.orderRepo.FindByID(ctx, orderID)
 	if err != nil {
 		return nil, err
@@ -391,59 +385,93 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 		return nil, apperrors.ErrForbidden
 	}
 
+	// ГЛАВНОЕ ИСПРАВЛЕНИЕ: Проверяем наличие изменений ДО транзакции
+	// Если нет явных полей, нет файла - сразу отказываем
+	if len(explicitFields) == 0 && file == nil {
+		return nil, apperrors.NewBadRequestError("Нет изменений в запросе")
+	}
+
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		txID := uuid.New()
-		now := time.Now()
+		now := time.Now().UTC()
 
 		// 1. Делаем копию заявки для изменений
 		updated := *currentOrder
 
-		// 2. ПАТЧИНГ: ApplyUpdates автоматически копирует поля *string/*uint64/etc из DTO в Entity
-		// (Если поле в DTO nil, оно не трогается)
-		fieldsChanged := utils.ApplyUpdates(&updated, &updateDTO)
+		// 2. ИСПОЛЬЗУЕМ SMART UPDATE
+		fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
 
-		// 3. БИЗНЕС-ЛОГИКА (Side Effects)
+		// 3. Обновляем время
+		updated.UpdatedAt = now
 
-		// А. Если сменилась структура (Департамент/Отдел) -> пересчитываем исполнителя
-		structureChanged := utils.DiffPtr(currentOrder.DepartmentID, updated.DepartmentID) || utils.DiffPtr(currentOrder.OtdelID, updated.OtdelID)
+		// 4. БИЗНЕС-ЛОГИКА (Side Effects)
+
+		// А. Смена структуры -> пересчет исполнителя
+		structureChanged := utils.DiffPtr(currentOrder.DepartmentID, updated.DepartmentID) ||
+			utils.DiffPtr(currentOrder.OtdelID, updated.OtdelID) ||
+			utils.DiffPtr(currentOrder.BranchID, updated.BranchID)
+
 		if structureChanged {
-			s.logger.Info("Изменение структуры, переназначение", zap.Uint64("order_id", orderID))
+			s.logger.Info("Изменение структуры заявки", zap.Uint64("order_id", orderID))
+
 			orderCtx := OrderContext{
 				DepartmentID: utils.SafeDeref(updated.DepartmentID),
 				OtdelID:      updated.OtdelID,
 				BranchID:     updated.BranchID,
+				OfficeID:     updated.OfficeID,
 			}
+
 			res, err := s.ruleEngine.ResolveExecutor(ctx, tx, orderCtx, nil)
 			if err != nil {
-				return apperrors.NewBadRequestError("Не найден исполнитель для новой структуры")
+				return apperrors.NewBadRequestError("Не найден руководитель для выбранного подразделения. Настройте правила маршрутизации или укажите исполнителя вручную.")
+			}
+			if res.Executor.ID == 0 {
+				return apperrors.NewBadRequestError("Не найден руководитель для выбранного подразделения. Настройте правила маршрутизации или укажите исполнителя вручную.")
 			}
 			updated.ExecutorID = &res.Executor.ID
 
-			// Специфическое правило: сброс отдела при смене департамента
-			if utils.DiffPtr(currentOrder.DepartmentID, updated.DepartmentID) {
-				updated.OtdelID = nil
-			}
+			fieldsChanged = true
 		}
 
 		// Б. Обработка смены Статуса (CLOSED/COMPLETED)
-		if utils.DiffPtr(&currentOrder.StatusID, &updated.StatusID) {
+		if currentOrder.StatusID != updated.StatusID {
 			st, _ := s.statusRepo.FindByIDInTx(ctx, tx, updated.StatusID)
 			if st != nil && st.Code != nil {
 				code := strings.ToUpper(*st.Code)
-				if code == "CLOSED" || code == "COMPLETED" {
+				oldSt, _ := s.statusRepo.FindByIDInTx(ctx, tx, currentOrder.StatusID)
+				oldCode := ""
+				if oldSt != nil && oldSt.Code != nil {
+					oldCode = strings.ToUpper(*oldSt.Code)
+				}
+
+				if constants.IsFinalStatus(code) {
 					updated.CompletedAt = &now
+
+					diff := now.Sub(currentOrder.CreatedAt).Seconds()
+					seconds := uint64(diff)
+					updated.ResolutionTimeSeconds = &seconds
+
+					isFCR := currentOrder.FirstResponseTimeSeconds != nil &&
+						*currentOrder.FirstResponseTimeSeconds == seconds
+					updated.IsFirstContactResolution = &isFCR
+
+					fieldsChanged = true
 				} else {
-					updated.CompletedAt = nil // Reopen
+					updated.CompletedAt = nil
+				}
+
+				if constants.IsFinalStatus(code) && constants.IsFinalStatus(oldCode) {
+					updated.CompletedAt = nil
+					updated.ResolutionTimeSeconds = nil
+					updated.IsFirstContactResolution = nil
 				}
 			}
 		}
 
-		// В. Метрики (First Response / FCR)
-		// Срабатывает только 1 раз при первом осмысленном действии
+		// В. Метрики (FCR / First Response)
 		s.calculateMetrics(&updated, currentOrder, updateDTO, authCtx.Actor.ID, now)
 
-		// 4. ЗАПИСЬ В ИСТОРИЮ + EVENTBUS
-		// Метод сам сравнит currentOrder vs updated и запишет изменения
+		// 4. ЗАПИСЬ В ИСТОРИЮ (Аудит)
 		histChanged, err := s.detectAndLogChanges(ctx, tx, currentOrder, &updated, updateDTO, authCtx.Actor, txID, now)
 		if err != nil {
 			return err
@@ -458,11 +486,13 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 			fileAttached = true
 		}
 
+		// 6. Финальная проверка: есть ли что сохранять?
+		// КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Проверяем fieldsChanged правильно
 		if !fieldsChanged && !histChanged && !fileAttached {
-			return apperrors.ErrNoChanges
+			return apperrors.NewBadRequestError("Нет изменений в запросе")
 		}
 
-		// 6. Сохранение в БД
+		// 7. Сохранение в БД
 		return s.orderRepo.Update(ctx, tx, &updated)
 	})
 	if err != nil {
@@ -478,6 +508,79 @@ func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, 
 	// Комментарий (из DTO всегда, т.к. в Entity нет поля current comment)
 	if dto.Comment != nil && strings.TrimSpace(*dto.Comment) != "" {
 		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "COMMENT", nil, nil, dto.Comment, txID, *new); err != nil {
+			return false, err
+		}
+		hasLoggable = true
+	}
+
+	// ✅ ДОБАВЛЕНО: Проверка NAME
+	if old.Name != new.Name {
+		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "NAME_CHANGE", &new.Name, &old.Name, nil, txID, *new); err != nil {
+			return false, err
+		}
+		hasLoggable = true
+	}
+
+	// ✅ ДОБАВЛЕНО: Проверка ADDRESS (Address это *string - указатель)
+	if !utils.StringPtrEqual(old.Address, new.Address) {
+		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "ADDRESS_CHANGE", new.Address, old.Address, nil, txID, *new); err != nil {
+			return false, err
+		}
+		hasLoggable = true
+	}
+
+	// ✅ ДОБАВЛЕНО: Проверка DURATION (срок выполнения, *time.Time)
+	if !utils.TimeEqual(old.Duration, new.Duration) {
+		valNew := ""
+		valOld := ""
+		if new.Duration != nil {
+			valNew = new.Duration.Format(time.RFC3339)
+		}
+		if old.Duration != nil {
+			valOld = old.Duration.Format(time.RFC3339)
+		}
+
+		if valNew != "" || valOld != "" {
+			newPtr := &valNew
+			oldPtr := &valOld
+			if valNew == "" {
+				newPtr = nil
+			}
+			if valOld == "" {
+				oldPtr = nil
+			}
+			if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "DURATION_CHANGE", newPtr, oldPtr, nil, txID, *new); err != nil {
+				return false, err
+			}
+			hasLoggable = true
+		}
+	}
+
+	// ✅ ДОБАВЛЕНО: Проверка EQUIPMENT_ID
+	if utils.DiffPtr(old.EquipmentID, new.EquipmentID) {
+		valNew := utils.PtrToString(new.EquipmentID)
+		valOld := utils.PtrToString(old.EquipmentID)
+		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "EQUIPMENT_CHANGE", &valNew, &valOld, nil, txID, *new); err != nil {
+			return false, err
+		}
+		hasLoggable = true
+	}
+
+	// ✅ ДОБАВЛЕНО: Проверка EQUIPMENT_TYPE_ID
+	if utils.DiffPtr(old.EquipmentTypeID, new.EquipmentTypeID) {
+		valNew := utils.PtrToString(new.EquipmentTypeID)
+		valOld := utils.PtrToString(old.EquipmentTypeID)
+		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "EQUIPMENT_TYPE_CHANGE", &valNew, &valOld, nil, txID, *new); err != nil {
+			return false, err
+		}
+		hasLoggable = true
+	}
+
+	// ✅ ДОБАВЛЕНО: Проверка ORDER_TYPE_ID
+	if utils.DiffPtr(old.OrderTypeID, new.OrderTypeID) {
+		valNew := utils.PtrToString(new.OrderTypeID)
+		valOld := utils.PtrToString(old.OrderTypeID)
+		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "ORDER_TYPE_CHANGE", &valNew, &valOld, nil, txID, *new); err != nil {
 			return false, err
 		}
 		hasLoggable = true
@@ -524,30 +627,39 @@ func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, 
 		hasLoggable = true
 	}
 
-	// Срок выполнения (Duration)
-	if !timePointersEqual(old.Duration, new.Duration) {
-		// time logic handled if necessary or simply logged
-		valNew := ""
-		if new.Duration != nil {
-			valNew = new.Duration.Format(time.RFC3339)
+	// Структура
+	if utils.DiffPtr(old.DepartmentID, new.DepartmentID) ||
+		utils.DiffPtr(old.OtdelID, new.OtdelID) ||
+		utils.DiffPtr(old.BranchID, new.BranchID) ||
+		utils.DiffPtr(old.OfficeID, new.OfficeID) {
+
+		changes := []string{}
+		if utils.DiffPtr(old.DepartmentID, new.DepartmentID) {
+			changes = append(changes, fmt.Sprintf("department_id: %s → %s", utils.PtrToString(old.DepartmentID), utils.PtrToString(new.DepartmentID)))
 		}
-		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "DURATION_CHANGE", &valNew, nil, nil, txID, *new); err != nil {
+		if utils.DiffPtr(old.OtdelID, new.OtdelID) {
+			changes = append(changes, fmt.Sprintf("otdel_id: %s → %s", utils.PtrToString(old.OtdelID), utils.PtrToString(new.OtdelID)))
+		}
+		if utils.DiffPtr(old.BranchID, new.BranchID) {
+			changes = append(changes, fmt.Sprintf("branch_id: %s → %s", utils.PtrToString(old.BranchID), utils.PtrToString(new.BranchID)))
+		}
+		if utils.DiffPtr(old.OfficeID, new.OfficeID) {
+			changes = append(changes, fmt.Sprintf("office_id: %s → %s", utils.PtrToString(old.OfficeID), utils.PtrToString(new.OfficeID)))
+		}
+
+		txt := "Смена структуры: " + strings.Join(changes, "; ")
+
+		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "STRUCTURE_CHANGE", nil, nil, &txt, txID, *new); err != nil {
 			return false, err
 		}
 		hasLoggable = true
 	}
 
-	// Подразделение (системное событие)
 	if utils.DiffPtr(old.DepartmentID, new.DepartmentID) || utils.DiffPtr(old.BranchID, new.BranchID) {
-		// Log generic change if needed
 	}
 
 	return hasLoggable, nil
 }
-
-// =========================================================================
-// DELETE
-// =========================================================================
 
 func (s *OrderService) DeleteOrder(ctx context.Context, orderID uint64) error {
 	authCtx, err := s.buildAuthzContext(ctx, orderID)
@@ -559,10 +671,6 @@ func (s *OrderService) DeleteOrder(ctx context.Context, orderID uint64) error {
 	}
 	return s.orderRepo.DeleteOrder(ctx, orderID)
 }
-
-// =========================================================================
-// HELPERS & GETTERS
-// =========================================================================
 
 func (s *OrderService) GetStatusByID(ctx context.Context, id uint64) (*entities.Status, error) {
 	return s.statusRepo.FindStatus(ctx, id)
@@ -613,53 +721,51 @@ func (s *OrderService) attachFileToOrderInTx(ctx context.Context, tx pgx.Tx, ord
 	return id, nil
 }
 
-// bulkMapOrders - ускоренный маппинг списка
-func (s *OrderService) bulkMapOrders(ctx context.Context, orders []entities.Order) []dto.OrderResponseDTO {
-	userIDsMap := make(map[uint64]bool)
+func (s *OrderService) mapOrdersToDTOs(ctx context.Context, orders []entities.Order) []dto.OrderResponseDTO {
 	orderIDs := make([]uint64, len(orders))
-
 	for i, o := range orders {
 		orderIDs[i] = o.ID
-		userIDsMap[o.CreatorID] = true
-		if o.ExecutorID != nil {
-			userIDsMap[*o.ExecutorID] = true
-		}
-	}
-	uids := make([]uint64, 0, len(userIDsMap))
-	for id := range userIDsMap {
-		uids = append(uids, id)
 	}
 
-	usersMap, _ := s.userRepo.FindUsersByIDs(ctx, uids)
 	attachMap, _ := s.attachRepo.FindAttachmentsByOrderIDs(ctx, orderIDs)
 
 	res := make([]dto.OrderResponseDTO, len(orders))
 	for i, o := range orders {
-		var creator, executor *entities.User
-		if u, ok := usersMap[o.CreatorID]; ok {
-			creator = &u
-		}
-		if o.ExecutorID != nil {
-			if u, ok := usersMap[*o.ExecutorID]; ok {
-				executor = &u
-			}
-		}
 		atts := attachMap[o.ID]
-		res[i] = *s.toResponseDTO(&o, creator, executor, atts)
+		res[i] = *s.toResponseDTO(&o, nil, nil, atts)
 	}
 	return res
 }
 
 func (s *OrderService) toResponseDTO(o *entities.Order, cr, ex *entities.User, atts []entities.Attachment) *dto.OrderResponseDTO {
-	// Основные поля
 	d := &dto.OrderResponseDTO{
-		ID: o.ID, Name: o.Name, StatusID: o.StatusID, CreatedAt: o.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   o.UpdatedAt.Format(time.RFC3339),
-		OrderTypeID: o.OrderTypeID, Address: o.Address, DepartmentID: o.DepartmentID,
-		OtdelID: o.OtdelID, BranchID: o.BranchID, OfficeID: o.OfficeID,
-		EquipmentID: o.EquipmentID, EquipmentTypeID: o.EquipmentTypeID, PriorityID: o.PriorityID,
-		Duration: o.Duration, CompletedAt: o.CompletedAt,
-		ResolutionTimeSeconds: o.ResolutionTimeSeconds, FirstResponseTimeSeconds: o.FirstResponseTimeSeconds,
+		ID:                       o.ID,
+		Name:                     o.Name,
+		StatusID:                 o.StatusID,
+		CreatedAt:                o.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:                o.UpdatedAt.Format(time.RFC3339),
+		OrderTypeID:              o.OrderTypeID,
+		Address:                  o.Address,
+		DepartmentID:             o.DepartmentID,
+		OtdelID:                  o.OtdelID,
+		BranchID:                 o.BranchID,
+		OfficeID:                 o.OfficeID,
+		EquipmentID:              o.EquipmentID,
+		EquipmentTypeID:          o.EquipmentTypeID,
+		PriorityID:               o.PriorityID,
+		Duration:                 o.Duration,
+		CompletedAt:              o.CompletedAt,
+		ResolutionTimeSeconds:    o.ResolutionTimeSeconds,
+		FirstResponseTimeSeconds: o.FirstResponseTimeSeconds,
+
+		// ID и FIO
+		CreatorID:   o.CreatorID,
+		CreatorName: o.CreatorName,
+	}
+
+	if o.ExecutorID != nil {
+		d.ExecutorID = o.ExecutorID
+		d.ExecutorName = o.ExecutorName
 	}
 
 	if o.ResolutionTimeSeconds != nil {
@@ -669,21 +775,12 @@ func (s *OrderService) toResponseDTO(o *entities.Order, cr, ex *entities.User, a
 		d.FirstResponseTimeFormatted = utils.FormatSecondsToHumanReadable(*o.FirstResponseTimeSeconds)
 	}
 
-	if cr != nil {
-		d.Creator = dto.ShortUserDTO{ID: cr.ID, Fio: cr.Fio}
-	}
-	if ex != nil {
-		d.Executor = &dto.ShortUserDTO{ID: ex.ID, Fio: ex.Fio}
-	}
-
 	d.Attachments = make([]dto.AttachmentResponseDTO, len(atts))
 	for i, a := range atts {
 		d.Attachments[i] = dto.AttachmentResponseDTO{ID: a.ID, FileName: a.FileName, URL: "/uploads/" + a.FilePath}
 	}
 	return d
 }
-
-// ----------------- AuthZ & Internal Helpers -----------------
 
 func (s *OrderService) buildAuthzContext(ctx context.Context, orderID uint64) (*authz.Context, error) {
 	if orderID == 0 {

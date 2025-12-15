@@ -470,7 +470,11 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 			if officeID == nil {
 				officeID = pos.OfficeID
 			}
-
+			var usernamePtr *string
+			if item.Username != "" {
+				val := item.Username
+				usernamePtr = &val
+			}
 			entity := entities.User{
 				Fio:          item.Fio,
 				Email:        item.Email,
@@ -481,6 +485,7 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 				OtdelID:      otdelID,
 				BranchID:     branchID,
 				OfficeID:     officeID,
+				Username:     usernamePtr,
 				ExternalID:   stringToPtr(item.ExternalID),
 				SourceSystem: stringToPtr(sourceSystem1C),
 			}

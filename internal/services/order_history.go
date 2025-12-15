@@ -132,14 +132,13 @@ func getActorFromEvent(event repositories.OrderHistoryItem, s *OrderHistoryServi
 		if _, isDelegator := meta.delegatorIDs[event.UserID]; isDelegator {
 			role = "delegator"
 		} else {
-			role = "executor" // Если не создатель и не делегатор, значит, исполнитель.
+			role = "executor"
 		}
 	}
 
 	return dto.ShortUserDTO{ID: event.UserID, Fio: fio, Role: role}
 }
 
-// addEventToBlock - эта функция осталась почти без изменений.
 func addEventToBlock(ctx context.Context, block *dto.TimelineEventDTO, event repositories.OrderHistoryItem, s *OrderHistoryService) {
 	if event.EventType == "COMMENT" && event.Comment.Valid {
 		commentText := event.Comment.String
@@ -174,7 +173,7 @@ func addEventToBlock(ctx context.Context, block *dto.TimelineEventDTO, event rep
 					line = fmt.Sprintf("Заявка переведена в департамент: «%s»", dept.Name)
 				} else {
 					s.logger.Warn("Не удалось найти департамент по ID из истории", zap.Uint64("deptID", id))
-					line = fmt.Sprintf("Изменено поле 'Департамент': ID -> %s", newValue)
+					line = fmt.Sprintf("Изменено поле 'Департамент': ID на %s", newValue)
 				}
 			}
 		case "OTDEL_CHANGE":
@@ -184,7 +183,7 @@ func addEventToBlock(ctx context.Context, block *dto.TimelineEventDTO, event rep
 					line = fmt.Sprintf("Заявка переведена в отдел: «%s»", otdel.Name)
 				} else {
 					s.logger.Warn("Не удалось найти отдел по ID из истории", zap.Uint64("otdelID", id))
-					line = fmt.Sprintf("Изменено поле 'Отдел': ID -> %s", newValue)
+					line = fmt.Sprintf("Изменено поле 'Отдел': ID на %s", newValue)
 				}
 			}
 		case "STATUS_CHANGE":
@@ -206,12 +205,27 @@ func addEventToBlock(ctx context.Context, block *dto.TimelineEventDTO, event rep
 			}
 		case "COMMENT":
 
-		default:
+		case "NAME_CHANGE":
+			oldValue := utils.NullStringToString(event.OldValue)
+			line = fmt.Sprintf("Изменено название заявки: «%s» на «%s»", oldValue, newValue)
 
-			fieldMap := map[string]string{"NAME_CHANGE": "Имя заявки", "ADDRESS_CHANGE": "Адрес"}
+		case "ADDRESS_CHANGE":
+			oldValue := utils.NullStringToString(event.OldValue)
+			line = fmt.Sprintf("Изменен адрес: «%s» на «%s»", oldValue, newValue)
+		case "EQUIPMENT_CHANGE":
+			line = fmt.Sprintf("Изменено оборудование: ID на %s", newValue)
+
+		case "EQUIPMENT_TYPE_CHANGE":
+			line = fmt.Sprintf("Изменен тип оборудования: ID на %s", newValue)
+
+		case "ORDER_TYPE_CHANGE":
+			line = fmt.Sprintf("Изменен тип заявки: ID на %s", newValue)
+
+		default:
+			fieldMap := map[string]string{}
 			if humanField, ok := fieldMap[event.EventType]; ok {
 				oldValue := utils.NullStringToString(event.OldValue)
-				line = fmt.Sprintf("Изменено поле '%s': «%s» -> «%s»", humanField, oldValue, newValue)
+				line = fmt.Sprintf("Изменено поле '%s': «%s» на «%s»", humanField, oldValue, newValue)
 			}
 		}
 

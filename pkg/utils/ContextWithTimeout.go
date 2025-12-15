@@ -82,15 +82,8 @@ func FormatNullTime(n sql.Null[time.Time]) string {
 	return ""
 }
 
-func Ctx(c echo.Context, seconds int) context.Context {
-	newCtx, cancel := context.WithTimeout(c.Request().Context(), time.Duration(seconds)*time.Second)
-
-	go func() {
-		<-newCtx.Done()
-		cancel()
-	}()
-
-	return newCtx
+func Ctx(c echo.Context, seconds int) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(c.Request().Context(), time.Duration(seconds)*time.Second)
 }
 
 func NullIntToUintPtr(n null.Int) *uint64 {

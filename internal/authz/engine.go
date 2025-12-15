@@ -1,4 +1,3 @@
-// Файл: internal/authz/authz.go
 package authz
 
 import (
@@ -24,19 +23,25 @@ func (c *Context) HasPermission(permission string) bool {
 }
 
 func getAction(permission string) string {
-	if parts := strings.Split(permission, ":"); len(parts) > 1 {
+	parts := strings.Split(permission, ":")
+	if len(parts) > 1 {
 		return parts[1]
 	}
 	return ""
 }
 
+// canAccessOrder — логика для Заявок (СТРОГАЯ)
 func canAccessOrder(ctx Context, target *entities.Order) bool {
 	action := getAction(ctx.CurrentPermission)
 	actor := ctx.Actor
+
+	// Просмотр заявки
 	if action == "view" {
+		// Глобальные права видят всё
 		if ctx.HasPermission(ScopeAllView) || ctx.HasPermission(ScopeAll) {
 			return true
 		}
+		// Проверка по иерархии (совпадает ли департамент/отдел/филиал)
 		if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
 			return true
 		}
@@ -49,6 +54,7 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 		if ctx.HasPermission(ScopeOffice) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID {
 			return true
 		}
+		// Собственные заявки (участие)
 		if ctx.HasPermission(ScopeOwn) {
 			isCreator := target.CreatorID == actor.ID
 			isExecutor := target.ExecutorID != nil && *target.ExecutorID == actor.ID
@@ -59,12 +65,14 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 		return false
 	}
 
-	// Уровень 1: Полный доступ на редактирование
+	// Редактирование (update/delete)
+
+	// Админ может всё
 	if ctx.HasPermission(ScopeAll) {
 		return true
 	}
 
-	// Уровень 2: Управленческий доступ
+	// Управленческий доступ (например, начальник департамента может править заявки в своем департаменте)
 	if ctx.HasPermission(OrdersUpdateInDepartmentScope) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
 		return true
 	}
@@ -78,7 +86,7 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 		return true
 	}
 
-	// Уровень 3: Собственный доступ
+	// Свои заявки (обычный пользователь может править, если он Создатель или Исполнитель)
 	if ctx.HasPermission(OrdersUpdate) {
 		isCreator := target.CreatorID == actor.ID
 		isExecutor := target.ExecutorID != nil && *target.ExecutorID == actor.ID
@@ -90,22 +98,29 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 	return false
 }
 
+// canAccessUser — логика для Пользователей ("ТЕЛЕФОННАЯ КНИГА" + СТРОГОСТЬ)
 func canAccessUser(ctx Context, target *entities.User) bool {
 	actor := ctx.Actor
+	action := getAction(ctx.CurrentPermission)
 
-	// Правило 1: Пользователь всегда может редактировать/просматривать себя, если у него есть права на профиль.
+	// Правило 1: Сам себя вижу и правлю (если есть базовые права)
 	if actor.ID == target.ID {
-		if ctx.HasPermission(ProfileUpdate) || ctx.HasPermission(PasswordUpdate) || ctx.HasPermission(UsersView) {
-			return true
-		}
+		return true
 	}
 
-	// Правило 2: Пользователь с `scope:all` может делать что угодно с другими.
+	// Правило 2: Админ
 	if ctx.HasPermission(ScopeAll) {
 		return true
 	}
 
-	// Правило 3: Проверка иерархических scope (если они нужны для пользователей)
+	// Правило 3 (НОВОЕ): Глобальный просмотр.
+	// Если действие == view, мы разрешаем доступ к карточке любого сотрудника.
+	// Это нужно, чтобы выбирать пользователей из списка, даже если они в другом отделе.
+	if action == "view" {
+		return true
+	}
+
+	// === ДЛЯ РЕДАКТИРОВАНИЯ/УДАЛЕНИЯ — СТРОГАЯ ИЕРАРХИЯ ===
 
 	if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
 		return true
@@ -124,20 +139,20 @@ func canAccessUser(ctx Context, target *entities.User) bool {
 }
 
 func CanDo(permission string, ctx Context) bool {
-	// 1. Запоминаем, какое право мы проверяем. Это нужно для `canAccessOrder`.
+	// 1. Фиксация права
 	ctx.CurrentPermission = permission
 
-	// 2. Базовая проверка: есть ли у пользователя вообще такое право в списке
+	// 2. Есть ли право вообще (RBAC)
 	if !ctx.HasPermission(permission) {
 		return false
 	}
 
-	// 3. Если нет объекта (`Target`) для проверки - доступ разрешен (например, для `Create`)
+	// 3. Без цели — разрешено (например создание)
 	if ctx.Target == nil {
 		return true
 	}
 
-	// 4. Выбираем правильную функцию проверки в зависимости от типа объекта
+	// 4. Проверка цели (ABAC)
 	switch target := ctx.Target.(type) {
 	case *entities.Order:
 		return canAccessOrder(ctx, target)

@@ -1,4 +1,3 @@
-// Файл: internal/controllers/deduplicator.go
 package controllers
 
 import (
@@ -8,44 +7,29 @@ import (
 	"time"
 )
 
-// RequestDeduplicator предотвращает обработку дублирующихся запросов
 type RequestDeduplicator struct {
-	processing sync.Map // key: string (chatID_command), value: time.Time
-	timeout    time.Duration
+	locks sync.Map
 }
 
-func NewRequestDeduplicator(timeout time.Duration) *RequestDeduplicator {
-	return &RequestDeduplicator{
-		timeout: timeout,
-	}
+func NewRequestDeduplicator() *RequestDeduplicator {
+	return &RequestDeduplicator{}
 }
 
-// TryAcquire пытается захватить "лок" для обработки запроса
-// Возвращает true если можно обрабатывать, false если запрос уже обрабатывается
-func (d *RequestDeduplicator) TryAcquire(chatID int64, command string) bool {
-	key := fmt.Sprintf("%d_%s", chatID, command)
+func (d *RequestDeduplicator) TryAcquire(chatID int64, keySuffix string, ttl time.Duration) bool {
+	key := fmt.Sprintf("%d_%s", chatID, keySuffix)
+	now := time.Now()
 
-	// Проверяем, есть ли уже обработка этого запроса
-	if val, exists := d.processing.Load(key); exists {
-		lastTime := val.(time.Time)
-		// Если прошло меньше timeout, запрос ещё обрабатывается
-		if time.Since(lastTime) < d.timeout {
+	if val, exists := d.locks.Load(key); exists {
+		expiry := val.(time.Time)
+		if now.Before(expiry) {
 			return false
 		}
 	}
 
-	// Записываем время начала обработки
-	d.processing.Store(key, time.Now())
+	d.locks.Store(key, now.Add(ttl))
 	return true
 }
 
-// Release освобождает "лок" после обработки
-func (d *RequestDeduplicator) Release(chatID int64, command string) {
-	key := fmt.Sprintf("%d_%s", chatID, command)
-	d.processing.Delete(key)
-}
-
-// Cleanup периодически очищает старые записи (запускать в горутине)
 func (d *RequestDeduplicator) Cleanup(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -56,10 +40,10 @@ func (d *RequestDeduplicator) Cleanup(ctx context.Context, interval time.Duratio
 			return
 		case <-ticker.C:
 			now := time.Now()
-			d.processing.Range(func(key, value interface{}) bool {
-				lastTime := value.(time.Time)
-				if now.Sub(lastTime) > d.timeout*2 {
-					d.processing.Delete(key)
+			d.locks.Range(func(key, value interface{}) bool {
+				expiry := value.(time.Time)
+				if now.After(expiry) {
+					d.locks.Delete(key)
 				}
 				return true
 			})

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -19,13 +20,16 @@ import (
 	"request-system/internal/services"
 	"request-system/pkg/config"
 	"request-system/pkg/contextkeys"
-	apperrors "request-system/pkg/errors"
 	"request-system/pkg/telegram"
 	"request-system/pkg/types"
 	"request-system/pkg/utils"
 )
 
+const telegramStateKey = "tg_user_state:%d"
+
 type TelegramController struct {
+	repoMutex sync.RWMutex // Protects repository operations to prevent race conditions
+
 	userService           services.UserServiceInterface
 	orderService          services.OrderServiceInterface
 	statusRepo            repositories.StatusRepositoryInterface
@@ -34,11 +38,14 @@ type TelegramController struct {
 	tgService             telegram.ServiceInterface
 	cacheRepo             repositories.CacheRepositoryInterface
 	authPermissionService services.AuthPermissionServiceInterface
-	deduplicator          *RequestDeduplicator
-	botToken              string
-	logger                *zap.Logger
-	cfg                   config.TelegramConfig
-	loc                   *time.Location
+
+	// Используем наш дедупликатор из соседнего файла
+	deduplicator *RequestDeduplicator
+
+	botToken string
+	logger   *zap.Logger
+	cfg      config.TelegramConfig
+	loc      *time.Location
 }
 
 func NewTelegramController(
@@ -54,6 +61,7 @@ func NewTelegramController(
 	logger *zap.Logger,
 	cfg config.TelegramConfig,
 ) *TelegramController {
+	// Настройка часового пояса (Душанбе)
 	loc, err := time.LoadLocation("Asia/Dushanbe")
 	if err != nil {
 		logger.Warn("Failed to load location, using UTC", zap.Error(err))
@@ -68,7 +76,7 @@ func NewTelegramController(
 		userRepo:              userRepo,
 		orderHistoryRepo:      orderHistoryRepo,
 		authPermissionService: authPermissionService,
-		deduplicator:          NewRequestDeduplicator(5 * time.Second),
+		deduplicator:          NewRequestDeduplicator(),
 		botToken:              botToken,
 		logger:                logger,
 		cfg:                   cfg,
@@ -76,85 +84,103 @@ func NewTelegramController(
 	}
 }
 
-const telegramStateKey = "tg_user_state:%d"
-
 func (c *TelegramController) HandleTelegramWebhook(ctx echo.Context) error {
 	var update TelegramUpdate
 	if err := ctx.Bind(&update); err != nil {
-		c.logger.Error("Не удалось распарсить обновление от Telegram", zap.Error(err))
-		return ctx.NoContent(http.StatusBadRequest)
+		c.logger.Error("Ошибка парсинга Telegram update", zap.Error(err))
+		return ctx.NoContent(http.StatusOK) // Возвращаем OK, чтобы не зациклить ошибку
 	}
 
-	// 1. Обрабатываем нажатия на кнопки
+	// === ЗАЩИТА ОТ ЛАВИНЫ (Если сервер лежал) ===
+	// Игнорируем сообщения старше 60 секунд.
+	const maxMessageAge = 60 * time.Second
+
+	var msgDate int64 = 0
+	if update.Message != nil {
+		msgDate = update.Message.Date
+	} else if update.CallbackQuery != nil && update.CallbackQuery.Message != nil {
+		msgDate = update.CallbackQuery.Message.Date
+	}
+
+	if msgDate > 0 {
+		msgTime := time.Unix(msgDate, 0)
+		if time.Since(msgTime) > maxMessageAge {
+			// Логируем (Warn), но не обрабатываем. Телеграму отдаем 200 OK.
+			c.logger.Warn("Пропущено старое сообщение (сброс очереди)", zap.Int64("msg_ts", msgDate))
+			return ctx.NoContent(http.StatusOK)
+		}
+	}
+
+	// 1. Обработка кнопок (Callback)
 	if update.CallbackQuery != nil {
 		if !c.cfg.AdvancedMode {
 			return ctx.NoContent(http.StatusOK)
 		}
 
-		// Create a new background context for the goroutine to prevent it from being
-		// canceled when the HTTP request handler returns.
-		go func() {
-			bgCtx := context.Background()
-			_ = c.tgService.AnswerCallbackQuery(bgCtx, update.CallbackQuery.ID, "")
-			if err := c.handleCallbackQuery(bgCtx, update.CallbackQuery); err != nil {
-				c.logger.Error("Error handling callback query", zap.Error(err))
-			}
-		}()
-
 		chatID := update.CallbackQuery.Message.Chat.ID
-		if !c.deduplicator.TryAcquire(chatID, "callback") {
-			c.logger.Warn("Дублирующийся callback запрос игнорирован", zap.Int64("chatID", chatID))
+
+		// ANTI-SPAM: Кулдаун 1 секунда для кнопок
+		if !c.deduplicator.TryAcquire(chatID, "cb", 1*time.Second) {
+			// Чтобы колесико загрузки исчезло, ответим пустышкой
+			go c.tgService.AnswerCallbackQuery(context.Background(), update.CallbackQuery.ID, "")
 			return ctx.NoContent(http.StatusOK)
 		}
-		defer c.deduplicator.Release(chatID, "callback")
+
+		go func() {
+			bgCtx := context.Background()
+			// Всегда отвечаем на колбэк
+			_ = c.tgService.AnswerCallbackQuery(bgCtx, update.CallbackQuery.ID, "")
+			if err := c.handleCallbackQuery(bgCtx, update.CallbackQuery); err != nil {
+				c.logger.Error("Ошибка обработки callback", zap.Error(err))
+			}
+		}()
 	}
 
-	// 2. Обрабатываем текстовые сообщения и команды
+	// 2. Обработка текста
 	if update.Message != nil {
 		chatID := update.Message.Chat.ID
 		text := update.Message.Text
-		c.logger.Info("Получено сообщение от Telegram", zap.Int64("chatID", chatID), zap.String("text", text))
 
-		// Launch message processing in a goroutine to respond to Telegram quickly.
+		// Логируем только важное
+		// c.logger.Info("Сообщение", zap.Int64("chatID", chatID), zap.String("text", text))
+
 		go func(msg *TelegramMessage) {
 			bgCtx := context.Background()
-			chatID := msg.Chat.ID
-			text := msg.Text
 
-			// Команды ("/start", "/my_tasks", "/stats")
+			// Команды
 			if strings.HasPrefix(text, "/") {
-
-				if !c.deduplicator.TryAcquire(chatID, text) {
-					c.logger.Warn("Дублирующаяся команда игнорирована", zap.Int64("chatID", chatID), zap.String("command", text))
+				// Кулдаун для команд побольше (2 сек)
+				if !c.deduplicator.TryAcquire(chatID, "cmd", 2*time.Second) {
 					return
 				}
-				defer c.deduplicator.Release(chatID, text)
 
 				if strings.HasPrefix(text, "/start") {
 					_ = c.handleStartCommand(bgCtx, chatID, text)
 					return
 				}
-				if c.cfg.AdvancedMode && strings.HasPrefix(text, "/my_tasks") {
-					_ = c.handleMyTasksCommand(bgCtx, chatID)
-					return
-				}
-				if c.cfg.AdvancedMode && strings.HasPrefix(text, "/stats") {
-					_ = c.handleStatsCommand(bgCtx, chatID)
-					return
+				if c.cfg.AdvancedMode {
+					if strings.HasPrefix(text, "/my_tasks") {
+						_ = c.handleMyTasksCommand(bgCtx, chatID)
+						return
+					}
+					if strings.HasPrefix(text, "/stats") {
+						_ = c.handleStatsCommand(bgCtx, chatID)
+						return
+					}
 				}
 				return
 			}
 
-			// Если это не команда, возможно, это ответ на наш вопрос (комментарий, срок)
+			// Кнопки меню и текст
 			if c.cfg.AdvancedMode {
-				if text == "📋 Мои Заявки" {
-
-					if !c.deduplicator.TryAcquire(chatID, "my_tasks_button") {
-						c.logger.Warn("Дублирующееся нажатие кнопки игнорировано", zap.Int64("chatID", chatID))
+				// Кулдаун на меню (чтобы не спамили списком заявок)
+				if text == "📋 Мои Заявки" || text == "⏰ На сегодня" || text == "🔴 Просроченные" {
+					if !c.deduplicator.TryAcquire(chatID, "menu", 1500*time.Millisecond) {
 						return
 					}
-					defer c.deduplicator.Release(chatID, "my_tasks_button")
+				}
 
+				if text == "📋 Мои Заявки" {
 					_ = c.handleMyTasksCommand(bgCtx, chatID)
 					return
 				}
@@ -164,100 +190,52 @@ func (c *TelegramController) HandleTelegramWebhook(ctx echo.Context) error {
 		}(update.Message)
 	}
 
-	return ctx.NoContent(http.StatusOK) // Always respond immediately.
+	return ctx.NoContent(http.StatusOK)
 }
 
 func (c *TelegramController) handleStatsCommand(ctx context.Context, chatID int64, messageID ...int) error {
-	c.logger.Info("handleStatsCommand: НАЧАЛО", zap.Int64("chatID", chatID))
-
 	user, _, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
-		c.logger.Error("handleStatsCommand: ошибка prepareUserContext", zap.Error(err))
 		return err
 	}
 
-	// Получаем статистику
 	stats, err := c.orderService.GetUserStats(ctx, user.ID)
 	if err != nil {
-		c.logger.Error("handleStatsCommand: ошибка получения статистики", zap.Error(err))
-		return c.tgService.SendMessage(ctx, chatID, "❌ Ошибка при получении статистики\\.")
+		return c.tgService.SendMessage(ctx, chatID, "❌ Ошибка получения статистики.")
 	}
 
-	// Вычисляем среднее время
 	avgHours := int(stats.AvgResolutionSeconds / 3600)
 	avgMinutes := int((stats.AvgResolutionSeconds - float64(avgHours*3600)) / 60)
 
-	// Формируем красивое сообщение
-	var text strings.Builder
-	text.WriteString("📊 *Ваша статистика*\n")
-	text.WriteString("_за последний месяц_\n")
-	text.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	var t strings.Builder
+	t.WriteString("📊 *Ваша статистика*\n━━━━━━━━━━━━━━━━━━━━\n\n")
+	t.WriteString(fmt.Sprintf("📝 *Всего:* %d\n", stats.TotalCount))
+	t.WriteString(fmt.Sprintf("⚙️ В работе: %d\n", stats.InProgressCount))
+	t.WriteString(fmt.Sprintf("✅ Готово: %d\n\n", stats.CompletedCount))
 
-	// Общее количество
-	text.WriteString(fmt.Sprintf("📝 *Всего заявок:* %d\n\n", stats.TotalCount))
-
-	// Детализация по статусам
-	text.WriteString("*По статусам:*\n")
-	text.WriteString(fmt.Sprintf("⚙️ В работе: %d\n", stats.InProgressCount))
-	text.WriteString(fmt.Sprintf("✅ Выполнено: %d\n", stats.CompletedCount))
-	text.WriteString(fmt.Sprintf("🔒 Закрыто: %d\n\n", stats.ClosedCount))
-
-	// Просроченные (если есть)
-	if stats.OverdueCount > 0 {
-		text.WriteString(fmt.Sprintf("⚠️ *Просрочено:* %d \n\n", stats.OverdueCount))
-	}
-
-	// Среднее время выполнения
 	if avgHours > 0 || avgMinutes > 0 {
-		text.WriteString(fmt.Sprintf("⏱️ *Среднее время:*\n"))
-		if avgHours > 0 {
-			text.WriteString(fmt.Sprintf("%d ч ", avgHours))
-		}
-		if avgMinutes > 0 {
-			text.WriteString(fmt.Sprintf("%d мин", avgMinutes))
-		}
-		text.WriteString("\n")
+		t.WriteString(fmt.Sprintf("⏱️ Среднее время: %dч %dмин\n", avgHours, avgMinutes))
 	}
 
-	text.WriteString("\n━━━━━━━━━━━━━━━━━━━━")
-
-	var msgIDToEdit int
+	mid := 0
 	if len(messageID) > 0 {
-		msgIDToEdit = messageID[0]
+		mid = messageID[0]
 	}
-
-	return c.tgService.EditOrSendMessage(ctx, chatID, msgIDToEdit, text.String(),
-		telegram.WithMarkdownV2(),
-	)
+	return c.tgService.EditOrSendMessage(ctx, chatID, mid, t.String(), telegram.WithMarkdownV2())
 }
 
+// 2. СТАРТ / ПРИВЯЗКА
 func (c *TelegramController) handleStartCommand(ctx context.Context, chatID int64, text string) error {
-	token := strings.TrimSpace(strings.TrimPrefix(text, "/start"))
+	welcomeMsg := "👋 *Добро пожаловать в систему заявок\\!*\n\n" +
+		"Для привязки вашего аккаунта отправьте мне код, полученный на сайте в профиле."
 
-	if token == "" {
-		// Если токен не указан, отправляем приветствие
-		welcomeMsg := "👋 *Добро пожаловать в систему заявок\\!*\n\n" +
-			"Для привязки вашего аккаунта:\n" +
-			"1\\. Откройте веб\\-приложение\n" +
-			"2\\. Перейдите в профиль\n" +
-			"3\\. Нажмите \"Связать Telegram\"\n" +
-			"4\\. Отправьте мне полученный код\n\n" +
-			"Код выглядит примерно так:\n" +
-			"`74b55710\\-3293\\-4b89\\-a7aa\\-a31f38282af9`"
+	_ = c.tgService.SendMessageEx(ctx, chatID, welcomeMsg, telegram.WithMarkdownV2())
 
-		_ = c.tgService.SendMessageEx(ctx, chatID, welcomeMsg, telegram.WithMarkdownV2())
-		return nil
-	}
-
-	// Если токен указан, пытаемся привязать
-	err := c.userService.ConfirmTelegramLink(ctx, token, chatID)
-	if err != nil {
-		_ = c.tgService.SendMessage(ctx, chatID, "❌ Ошибка\\. Неверный код или истекло время его действия\\. Попробуйте снова\\.")
-	} else {
-		_ = c.tgService.SendMessage(ctx, chatID, "✅ Ваш аккаунт успешно привязан\\!")
-		// Отправляем главное меню с кнопками
+	_, _, err := c.prepareUserContext(ctx, chatID)
+	if err == nil {
 		return c.sendMainMenu(ctx, chatID)
 	}
+
 	return nil
 }
 
@@ -292,8 +270,6 @@ func (c *TelegramController) sendMainMenu(ctx context.Context, chatID int64) err
 		"Добро пожаловать в систему заявок\\!\n" +
 		"Выберите нужное действие из меню ниже\\."
 
-	// ИЗМЕНЕНИЕ: Переносим все основные действия в постоянные кнопки.
-	// Это делает интерфейс более интуитивным и быстрым для пользователя.
 	replyKeyboard := [][]telegram.ReplyKeyboardButton{
 		{{Text: "📋 Мои Заявки"}},
 		{{Text: "⏰ На сегодня"}, {Text: "🔴 Просроченные"}},
@@ -312,129 +288,99 @@ func (c *TelegramController) handleMyTasksCommand(ctx context.Context, chatID in
 		return err
 	}
 
-	filter := types.Filter{Limit: 50, Page: 1} // Увеличили лимит до 50
-	orderListResponse, err := c.orderService.GetOrders(userCtx, filter, true)
+	filter := types.Filter{Limit: 20, Page: 1}
+	resp, err := c.orderService.GetOrders(userCtx, filter, true) // true = "Мои заявки"
 	if err != nil {
-		c.logger.Error("handleMyTasksCommand: orderService.GetOrders error", zap.Error(err))
-		return c.tgService.SendMessage(ctx, chatID, "Произошла ошибка при получении списка ваших заявок.")
+		c.logger.Error("Telegram: GetOrders failed", zap.Error(err))
+		return c.tgService.SendMessage(ctx, chatID, "Ошибка загрузки данных.")
 	}
 
-	var text strings.Builder
-	var keyboardRows [][]telegram.InlineKeyboardButton
+	c.logger.Info("Telegram: Заявок для пользователя найдено", zap.Int("count", len(resp.List)), zap.Int64("chat_id", chatID))
 
-	if len(orderListResponse.List) == 0 {
+	var text strings.Builder
+	var kbr [][]telegram.InlineKeyboardButton
+
+	if len(resp.List) == 0 {
 		text.WriteString("✅ У вас нет активных заявок.")
 	} else {
-		text.WriteString(fmt.Sprintf("📋 *Ваши заявки* \\(%d\\):\n\n", len(orderListResponse.List)))
+		text.WriteString(fmt.Sprintf("📋 *Ваши заявки* \\(%d\\):\n\n", len(resp.List)))
 
-		statusesMap := make(map[uint64]*entities.Status)
-		allStatuses, err := c.statusRepo.FindAll(ctx)
-		if err != nil {
-			c.logger.Error("handleMyTasksCommand: не удалось получить все статусы", zap.Error(err))
-			// Если не можем получить статусы, работаем без эмодзи, чтобы не падать
-		} else {
-			for i := range allStatuses {
-				statusesMap[allStatuses[i].ID] = &allStatuses[i]
+		c.repoMutex.RLock()
+		sMap := make(map[uint64]*entities.Status)
+		allS, _ := c.statusRepo.FindAll(ctx)
+		for i := range allS {
+			sMap[allS[i].ID] = &allS[i]
+		}
+		c.repoMutex.RUnlock()
+
+		row := []telegram.InlineKeyboardButton{}
+
+		for _, o := range resp.List {
+			emo := getStatusEmoji(sMap[o.StatusID])
+			text.WriteString(fmt.Sprintf("%s *№%d* • %s\n", emo, o.ID, telegram.EscapeTextForMarkdownV2(o.Name)))
+
+			// Кнопка (ИСПОЛЬЗУЕМ "action":"select_order")
+			cb := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, o.ID)
+			row = append(row, telegram.InlineKeyboardButton{Text: fmt.Sprintf("№%d", o.ID), CallbackData: cb})
+
+			if len(row) >= 5 {
+				kbr = append(kbr, row)
+				row = []telegram.InlineKeyboardButton{}
 			}
 		}
-
-		// 2. Формируем компактный список (только номера и статус)
-		for _, order := range orderListResponse.List {
-			// 3. Получаем статус и соответствующий ему эмодзи
-			var statusEmoji string
-			if status, ok := statusesMap[order.StatusID]; ok {
-				statusEmoji = getStatusEmoji(status)
-			} else {
-				statusEmoji = "🔵" // Эмодзи по умолчанию, если статус не найден
-			}
-
-			text.WriteString(fmt.Sprintf("%s *№%d* • %s\n",
-				statusEmoji,
-				order.ID,
-				telegram.EscapeTextForMarkdownV2(order.Name),
-			))
+		if len(row) > 0 {
+			kbr = append(kbr, row)
 		}
 
 		text.WriteString("\n_Выберите заявку:_")
 
-		// ✅ КОМПАКТНЫЕ КНОПКИ: 5 колонок
-		currentRow := []telegram.InlineKeyboardButton{}
-		for _, order := range orderListResponse.List {
-			buttonText := fmt.Sprintf("№%d", order.ID)
-			callbackData := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, order.ID)
-
-			currentRow = append(currentRow, telegram.InlineKeyboardButton{
-				Text:         buttonText,
-				CallbackData: callbackData,
-			})
-
-			// Когда набралось 5 кнопок в ряду, добавляем ряд и начинаем новый
-			if len(currentRow) == 5 {
-				keyboardRows = append(keyboardRows, currentRow)
-				currentRow = []telegram.InlineKeyboardButton{}
-			}
+		mid := 0
+		if len(messageID) > 0 {
+			mid = messageID[0]
 		}
 
-		// Добавляем оставшиеся кнопки (если меньше 5)
-		if len(currentRow) > 0 {
-			keyboardRows = append(keyboardRows, currentRow)
-		}
+		return c.tgService.EditOrSendMessage(ctx, chatID, mid, text.String(), telegram.WithKeyboard(kbr), telegram.WithMarkdownV2())
 	}
 
-	var msgIDToEdit int
+	// Если список был пуст - просто отправляем текст.
+	mid := 0
 	if len(messageID) > 0 {
-		msgIDToEdit = messageID[0]
+		mid = messageID[0]
 	}
-
-	return c.tgService.EditOrSendMessage(ctx, chatID, msgIDToEdit, text.String(),
-		telegram.WithKeyboard(keyboardRows),
-		telegram.WithMarkdownV2(),
-	)
+	return c.tgService.EditOrSendMessage(ctx, chatID, mid, text.String(), telegram.WithMarkdownV2())
 }
 
 // В файле: internal/controllers/telegram_controller.go
 func (c *TelegramController) handleTextMessage(ctx context.Context, chatID int64, text string) error {
-	// 1. Проверяем, не является ли это токеном привязки (UUID формат)
 	text = strings.TrimSpace(text)
 
+	// ШАГ 1: Проверяем, не является ли текст токеном. Это самая важная проверка.
 	if isUUIDFormat(text) {
 		err := c.userService.ConfirmTelegramLink(ctx, text, chatID)
 		if err != nil {
-			_ = c.tgService.SendMessage(ctx, chatID, "❌ Неверный код или истекло время его действия\\. Попробуйте получить новый код на сайте\\.")
+			_ = c.tgService.SendMessage(ctx, chatID, "❌ Ошибка. Код неверный или устарел.")
 		} else {
-			_ = c.tgService.SendMessage(ctx, chatID, "✅ Ваш аккаунт успешно привязан\\!")
+			_ = c.tgService.SendMessage(ctx, chatID, "✅ Аккаунт привязан!")
 			return c.sendMainMenu(ctx, chatID)
 		}
 		return nil
 	}
 
-	if text == "📊 Статистика" {
-		if !c.deduplicator.TryAcquire(chatID, "stats_button") {
-			return nil
-		}
-		defer c.deduplicator.Release(chatID, "stats_button")
-
-		return c.handleStatsCommand(ctx, chatID)
+	// ШАГ 2: Обрабатываем кнопки меню (если текст - не токен)
+	if text == "📋 Мои Заявки" {
+		return c.handleMyTasksCommand(ctx, chatID)
 	}
-
-	// ИЗМЕНЕНИЕ: Добавляем обработку новых постоянных кнопок.
 	if text == "⏰ На сегодня" {
 		return c.handleTodayTasksCommand(ctx, chatID)
 	}
 	if text == "🔴 Просроченные" {
 		return c.handleOverdueTasksCommand(ctx, chatID)
 	}
-	if text == "🔍 Поиск" {
-		return c.handleSearchStart(ctx, chatID, 0) // 0 т.к. нет сообщения для редактирования
+	if text == "📊 Статистика" {
+		return c.handleStatsCommand(ctx, chatID)
 	}
-
-	if text == "📋 Мои Заявки" {
-		if !c.deduplicator.TryAcquire(chatID, "my_tasks_button") {
-			return nil
-		}
-		defer c.deduplicator.Release(chatID, "my_tasks_button")
-
-		return c.handleMyTasksCommand(ctx, chatID)
+	if text == "🔍 Поиск" {
+		return c.handleSearchStart(ctx, chatID, 0)
 	}
 
 	state, err := c.getUserState(ctx, chatID)
@@ -442,7 +388,6 @@ func (c *TelegramController) handleTextMessage(ctx context.Context, chatID int64
 		return nil
 	}
 
-	// 3. Определяем, что делать с текстом в зависимости от режима
 	switch state.Mode {
 	case "awaiting_comment":
 		return c.handleSetComment(ctx, chatID, text)
@@ -453,7 +398,6 @@ func (c *TelegramController) handleTextMessage(ctx context.Context, chatID int64
 	case "awaiting_search":
 		return c.handleSearchQuery(ctx, chatID, text)
 	}
-
 	return nil
 }
 
@@ -493,6 +437,7 @@ func (c *TelegramController) handleTodayTasksCommand(ctx context.Context, chatID
 		text.WriteString(fmt.Sprintf("⏰ *Заявки на сегодня* \\(%d\\):\n\n", len(orderListResponse.List)))
 
 		// Получаем статусы для эмодзи
+		c.repoMutex.RLock()
 		statusesMap := make(map[uint64]*entities.Status)
 		allStatuses, err := c.statusRepo.FindAll(ctx)
 		if err == nil {
@@ -500,6 +445,7 @@ func (c *TelegramController) handleTodayTasksCommand(ctx context.Context, chatID
 				statusesMap[allStatuses[i].ID] = &allStatuses[i]
 			}
 		}
+		c.repoMutex.RUnlock()
 
 		// Формируем список
 		for _, order := range orderListResponse.List {
@@ -849,92 +795,84 @@ func (c *TelegramController) handleSetExecutorFromText(ctx context.Context, chat
 
 func (c *TelegramController) handleCallbackQuery(ctx context.Context, query *TelegramCallbackQuery) error {
 	var data map[string]interface{}
+	// Не игнорируем, а логируем ошибку парсинга
 	if err := json.Unmarshal([]byte(query.Data), &data); err != nil {
-		c.logger.Error("handleCallbackQuery: не удалось распарсить callback data", zap.String("data", query.Data))
+		c.logger.Error("Telegram: Неверный формат callback data", zap.String("data", query.Data), zap.Error(err))
 		return nil
 	}
 
 	action, _ := data["action"].(string)
 	chatID := query.Message.Chat.ID
-	messageID := query.Message.MessageID
+	msgID := query.Message.MessageID
 
 	switch action {
-	// ✅ ДОБАВЬТЕ ЭТИ НОВЫЕ ОБРАБОТЧИКИ:
+	// ---- Управление меню ----
 	case "main_menu":
-		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
+		c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 		return c.sendMainMenu(ctx, chatID)
-
-	case "today_tasks":
-		return c.handleTodayTasksCommand(ctx, chatID, messageID)
-
-	case "overdue_tasks":
-		return c.handleOverdueTasksCommand(ctx, chatID, messageID)
-
-	case "search_start":
-		return c.handleSearchStart(ctx, chatID, messageID)
-
-	// СУЩЕСТВУЮЩИЕ ОБРАБОТЧИКИ (не меняйте):
 	case "show_my_tasks":
-		return c.handleMyTasksCommand(ctx, chatID)
-	case "select_order":
-		orderID, _ := data["order_id"].(float64)
-		return c.handleSelectOrderAction(ctx, chatID, messageID, uint64(orderID))
+		return c.handleMyTasksCommand(ctx, chatID, msgID)
+
+	// ---- Выбор заявки ----
+	case "sel", "select_order":
+		var orderID uint64
+		if idFloat, ok := data["order_id"].(float64); ok {
+			orderID = uint64(idFloat)
+		} else if idFloat, ok := data["id"].(float64); ok {
+			orderID = uint64(idFloat)
+		}
+		return c.handleSelectOrderAction(ctx, chatID, msgID, orderID)
+
+	// ---- Действия в меню редактирования ----
 	case "edit_cancel":
-		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
-		return c.handleMyTasksCommand(ctx, chatID, messageID)
+		c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
+		return c.handleMyTasksCommand(ctx, chatID, msgID)
 	case "edit_save":
-		return c.handleSaveChanges(ctx, chatID, messageID)
+		return c.handleSaveChanges(ctx, chatID, msgID)
 
 	case "edit_status_start":
-		return c.handleEditStatusStart(ctx, chatID, messageID)
-	case "set_status":
-		statusID, _ := data["status_id"].(float64)
-		return c.handleSetSomething(ctx, chatID, "status_id", uint64(statusID), "✅ Статус обновлен!")
-
+		return c.handleEditStatusStart(ctx, chatID, msgID)
 	case "edit_duration_start":
-		return c.handleEditDurationStart(ctx, chatID, messageID)
-	case "set_duration":
-		durationStr, _ := data["value"].(string)
-		return c.handleSetDuration(ctx, chatID, durationStr)
-
+		return c.handleEditDurationStart(ctx, chatID, msgID)
 	case "edit_comment_start":
-		return c.handleEditCommentStart(ctx, chatID, messageID)
-
+		return c.handleEditCommentStart(ctx, chatID, msgID)
 	case "edit_delegate_start":
-		return c.handleDelegateStart(ctx, chatID, messageID)
+		return c.handleDelegateStart(ctx, chatID, msgID)
+
+	case "set_status":
+		if id, ok := data["status_id"].(float64); ok {
+			return c.handleSetSomething(ctx, chatID, "status_id", uint64(id), "✅ Статус!")
+		}
+	case "set_duration":
+		if val, ok := data["value"].(string); ok {
+			return c.handleSetDuration(ctx, chatID, val)
+		}
 	case "set_executor":
-		executorID, _ := data["user_id"].(float64)
-		return c.handleSetSomething(ctx, chatID, "executor_id", uint64(executorID), "✅ Исполнитель назначен!")
+		if id, ok := data["user_id"].(float64); ok {
+			return c.handleSetSomething(ctx, chatID, "executor_id", uint64(id), "✅ Назначен!")
+		}
 
 	default:
-		c.logger.Warn("handleCallbackQuery: получен неизвестный action", zap.String("action", action))
+		c.logger.Warn("Telegram: Неизвестный action в callback", zap.String("action", action))
 	}
 	return nil
 }
 
-func (c *TelegramController) handleSelectOrderAction(ctx context.Context, chatID int64, messageID int, orderID uint64) error {
-	user, _, err := c.prepareUserContext(ctx, chatID)
+func (c *TelegramController) handleSelectOrderAction(ctx context.Context, chatID int64, mid int, orderID uint64) error {
+	u, _, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
 		return err
 	}
 
-	order, err := c.orderService.FindOrderByIDForTelegram(ctx, user.ID, orderID)
+	order, err := c.orderService.FindOrderByIDForTelegram(ctx, u.ID, orderID)
 	if err != nil {
-		if errors.Is(err, apperrors.ErrForbidden) {
-			_ = c.tgService.AnswerCallbackQuery(ctx, "", "⛔ У вас нет прав на редактирование этой заявки.")
-			return nil
-		}
-		c.logger.Error("handleSelectOrderAction: не удалось найти заявку", zap.Error(err))
-		_ = c.tgService.AnswerCallbackQuery(ctx, "", "❌ Ошибка: заявка не найдена.")
+		c.tgService.AnswerCallbackQuery(ctx, "", "Заявка не найдена или нет доступа.")
 		return nil
 	}
 
-	state := dto.NewTelegramState(orderID, messageID)
-	if err := c.setUserState(ctx, chatID, state); err != nil {
-		return c.sendInternalError(ctx, chatID)
-	}
-
-	return c.sendEditMenu(ctx, chatID, messageID, order)
+	state := dto.NewTelegramState(orderID, mid)
+	c.setUserState(ctx, chatID, state)
+	return c.sendEditMenu(ctx, chatID, mid, order)
 }
 
 func (c *TelegramController) handleEditStatusStart(ctx context.Context, chatID int64, messageID int) error {
@@ -1193,50 +1131,52 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 	if err != nil {
 		return c.sendStaleStateError(ctx, chatID, messageID)
 	}
-	state.Mode = "awaiting_executor"
-	if err := c.setUserState(ctx, chatID, state); err != nil {
-		return c.sendInternalError(ctx, chatID)
-	}
 
 	user, err := c.userService.FindUserByTelegramChatID(ctx, chatID)
 	if err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
+
 	order, err := c.orderService.FindOrderByIDForTelegram(ctx, user.ID, state.OrderID)
 	if err != nil {
-		c.logger.Error("handleDelegateStart: не удалось найти заявку", zap.Error(err))
 		return c.sendInternalError(ctx, chatID)
 	}
 
-	userFilter := types.Filter{Filter: make(map[string]interface{}), WithPagination: false}
-
-	if order.DepartmentID != nil && *order.DepartmentID > 0 {
-		userFilter.Filter["department_id"] = *order.DepartmentID
+	filter := types.Filter{Filter: make(map[string]interface{}), WithPagination: false}
+	if order.DepartmentID != nil {
+		filter.Filter["department_id"] = *order.DepartmentID
 	}
 	if order.OtdelID != nil {
-		userFilter.Filter["otdel_id"] = *order.OtdelID
+		filter.Filter["otdel_id"] = *order.OtdelID
 	}
 	if order.BranchID != nil {
-		userFilter.Filter["branch_id"] = *order.BranchID
+		filter.Filter["branch_id"] = *order.BranchID
 	}
 	if order.OfficeID != nil {
-		userFilter.Filter["office_id"] = *order.OfficeID
-	}
-	users, _, err := c.userRepo.GetUsers(ctx, userFilter)
-	if err != nil || len(users) == 0 {
-		text := "Не найдено коллег в подразделении этой заявки. Введите ФИО сотрудника для поиска."
-		return c.tgService.EditMessageText(ctx, chatID, messageID, text)
+		filter.Filter["office_id"] = *order.OfficeID
 	}
 
+	users, _, _ := c.userRepo.GetUsers(ctx, filter)
+
+	text := "Выберите нового исполнителя:"
 	var keyboardRows [][]telegram.InlineKeyboardButton
-	for _, user := range users {
-		callbackData := fmt.Sprintf(`{"action":"set_executor","user_id":%d}`, user.ID)
-		keyboardRows = append(keyboardRows, []telegram.InlineKeyboardButton{{Text: user.Fio, CallbackData: callbackData}})
+
+	if len(users) == 0 {
+		text = "Не найдено коллег в подразделении этой заявки.\n\nВведите ФИО сотрудника для глобального поиска:"
+	} else {
+		for _, u := range users {
+			cb := fmt.Sprintf(`{"action":"set_executor","user_id":%d}`, u.ID)
+			keyboardRows = append(keyboardRows, []telegram.InlineKeyboardButton{{Text: u.Fio, CallbackData: cb}})
+		}
 	}
+
 	keyboardRows = append(keyboardRows, []telegram.InlineKeyboardButton{
 		{Text: "◀️ Назад", CallbackData: fmt.Sprintf(`{"action":"select_order","order_id":%d}`, state.OrderID)},
 	})
-	text := "Выберите нового исполнителя:"
+
+	state.Mode = "awaiting_executor"
+	_ = c.setUserState(ctx, chatID, state)
+
 	return c.tgService.EditMessageText(ctx, chatID, messageID, text, telegram.WithKeyboard(keyboardRows))
 }
 
@@ -1312,102 +1252,101 @@ func (c *TelegramController) handleSetSomething(ctx context.Context, chatID int6
 }
 
 // --- Шаг Финал: Сохранение ---
+// handleSaveChanges собирает изменения из State, формирует Map для SmartUpdate и вызывает сервис
 func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64, messageID int) error {
+	// 1. Подготовка контекста пользователя (права доступа)
 	_, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
 		return err
 	}
 
+	// 2. Получение состояния редактирования из Redis
 	state, err := c.getUserState(ctx, chatID)
 	if err != nil {
 		return c.sendStaleStateError(ctx, chatID, messageID)
 	}
 
+	// 3. Проверка: были ли вообще изменения
 	if !state.HasChanges() {
-		_ = c.tgService.AnswerCallbackQuery(ctx, "", "Вы не внесли никаких изменений.")
+		_ = c.tgService.AnswerCallbackQuery(ctx, "", "Вы не внесли изменений.")
 		return nil
 	}
 
-	// Собираем DTO для обновления (ИСПОЛЬЗУЕМ УКАЗАТЕЛИ, БЕЗ NULL-типов)
-	updateDTO := dto.UpdateOrderDTO{}
-
-	// StatusID
-	if statusID, exists, err := state.GetStatusID(); err != nil {
-		c.logger.Error("handleSaveChanges: ошибка парсинга status_id", zap.Error(err))
-		return c.tgService.EditMessageText(ctx, chatID, messageID, "❌ Ошибка обработки статуса.")
-	} else if exists {
-		updateDTO.StatusID = &statusID
-	}
-
-	// ExecutorID
-	if executorID, exists, err := state.GetExecutorID(); err != nil {
-		c.logger.Error("handleSaveChanges: ошибка парсинга executor_id", zap.Error(err))
-		return c.tgService.EditMessageText(ctx, chatID, messageID, "❌ Ошибка обработки исполнителя.")
-	} else if exists {
-		updateDTO.ExecutorID = &executorID
-	}
-
-	// Comment
-	if comment, exists := state.GetComment(); exists {
-		// Копируем значение, чтобы взять его адрес
-		commentVal := comment
-		updateDTO.Comment = &commentVal
-	}
-
-	// Duration
-	duration, err := state.GetDuration()
+	// Получить текущую заявку для сравнения
+	currentOrder, err := c.orderService.FindOrderByID(ctx, state.OrderID)
 	if err != nil {
-		c.logger.Error("handleSaveChanges: ошибка парсинга duration", zap.Error(err))
-		return c.tgService.EditMessageText(ctx, chatID, messageID, "❌ Ошибка обработки срока.")
+		c.logger.Error("handleSaveChanges: не удалось получить текущую заявку", zap.Error(err))
+		return c.tgService.EditMessageText(ctx, chatID, messageID, "❌ Ошибка при получении данных заявки.")
 	}
 
-	if duration != nil {
-		// Если есть новая дата — ставим указатель
-		updateDTO.Duration = duration
-	} else if _, exists := state.Changes["duration"]; exists {
-		// Если было "очищение" даты: отправляем zero time
-		// (Это компромисс новой системы обновлений)
+	// 4. Сборка DTO и Карты изменений (для SmartUpdate)
+	updateDTO := dto.UpdateOrderDTO{}
+	changesMap := make(map[string]interface{})
+
+	// -- Статус (ТОЛЬКО ЕСЛИ ИЗМЕНИЛСЯ) --
+	if sid, exists, _ := state.GetStatusID(); exists && currentOrder.StatusID != sid {
+		updateDTO.StatusID = &sid
+		changesMap["status_id"] = sid
+	}
+
+	// -- Исполнитель (ТОЛЬКО ЕСЛИ ИЗМЕНИЛСЯ) --
+	if eid, exists, _ := state.GetExecutorID(); exists && (currentOrder.ExecutorID == nil || *currentOrder.ExecutorID != eid) {
+		updateDTO.ExecutorID = &eid
+		changesMap["executor_id"] = eid
+	}
+
+	// -- Комментарий --
+	if com, exists := state.GetComment(); exists && strings.TrimSpace(com) != "" {
+		v := com
+		updateDTO.Comment = &v
+	}
+
+	// -- Срок (Duration) (ТОЛЬКО ЕСЛИ ИЗМЕНИЛСЯ) --
+	dur, _ := state.GetDuration()
+	if dur != nil && (currentOrder.Duration == nil || !currentOrder.Duration.Equal(*dur)) {
+		// Установлена новая дата
+		updateDTO.Duration = dur
+		changesMap["duration"] = dur
+	} else if _, exists := state.Changes["duration"]; exists && currentOrder.Duration != nil {
+		// Если ключ есть в changes -> пользователь нажал "Очистить"
+		changesMap["duration"] = nil
 		zeroTime := time.Time{}
 		updateDTO.Duration = &zeroTime
 	}
 
-	// Вызываем сервис для обновления
-	_, err = c.orderService.UpdateOrder(userCtx, state.OrderID, updateDTO, nil)
+	// 5. Вызов сервиса
+	// 4-й аргумент (файл) = nil
+	// 5-й аргумент (explicitFields) = changesMap <--- ВАЖНО для обнуления полей
+	_, err = c.orderService.UpdateOrder(userCtx, state.OrderID, updateDTO, nil, changesMap)
 	if err != nil {
-		c.logger.Error("handleSaveChanges: ошибка при обновлении заявки", zap.Error(err))
-		return c.tgService.EditMessageText(ctx, chatID, messageID, "❌ Ошибка при сохранении. Попробуйте еще раз.")
+		c.logger.Error("handleSaveChanges: ошибка сохранения", zap.Error(err))
+		return c.tgService.EditMessageText(ctx, chatID, messageID, "❌ Ошибка при сохранении данных.")
 	}
-	c.logger.Info("Заявка успешно обновлена через Telegram",
-		zap.Uint64("orderID", state.OrderID),
-		zap.Int64("chatID", chatID),
-		zap.Any("changes", state.Changes),
-	)
-	// Очищаем состояние
-	_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
-	_ = c.tgService.AnswerCallbackQuery(ctx, "", "💾 Изменения сохранены!")
 
+	// 6. Очистка и уведомление
+	_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
+	_ = c.tgService.AnswerCallbackQuery(ctx, "", "💾 Сохранено!")
+
+	// Возвращаем пользователя к просмотру (или в список, если хочешь handleMyTasksCommand)
 	return c.handleMyTasksCommand(ctx, chatID, messageID)
 }
 
 func (c *TelegramController) prepareUserContext(ctx context.Context, chatID int64) (*entities.User, context.Context, error) {
 	user, err := c.userService.FindUserByTelegramChatID(ctx, chatID)
 	if err != nil {
-		_ = c.tgService.SendMessage(ctx, chatID, "Не удалось найти ваш аккаунт. Пожалуйста, привяжите его на сайте.")
+		c.tgService.SendMessage(ctx, chatID, "Аккаунт не привязан. Используйте /start <код>.")
 		return nil, nil, err
 	}
 
-	userCtx := context.WithValue(ctx, contextkeys.UserIDKey, user.ID)
-	permissions, err := c.authPermissionService.GetAllUserPermissions(userCtx, user.ID)
-	if err != nil {
-		_ = c.tgService.SendMessage(ctx, chatID, "Произошла ошибка при проверке ваших прав доступа.")
-		return nil, nil, err
+	// Контекст с правами
+	uc := context.WithValue(ctx, contextkeys.UserIDKey, user.ID)
+	perms, _ := c.authPermissionService.GetAllUserPermissions(uc, user.ID)
+	pm := make(map[string]bool)
+	for _, p := range perms {
+		pm[p] = true
 	}
-	permissionsMap := make(map[string]bool)
-	for _, p := range permissions {
-		permissionsMap[p] = true
-	}
-	userCtx = context.WithValue(userCtx, contextkeys.UserPermissionsMapKey, permissionsMap)
-	return user, userCtx, nil
+	uc = context.WithValue(uc, contextkeys.UserPermissionsMapKey, pm)
+	return user, uc, nil
 }
 
 func (c *TelegramController) sendEditMenu(ctx context.Context, chatID int64, messageID int, order *entities.Order) error {
@@ -1581,33 +1520,24 @@ func getStatusEmoji(status *entities.Status) string {
 }
 
 // -- Хелперы для работы с состоянием в Redis --
+// thread-safe cache operations
 func (c *TelegramController) getUserState(ctx context.Context, chatID int64) (*dto.TelegramState, error) {
+	c.repoMutex.RLock()
+	defer c.repoMutex.RUnlock()
+
 	stateJSON, err := c.cacheRepo.Get(ctx, fmt.Sprintf(telegramStateKey, chatID))
 	if err != nil || stateJSON == "" {
-		return nil, errors.New("state not found")
+		return nil, errors.New("no state")
 	}
-
-	state, err := dto.FromJSON(stateJSON)
-	if err != nil {
-		c.logger.Error("getUserState: не удалось десериализовать состояние", zap.Error(err))
-		return nil, err
-	}
-
-	return state, nil
+	return dto.FromJSON(stateJSON)
 }
 
 func (c *TelegramController) setUserState(ctx context.Context, chatID int64, state *dto.TelegramState) error {
-	stateJSON, err := state.ToJSON()
-	if err != nil {
-		c.logger.Error("setUserState: не удалось сериализовать состояние", zap.Error(err))
-		return err
-	}
+	c.repoMutex.RLock()
+	defer c.repoMutex.RUnlock()
 
-	err = c.cacheRepo.Set(ctx, fmt.Sprintf(telegramStateKey, chatID), stateJSON, 15*time.Minute)
-	if err != nil {
-		c.logger.Error("setUserState: не удалось сохранить состояние в Redis", zap.Error(err))
-	}
-	return err
+	js, _ := state.ToJSON()
+	return c.cacheRepo.Set(ctx, fmt.Sprintf(telegramStateKey, chatID), js, 15*time.Minute)
 }
 
 // -- Хелперы для отправки сообщений об ошибках --
@@ -1656,7 +1586,6 @@ func (c *TelegramController) StartCleanup(ctx context.Context) {
 	}
 }
 
-// -- Вспомогательные структуры (остаются без изменений) --
 type TelegramUpdate struct {
 	UpdateID      int                    `json:"update_id"`
 	Message       *TelegramMessage       `json:"message"`
@@ -1667,6 +1596,7 @@ type TelegramMessage struct {
 	From      TelegramUser `json:"from"`
 	Chat      TelegramChat `json:"chat"`
 	Text      string       `json:"text"`
+	Date      int64        `json:"date"`
 }
 type TelegramUser struct {
 	ID int64 `json:"id"`

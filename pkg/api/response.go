@@ -2,6 +2,8 @@ package api
 
 import (
 	"github.com/labstack/echo/v4"
+
+	apperrors "request-system/pkg/errors"
 )
 
 type Response[T any] struct {
@@ -61,6 +63,13 @@ func SuccessList[T any](c echo.Context, message string, list []T, total uint64, 
 func ErrorResponse(c echo.Context, err error) error {
 	code := 500
 	msg := err.Error()
+
+	// Для HttpError берем только пользовательское сообщение, без code и технических деталей
+	if httpErr, ok := err.(*apperrors.HttpError); ok {
+		code = httpErr.Code
+		msg = httpErr.Message
+	}
+
 	return c.JSON(code, Response[any]{
 		Status:  false,
 		Message: msg,

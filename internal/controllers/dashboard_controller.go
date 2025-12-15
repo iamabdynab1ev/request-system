@@ -39,7 +39,7 @@ func (ctrl *DashboardController) GetDashboardStats(c echo.Context) error {
 		}
 	}
 
-	// Вызов нового метода
+	
 	stats, err := ctrl.dashboardService.GetDashboardStats(c.Request().Context(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, err, ctrl.logger)

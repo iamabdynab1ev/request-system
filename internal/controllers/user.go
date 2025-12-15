@@ -20,20 +20,37 @@ import (
 
 type UserController struct {
 	userService services.UserServiceInterface
+	adService   services.ADServiceInterface
 	fileStorage filestorage.FileStorageInterface
 	logger      *zap.Logger
 }
 
 func NewUserController(
 	userService services.UserServiceInterface,
+	adService services.ADServiceInterface,
 	fileStorage filestorage.FileStorageInterface,
 	logger *zap.Logger,
 ) *UserController {
 	return &UserController{
 		userService: userService,
+		adService:   adService,
 		fileStorage: fileStorage,
 		logger:      logger,
 	}
+}
+
+func (c *UserController) SearchADUsers(ctx echo.Context) error {
+	searchQuery := ctx.QueryParam("search")
+	if len(searchQuery) < 3 {
+		return c.errorResponse(ctx, apperrors.NewBadRequestError("Поисковый запрос должен содержать минимум 3 символа"))
+	}
+
+	users, err := c.adService.SearchUsers(searchQuery)
+	if err != nil {
+		return c.errorResponse(ctx, err)
+	}
+
+	return utils.SuccessResponse(ctx, users, "Пользователи успешно найдены", http.StatusOK)
 }
 
 func (c *UserController) errorResponse(ctx echo.Context, err error) error {
@@ -42,14 +59,12 @@ func (c *UserController) errorResponse(ctx echo.Context, err error) error {
 
 func (c *UserController) GetUsers(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 
 	res, totalCount, err := c.userService.GetUsers(reqCtx, filter)
 	if err != nil {
 		return c.errorResponse(ctx, err)
 	}
-
 	return utils.SuccessResponse(ctx, res, "Пользователи успешно получены", http.StatusOK, totalCount)
 }
 
@@ -91,22 +106,6 @@ func (c *UserController) CreateUser(ctx echo.Context) error {
 	return utils.SuccessResponse(ctx, res, "Пользователь успешно создан", http.StatusCreated)
 }
 
-func (c *UserController) GetUserPermissions(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
-	if err != nil {
-		return c.errorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID пользователя"))
-	}
-
-	// Вызываем новый метод сервиса
-	res, err := c.userService.GetPermissionDetailsForUser(reqCtx, id)
-	if err != nil {
-		return c.errorResponse(ctx, err)
-	}
-
-	return utils.SuccessResponse(ctx, res, "Права пользователя успешно получены", http.StatusOK)
-}
-
 func (c *UserController) UpdateUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	idFromURL, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
@@ -115,21 +114,24 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 	}
 
 	payload := dto.UpdateUserDTO{ID: idFromURL}
+	var explicitFields map[string]interface{}
 
-	// 2. Читаем JSON из текстового поля 'data'
 	dataString := ctx.FormValue("data")
 	if dataString != "" {
 		if err := json.Unmarshal([]byte(dataString), &payload); err != nil {
-			c.logger.Error("UpdateUser: ошибка десериализации 'data'", zap.Error(err))
+			c.logger.Error("UpdateUser: ошибка десериализации 'data' в DTO", zap.Error(err))
 			return c.errorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный JSON в поле 'data'", err, nil))
 		}
+		if err := json.Unmarshal([]byte(dataString), &explicitFields); err != nil {
+			c.logger.Error("UpdateUser: ошибка десериализации 'data' в map", zap.Error(err))
+			return c.errorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный JSON (map)", err, nil))
+		}
 	}
-	rawRequestBody := []byte(dataString)
-	photoURL, err := c.handlePhotoUpload(ctx, "profile_photo")
+
+	photoURL, err := c.handlePhotoUpload(ctx, constants.UploadContextProfilePhoto.String())
 	if err != nil {
 		return c.errorResponse(ctx, err)
 	}
-
 	if photoURL != nil {
 		payload.PhotoURL = photoURL
 	}
@@ -138,12 +140,54 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 		return c.errorResponse(ctx, err)
 	}
 
-	res, err := c.userService.UpdateUser(reqCtx, payload, rawRequestBody)
+	res, err := c.userService.UpdateUser(reqCtx, payload, explicitFields)
 	if err != nil {
 		return c.errorResponse(ctx, err)
 	}
 
 	return utils.SuccessResponse(ctx, res, "Пользователь успешно обновлен", http.StatusOK)
+}
+
+func (c *UserController) GetUserPermissions(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		return c.errorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID пользователя"))
+	}
+	res, err := c.userService.GetPermissionDetailsForUser(reqCtx, id)
+	if err != nil {
+		return c.errorResponse(ctx, err)
+	}
+	return utils.SuccessResponse(ctx, res, "Права пользователя успешно получены", http.StatusOK)
+}
+
+func (c *UserController) UpdateUserPermissions(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+	userID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		c.logger.Warn("UpdateUserPermissions: некорректный ID", zap.Error(err))
+		return c.errorResponse(ctx, apperrors.NewBadRequestError("Некорректный ID"))
+	}
+	var payload dto.UpdateUserPermissionsDTO
+	if err := ctx.Bind(&payload); err != nil {
+		return c.errorResponse(ctx, apperrors.NewBadRequestError("Неверный формат данных"))
+	}
+	if err := c.userService.UpdateUserPermissions(reqCtx, userID, payload); err != nil {
+		return c.errorResponse(ctx, err)
+	}
+	return utils.SuccessResponse(ctx, nil, "Права обновлены", http.StatusOK)
+}
+
+func (c *UserController) DeleteUser(ctx echo.Context) error {
+	reqCtx := ctx.Request().Context()
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		return c.errorResponse(ctx, apperrors.NewBadRequestError("Неверный ID"))
+	}
+	if err := c.userService.DeleteUser(reqCtx, id); err != nil {
+		return c.errorResponse(ctx, err)
+	}
+	return utils.SuccessResponse(ctx, struct{}{}, "Пользователь удален", http.StatusOK)
 }
 
 func (c *UserController) handlePhotoUpload(ctx echo.Context, uploadContext string) (*string, error) {
@@ -152,79 +196,28 @@ func (c *UserController) handlePhotoUpload(ctx echo.Context, uploadContext strin
 		if err == http.ErrMissingFile {
 			return nil, nil
 		}
-		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Ошибка при чтении файла", err, nil)
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Ошибка чтения файла", err, nil)
 	}
 	src, err := file.Open()
 	if err != nil {
 		return nil, apperrors.ErrInternalServer
 	}
 	defer src.Close()
+
 	if err := validation.ValidateFile(file, src, uploadContext); err != nil {
 		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Файл не прошел валидацию", err, nil)
 	}
-	rules, _ := config.UploadContexts[uploadContext]
-	savedPath, err := c.fileStorage.Save(src, file.Filename, rules.PathPrefix)
+
+	rules, ok := config.UploadContexts[uploadContext]
+	prefix := "uploads"
+	if ok {
+		prefix = rules.PathPrefix
+	}
+
+	savedPath, err := c.fileStorage.Save(src, file.Filename, prefix)
 	if err != nil {
 		return nil, apperrors.ErrInternalServer
 	}
 	fileURL := "/uploads/" + savedPath
 	return &fileURL, nil
-}
-
-func (c *UserController) DeleteUser(ctx echo.Context) error {
-	reqCtx := ctx.Request().Context()
-
-	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
-	if err != nil {
-		return c.errorResponse(ctx, apperrors.NewBadRequestError("Неверный формат ID пользователя"))
-	}
-
-	if err := c.userService.DeleteUser(reqCtx, id); err != nil {
-		return c.errorResponse(ctx, err)
-	}
-
-	return utils.SuccessResponse(ctx, struct{}{}, "Пользователь успешно удален", http.StatusOK)
-}
-
-func (c *UserController) UpdateUserPermissions(ctx echo.Context) error {
-	// ... (парсинг userID из URL `ctx.Param("id")`)
-	// ... (парсинг `dto.UpdateUserPermissionsDTO` из `ctx.Bind(&payload)`)
-	reqCtx := ctx.Request().Context()
-	userID, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
-	if err != nil {
-		c.logger.Warn("UpdateUserPermissions: некорректный ID пользователя", zap.String("id", ctx.Param("id")), zap.Error(err))
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Некорректный ID пользователя",
-				err,
-				map[string]interface{}{"param": ctx.Param("id")},
-			),
-			c.logger,
-		)
-	}
-
-	var payload dto.UpdateUserPermissionsDTO
-	if err := ctx.Bind(&payload); err != nil {
-		c.logger.Warn("UpdateUserPermissions: неверный запрос (bind)", zap.Error(err))
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Неверный формат запроса для обновления индивидуальных прав пользователя",
-				err,
-				nil,
-			),
-			c.logger,
-		)
-	}
-
-	if err := ctx.Validate(&payload); err != nil {
-		c.logger.Warn("UpdateUserPermissions: ошибка валидации DTO", zap.Error(err))
-		return utils.ErrorResponse(ctx, err, c.logger)
-	}
-	if err := c.userService.UpdateUserPermissions(reqCtx, userID, payload); err != nil {
-		return utils.ErrorResponse(ctx, err, c.logger)
-	}
-
-	return utils.SuccessResponse(ctx, nil, "Индивидуальные права пользователя успешно обновлены", http.StatusOK)
 }

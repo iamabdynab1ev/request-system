@@ -72,6 +72,16 @@ type LDAPConfig struct {
 	Host    string
 	Port    int
 	Domain  string
+
+	// Параметры поиска
+	SearchEnabled       bool
+	BindDN              string
+	BindPassword        string
+	SearchBaseDN        string
+	SearchFilterPattern string
+	SearchAttributes    []string
+	UsernameAttribute   string
+	FIOAttribute        string
 }
 type Config struct {
 	Server       ServerConfig
@@ -96,6 +106,7 @@ func New() *Config {
 	}
 	telegramAdvancedMode := strings.ToLower(getEnv("TELEGRAM_ADVANCED_MODE_ENABLED", "false")) == "true"
 	ldapEnabled := strings.ToLower(getEnv("LDAP_ENABLED", "false")) == "true"
+	ldapSearchEnabled := strings.ToLower(getEnv("LDAP_SEARCH_ENABLED", "false")) == "true"
 	return &Config{
 		Server: ServerConfig{
 			Port:           getEnv("SERVER_PORT", "8080"),
@@ -145,6 +156,15 @@ func New() *Config {
 			Host:    getEnv("LDAP_HOST", "arvand.local"),
 			Port:    ldapPort,
 			Domain:  getEnv("LDAP_DOMAIN", "arvand"),
+
+			SearchEnabled:       ldapSearchEnabled,
+			BindDN:              getEnv("LDAP_BIND_DN", ""),
+			BindPassword:        getEnv("LDAP_BIND_PASSWORD", ""),
+			SearchBaseDN:        getEnv("LDAP_SEARCH_BASE_DN", "DC=arvand,DC=local"),
+			SearchFilterPattern: getEnv("LDAP_SEARCH_FILTER_PATTERN", "(&(objectClass=person)(|(sAMAccountName=*%s*)(displayName=*%s*)))"),
+			SearchAttributes:    strings.Split(getEnv("LDAP_SEARCH_ATTRIBUTES", "sAMAccountName,displayName"), ","),
+			UsernameAttribute:   getEnv("LDAP_SEARCH_ATTR_USERNAME", "sAMAccountName"),
+			FIOAttribute:        getEnv("LDAP_SEARCH_ATTR_FIO", "displayName"),
 		},
 	}
 }

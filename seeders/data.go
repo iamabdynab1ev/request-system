@@ -111,6 +111,7 @@ var permissionsData = []struct {
 	{"integration:view", "Позволяет просматривать статус и информацию по интеграциям"},
 	{"integration:sync:run", "Даёт право запускать ручную синхронизацию данных"},
 	{"integration:update", "Позволяет изменять настройки интеграций (адреса, ключи)"},
+	{"user:manage_ad_link", "Управление привязкой логина Active Directory"},
 }
 
 var statusesData = []struct {

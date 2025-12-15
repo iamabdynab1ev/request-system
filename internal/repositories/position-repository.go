@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	sq "github.com/Masterminds/squirrel"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,24 +25,41 @@ const (
 	positionFields = `id, name, department_id, otdel_id, branch_id, office_id, "type", status_id, created_at, updated_at, external_id, source_system`
 )
 
-var (
-	positionAllowedFilterFields = map[string]string{ /*...*/ }
-	positionAllowedSortFields   = map[string]bool{ /*...*/ }
-)
+// allowedPositionFilters - БЕЛЫЙ СПИСОК для фильтрации (защита от SQL Injection)
+var allowedPositionFilters = map[string]string{
+	"id":            "id",
+	"name":          "name",
+	"status_id":     "status_id",
+	"type":          "type",
+	"department_id": "department_id",
+	"otdel_id":      "otdel_id",
+	"branch_id":     "branch_id",
+	"office_id":     "office_id",
+}
 
-// PositionRepositoryInterface - ИНТЕРФЕЙС ОБНОВЛЕН
+// allowedPositionSortFields - БЕЛЫЙ СПИСОК для сортировки
+var allowedPositionSortFields = map[string]bool{
+	"id":         true,
+	"name":       true,
+	"created_at": true,
+	"updated_at": true,
+	"status_id":  true,
+	"type":       true,
+}
+
 type PositionRepositoryInterface interface {
-	// Старые методы
+	// CRUD операции
 	FindByID(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Position, error)
 	GetAll(ctx context.Context, filter types.Filter) ([]*entities.Position, uint64, error)
-	FindByTypeAndOrg(ctx context.Context, tx pgx.Tx, posType string, depID *uint64, otdelID *uint64) ([]*entities.Position, error)
-	Delete(ctx context.Context, tx pgx.Tx, id int) error
-
-	// Методы для синхронизации. Имена сохранены, сигнатуры обновлены.
 	Create(ctx context.Context, tx pgx.Tx, p entities.Position) (uint64, error)
 	Update(ctx context.Context, tx pgx.Tx, id uint64, p entities.Position) error
+	Delete(ctx context.Context, tx pgx.Tx, id int) error
+
+	// Специальные поиски
 	FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Position, error)
 	FindByName(ctx context.Context, tx pgx.Tx, name string) (*entities.Position, error)
+	FindByTypeAndOrg(ctx context.Context, tx pgx.Tx, posType string, depID *uint64, otdelID *uint64) ([]*entities.Position, error)
+	FindIDByType(ctx context.Context, tx pgx.Tx, typeName string) (uint64, error)
 }
 
 type positionRepository struct {
@@ -53,8 +71,15 @@ func NewPositionRepository(storage *pgxpool.Pool, logger *zap.Logger) PositionRe
 	return &positionRepository{storage: storage, logger: logger}
 }
 
-// scanRow - обновлена для сканирования всех полей.
+// getQuerier - возвращает транзакцию или пул соединений
+func (r *positionRepository) getQuerier(tx pgx.Tx) Querier {
+	if tx != nil {
+		return tx
+	}
+	return r.storage
+}
 
+// scanRow - универсальное сканирование одной позиции
 func (r *positionRepository) scanRow(row pgx.Row) (*entities.Position, error) {
 	var p entities.Position
 	var externalID, sourceSystem sql.NullString
@@ -81,21 +106,69 @@ func (r *positionRepository) scanRow(row pgx.Row) (*entities.Position, error) {
 	return &p, nil
 }
 
+// findOnePosition - универсальный поиск одной позиции
+func (r *positionRepository) findOnePosition(ctx context.Context, querier Querier, where sq.Eq) (*entities.Position, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select(positionFields).From(positionTable).Where(where).ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("ошибка сборки SQL для findOnePosition: %w", err)
+	}
+	return r.scanRow(querier.QueryRow(ctx, query, args...))
+}
+
+// ============================================================
+// CRUD ОПЕРАЦИИ
+// ============================================================
+
+func (r *positionRepository) FindByID(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Position, error) {
+	return r.findOnePosition(ctx, r.getQuerier(tx), sq.Eq{"id": id})
+}
+
+func (r *positionRepository) FindByName(ctx context.Context, tx pgx.Tx, name string) (*entities.Position, error) {
+	return r.findOnePosition(ctx, r.getQuerier(tx), sq.Eq{"name": name})
+}
+
+func (r *positionRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Position, error) {
+	return r.findOnePosition(ctx, r.getQuerier(tx), sq.Eq{"external_id": externalID, "source_system": sourceSystem})
+}
+
+func (r *positionRepository) FindIDByType(ctx context.Context, tx pgx.Tx, typeName string) (uint64, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select("id").
+		From(positionTable).
+		Where(sq.Eq{"type": typeName}).
+		Limit(1).
+		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("ошибка сборки запроса FindIDByType: %w", err)
+	}
+
+	var id uint64
+	if err := r.getQuerier(tx).QueryRow(ctx, query, args...).Scan(&id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, apperrors.ErrNotFound
+		}
+		return 0, err
+	}
+	return id, nil
+}
+
 func (r *positionRepository) Create(ctx context.Context, tx pgx.Tx, p entities.Position) (uint64, error) {
-	query := `
-		INSERT INTO positions (name, department_id, otdel_id, branch_id, office_id, "type", status_id, external_id, source_system, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW()) 
-		RETURNING id`
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Insert(positionTable).
+		Columns("name", "department_id", "otdel_id", "branch_id", "office_id", "type", "status_id", "external_id", "source_system", "created_at", "updated_at").
+		Values(p.Name, p.DepartmentID, p.OtdelID, p.BranchID, p.OfficeID, p.Type, p.StatusID, p.ExternalID, p.SourceSystem, sq.Expr("NOW()"), sq.Expr("NOW()")).
+		Suffix("RETURNING id").
+		ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("ошибка сборки запроса Create: %w", err)
+	}
 
 	var newID uint64
-	err := tx.QueryRow(ctx, query,
-		p.Name, p.DepartmentID, p.OtdelID, p.BranchID, p.OfficeID,
-		p.Type, p.StatusID, p.ExternalID, p.SourceSystem,
-	).Scan(&newID)
-	if err != nil {
+	if err := tx.QueryRow(ctx, query, args...).Scan(&newID); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return 0, fmt.Errorf("должность с таким external_id или именем уже существует: %w", apperrors.ErrConflict)
+			return 0, fmt.Errorf("должность с такими уникальными параметрами уже существует: %w", apperrors.ErrConflict)
 		}
 		return 0, fmt.Errorf("ошибка создания positions: %w", err)
 	}
@@ -103,15 +176,23 @@ func (r *positionRepository) Create(ctx context.Context, tx pgx.Tx, p entities.P
 }
 
 func (r *positionRepository) Update(ctx context.Context, tx pgx.Tx, id uint64, p entities.Position) error {
-	query := `
-		UPDATE positions SET 
-			name = $1, department_id = $2, otdel_id = $3, branch_id = $4,
-			office_id = $5, "type" = $6, status_id = $7, updated_at = NOW() 
-		WHERE id = $8`
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Update(positionTable).
+		Set("name", p.Name).
+		Set("department_id", p.DepartmentID).
+		Set("otdel_id", p.OtdelID).
+		Set("branch_id", p.BranchID).
+		Set("office_id", p.OfficeID).
+		Set("type", p.Type).
+		Set("status_id", p.StatusID).
+		Set("updated_at", sq.Expr("NOW()")).
+		Where(sq.Eq{"id": id}).
+		ToSql()
+	if err != nil {
+		return fmt.Errorf("ошибка сборки запроса Update: %w", err)
+	}
 
-	result, err := tx.Exec(ctx, query,
-		p.Name, p.DepartmentID, p.OtdelID, p.BranchID, p.OfficeID,
-		p.Type, p.StatusID, id)
+	result, err := tx.Exec(ctx, query, args...)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -126,38 +207,18 @@ func (r *positionRepository) Update(ctx context.Context, tx pgx.Tx, id uint64, p
 	return nil
 }
 
-func (r *positionRepository) findOnePosition(ctx context.Context, querier Querier, where sq.Eq) (*entities.Position, error) {
-	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	query, args, err := psql.Select(positionFields).From(positionTable).Where(where).ToSql()
-	if err != nil {
-		return nil, err
-	}
-	return r.scanRow(querier.QueryRow(ctx, query, args...))
-}
-
-func (r *positionRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Position, error) {
-	var querier Querier = r.storage
-	if tx != nil {
-		querier = tx
-	}
-	return r.findOnePosition(ctx, querier, sq.Eq{"external_id": externalID, "source_system": sourceSystem})
-}
-
-func (r *positionRepository) FindByID(ctx context.Context, tx pgx.Tx, id uint64) (*entities.Position, error) {
-	var querier Querier = r.storage
-	if tx != nil {
-		querier = tx
-	}
-	return r.findOnePosition(ctx, querier, sq.Eq{"id": id})
-}
-
 func (r *positionRepository) Delete(ctx context.Context, tx pgx.Tx, id int) error {
-	query := `DELETE FROM positions WHERE id = $1`
-	result, err := tx.Exec(ctx, query, id)
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Delete(positionTable).Where(sq.Eq{"id": id}).ToSql()
+	if err != nil {
+		return fmt.Errorf("ошибка сборки запроса Delete: %w", err)
+	}
+
+	result, err := tx.Exec(ctx, query, args...)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			return apperrors.NewHttpError(http.StatusBadRequest, "Должность используется и не может быть удалена", err, nil)
+			return apperrors.NewHttpError(http.StatusBadRequest, "Запись не может быть удалена, так как она используется", err, nil)
 		}
 		return fmt.Errorf("ошибка удаления positions: %w", err)
 	}
@@ -167,73 +228,105 @@ func (r *positionRepository) Delete(ctx context.Context, tx pgx.Tx, id int) erro
 	return nil
 }
 
+// ============================================================
+// GetAll - ИСПРАВЛЕНО: правильная пагинация как у Orders
+// ============================================================
 func (r *positionRepository) GetAll(ctx context.Context, filter types.Filter) ([]*entities.Position, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	baseBuilder := psql.Select().From(positionTable)
-	// ФИЛЬТРАЦИЯ
-	if len(filter.Filter) > 0 {
-		for key, value := range filter.Filter {
-			if dbColumn, ok := positionAllowedFilterFields[key]; ok {
-				if items, ok := value.(string); ok && strings.Contains(items, ",") {
-					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: strings.Split(items, ",")})
-				} else {
-					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: value})
-				}
+
+	// ============================================
+	// ЗАПРОС №1: COUNT (только WHERE, без сортировки и пагинации)
+	// ============================================
+	countBuilder := psql.Select("COUNT(id)").From(positionTable)
+
+	// ПОИСК
+	if filter.Search != "" {
+		countBuilder = countBuilder.Where(sq.ILike{"name": "%" + filter.Search + "%"})
+	}
+
+	// ФИЛЬТРЫ (динамические через белый список)
+	for key, value := range filter.Filter {
+		if dbColumn, ok := allowedPositionFilters[key]; ok {
+			// Поддержка множественных значений через запятую
+			if items, ok := value.(string); ok && strings.Contains(items, ",") {
+				countBuilder = countBuilder.Where(sq.Eq{dbColumn: strings.Split(items, ",")})
+			} else {
+				countBuilder = countBuilder.Where(sq.Eq{dbColumn: value})
 			}
 		}
 	}
 
-	// ПОИСК
-	if filter.Search != "" {
-		baseBuilder = baseBuilder.Where(sq.ILike{"name": "%" + filter.Search + "%"})
-	}
-
-	// ПОДСЧЕТ
-	countBuilder := baseBuilder.Columns("COUNT(id)")
+	// Выполняем COUNT
 	countQuery, countArgs, err := countBuilder.ToSql()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("ошибка сборки SQL count: %w", err)
 	}
+
 	var total uint64
 	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("ошибка выполнения count: %w", err)
 	}
+
+	// Если записей нет - сразу возвращаем пустой результат
 	if total == 0 {
 		return []*entities.Position{}, 0, nil
 	}
 
-	// ВЫБОРКА + СОРТИРОВКА + ПАГИНАЦИЯ
-	selectBuilder := baseBuilder.Columns(positionFields)
+	// ============================================
+	// ЗАПРОС №2: SELECT (WHERE + SORT + PAGINATION)
+	// ============================================
+	selectBuilder := psql.Select(positionFields).From(positionTable)
 
-	// СОРТИРОВКА
+	// Применяем ТЕ ЖЕ условия что и в COUNT
+	if filter.Search != "" {
+		selectBuilder = selectBuilder.Where(sq.ILike{"name": "%" + filter.Search + "%"})
+	}
+
+	for key, value := range filter.Filter {
+		if dbColumn, ok := allowedPositionFilters[key]; ok {
+			if items, ok := value.(string); ok && strings.Contains(items, ",") {
+				selectBuilder = selectBuilder.Where(sq.Eq{dbColumn: strings.Split(items, ",")})
+			} else {
+				selectBuilder = selectBuilder.Where(sq.Eq{dbColumn: value})
+			}
+		}
+	}
+
+	// СОРТИРОВКА (динамическая через белый список)
 	if len(filter.Sort) > 0 {
 		for field, direction := range filter.Sort {
-			if _, ok := positionAllowedSortFields[field]; ok {
+			if _, ok := allowedPositionSortFields[field]; ok {
 				safeDirection := "ASC"
 				if strings.ToUpper(direction) == "DESC" {
 					safeDirection = "DESC"
 				}
-				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("%s %s", field, safeDirection))
+				selectBuilder = selectBuilder.OrderBy(field + " " + safeDirection)
 			}
 		}
 	} else {
+		// Сортировка по умолчанию
 		selectBuilder = selectBuilder.OrderBy("id DESC")
 	}
 
 	// ПАГИНАЦИЯ
 	if filter.WithPagination {
-		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
+		if filter.Limit > 0 {
+			selectBuilder = selectBuilder.Limit(uint64(filter.Limit))
+		}
+		if filter.Offset >= 0 {
+			selectBuilder = selectBuilder.Offset(uint64(filter.Offset))
+		}
 	}
 
-	// ВЫПОЛНЕНИЕ
+	// Выполняем SELECT
 	query, args, err := selectBuilder.ToSql()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("ошибка сборки SQL select: %w", err)
 	}
 
 	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("ошибка выполнения select: %w", err)
 	}
 	defer rows.Close()
 
@@ -241,12 +334,17 @@ func (r *positionRepository) GetAll(ctx context.Context, filter types.Filter) ([
 	for rows.Next() {
 		pos, err := r.scanRow(rows)
 		if err != nil {
+			r.logger.Error("Ошибка сканирования position", zap.Error(err))
 			return nil, 0, err
 		}
 		positions = append(positions, pos)
 	}
 
-	return positions, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("ошибка итерации rows: %w", err)
+	}
+
+	return positions, total, nil
 }
 
 func (r *positionRepository) FindByTypeAndOrg(ctx context.Context, tx pgx.Tx, posType string, depID *uint64, otdelID *uint64) ([]*entities.Position, error) {
@@ -268,14 +366,9 @@ func (r *positionRepository) FindByTypeAndOrg(ctx context.Context, tx pgx.Tx, po
 		return nil, fmt.Errorf("ошибка сборки запроса FindByTypeAndOrg: %w", err)
 	}
 
-	var querier Querier = r.storage
-	if tx != nil {
-		querier = tx
-	}
-
-	rows, err := querier.Query(ctx, query, args...)
+	rows, err := r.getQuerier(tx).Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ошибка выполнения FindByTypeAndOrg: %w", err)
 	}
 	defer rows.Close()
 
@@ -287,13 +380,10 @@ func (r *positionRepository) FindByTypeAndOrg(ctx context.Context, tx pgx.Tx, po
 		}
 		positions = append(positions, pos)
 	}
-	return positions, rows.Err()
-}
 
-func (r *positionRepository) FindByName(ctx context.Context, tx pgx.Tx, name string) (*entities.Position, error) {
-	var querier Querier = r.storage
-	if tx != nil {
-		querier = tx
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ошибка итерации rows в FindByTypeAndOrg: %w", err)
 	}
-	return r.findOnePosition(ctx, querier, sq.Eq{"name": name})
+
+	return positions, nil
 }

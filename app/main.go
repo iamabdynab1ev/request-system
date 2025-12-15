@@ -169,12 +169,13 @@ func main() {
 		mainLogger.Named("NotificationListener"),
 	)
 	notificationListener.Register(bus)
+	adLogger, _ := logger.CreateLogger(logLevel, "ad_service")
+	adService := services.NewADService(&cfg.LDAP, adLogger)
 
 	appCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Инициализируем роутеры (включая Telegram), передаём контекст
-	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, appCtx)
+	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, adService, appCtx)
 
 	mainLogger.Info("🚀 Сервер запущен на :8080")
 

@@ -46,21 +46,26 @@ type UpdateUserPermissionsDTO struct {
 }
 
 type UserDTO struct {
-	ID          uint64 `json:"id"`
-	Fio         string `json:"fio"`
-	Email       string `json:"email"`
-	PhoneNumber string `json:"phone_number"`
+	ID          uint64  `json:"id"`
+	Fio         string  `json:"fio"`
+	Email       string  `json:"email"`
+	PhoneNumber string  `json:"phone_number"`
+	Username    *string `json:"username"`
 
 	PositionID *uint64 `json:"position_id"`
 	StatusID   uint64  `json:"status_id"`
 	StatusCode string  `json:"status_code,omitempty"`
 
-	BranchID     *uint64 `json:"branch_id"`
-	DepartmentID *uint64 `json:"department_id"`
-	OfficeID     *uint64 `json:"office_id"`
-	OtdelID      *uint64 `json:"otdel_id"`
-
-	RoleIDs []uint64 `json:"role_ids"`
+	BranchID       *uint64  `json:"branch_id"`
+	DepartmentID   *uint64  `json:"department_id"`
+	OfficeID       *uint64  `json:"office_id"`
+	OtdelID        *uint64  `json:"otdel_id"`
+	BranchName     *string  `json:"branch_name,omitempty"`
+	DepartmentName *string  `json:"department_name,omitempty"`
+	PositionName   *string  `json:"position_name,omitempty"`
+	OtdelName      *string  `json:"otdel_name,omitempty"`
+	OfficeName     *string  `json:"office_name,omitempty"`
+	RoleIDs        []uint64 `json:"role_ids"`
 
 	PhotoURL           *string `json:"photo_url,omitempty"`
 	MustChangePassword bool    `json:"must_change_password"`

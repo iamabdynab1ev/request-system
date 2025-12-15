@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"request-system/internal/authz"
@@ -14,7 +15,6 @@ import (
 	"request-system/internal/entities"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
-	"request-system/pkg/types"
 	"request-system/pkg/utils"
 
 	"github.com/jackc/pgx/v5"
@@ -91,7 +91,10 @@ func toResponseDTO(entity *entities.OrderType) *dto.OrderTypeResponseDTO {
 	return resp
 }
 
+// Файл: internal/services/order_type_service.go
+
 func (s *OrderTypeService) Create(ctx context.Context, createDTO dto.CreateOrderTypeDTO) (*dto.OrderTypeResponseDTO, error) {
+	// 1. Права
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -100,38 +103,55 @@ func (s *OrderTypeService) Create(ctx context.Context, createDTO dto.CreateOrder
 		return nil, apperrors.ErrForbidden
 	}
 
-	var newID int
-	now := time.Now()
+	// 2. Генерация Кода
+	finalCode := ""
+	if createDTO.Code != nil && *createDTO.Code != "" {
+		finalCode = utils.GenerateCodeFromName(*createDTO.Code)
+	} else {
+		finalCode = utils.GenerateCodeFromName(createDTO.Name)
+	}
+	if finalCode == "" {
+		finalCode = fmt.Sprintf("TYPE_%d", time.Now().UnixNano())
+	}
+	// Указатель для структуры
+	codePtr := &finalCode
 
-	orderTypeEntity := &entities.OrderType{
-		Name:       createDTO.Name,
-		Code:       createDTO.Code,
-		StatusID:   createDTO.StatusID,
-		BaseEntity: types.BaseEntity{CreatedAt: &now, UpdatedAt: &now},
+	// 3. Создаем структуру (БЕЗ полей времени, чтобы не было ошибки unknown field)
+	entity := &entities.OrderType{
+		Name:     createDTO.Name,
+		Code:     codePtr,
+		StatusID: createDTO.StatusID,
 	}
 
+	// 4. Транзакция
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		nameExists, err := s.repo.ExistsByName(ctx, tx, createDTO.Name, 0)
+		// Уникальность имени
+		nameExists, err := s.repo.ExistsByName(ctx, tx, entity.Name, 0)
 		if err != nil {
 			return err
 		}
 		if nameExists {
-			return apperrors.NewHttpError(http.StatusBadRequest, "Тип заявки с таким названием уже существует", nil, nil)
+			return apperrors.NewHttpError(http.StatusConflict, fmt.Sprintf("Тип заявки с именем '%s' уже существует.", entity.Name), nil, nil)
 		}
 
-		codeExists, err := s.repo.ExistsByCode(ctx, tx, createDTO.Code, 0)
+		// Уникальность кода
+		codeExists, err := s.repo.ExistsByCode(ctx, tx, entity.Code, 0)
 		if err != nil {
 			return err
 		}
 		if codeExists {
-			return apperrors.NewHttpError(http.StatusBadRequest, "Тип заявки с таким кодом уже существует", nil, nil)
+			// Если занят, добавляем случайные цифры
+			suffix := strconv.FormatInt(time.Now().Unix()%1000, 10)
+			newCode := *entity.Code + "_" + suffix
+			entity.Code = &newCode
 		}
 
-		createdID, errTx := s.repo.Create(ctx, tx, orderTypeEntity)
-		if errTx != nil {
-			return errTx
+		id, err := s.repo.Create(ctx, tx, entity)
+		if err != nil {
+			return err
 		}
-		newID = createdID
+
+		entity.ID = int(id)
 		return nil
 	})
 	if err != nil {
@@ -139,13 +159,7 @@ func (s *OrderTypeService) Create(ctx context.Context, createDTO dto.CreateOrder
 		return nil, err
 	}
 
-	createdEntity, err := s.repo.FindByID(ctx, newID)
-	if err != nil {
-		s.logger.Error("Не удалось получить созданный тип заявки по ID", zap.Int("id", newID), zap.Error(err))
-		return nil, err
-	}
-
-	return toResponseDTO(createdEntity), nil
+	return s.GetByID(ctx, entity.ID)
 }
 
 func (s *OrderTypeService) Update(ctx context.Context, id int, updateDTO dto.UpdateOrderTypeDTO) (*dto.OrderTypeResponseDTO, error) {
@@ -275,7 +289,8 @@ func (s *OrderTypeService) GetAll(ctx context.Context, limit, offset uint64, sea
 }
 
 func (s *OrderTypeService) GetConfig(ctx context.Context, orderTypeID uint64) (map[string]interface{}, error) {
-	var result *RuleEngineResult
+	var result *RoutingResult
+
 	err := s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		res, errTx := s.ruleEngine.GetPredefinedRoute(ctx, tx, orderTypeID)
 		if errTx != nil {
@@ -286,14 +301,11 @@ func (s *OrderTypeService) GetConfig(ctx context.Context, orderTypeID uint64) (m
 	})
 	if err != nil {
 		if errors.Is(err, apperrors.ErrNotFound) {
-			// Если жесткого правила нет, это не ошибка. Просто нет преднастроек.
 			return map[string]interface{}{"is_locked": false}, nil
 		}
-		// Другая, реальная ошибка
 		return nil, err
 	}
 
-	// Если нашли жесткий маршрут
 	return map[string]interface{}{
 		"is_locked": true,
 		"prefilled_data": map[string]interface{}{

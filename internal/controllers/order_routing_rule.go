@@ -4,6 +4,7 @@ package controllers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -43,6 +44,8 @@ func (c *OrderRoutingRuleController) Create(ctx echo.Context) error {
 
 func (c *OrderRoutingRuleController) Update(ctx echo.Context) error {
 	id, _ := strconv.Atoi(ctx.Param("id"))
+	idParam := ctx.Param("id")
+	fmt.Printf("\n🚀 [DEBUG] UPDATE вызван! ID из URL: %s, Метод: %s\n\n", idParam, ctx.Request().Method)
 	rawBody, err := io.ReadAll(ctx.Request().Body)
 	if err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Не удалось прочитать тело запроса", err, nil), c.logger)

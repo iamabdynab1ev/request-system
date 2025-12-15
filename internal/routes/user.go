@@ -14,6 +14,7 @@ func runUserRouter(
 	userCtrl *controllers.UserController, // <<< ПРИНИМАЕМ ГОТОВЫЙ КОНТРОЛЛЕР
 	authMW *middleware.AuthMiddleware,
 ) {
+	secureGroup.GET("/ad-users", userCtrl.SearchADUsers, authMW.AuthorizeAny(authz.UserManageADLink))
 	users := secureGroup.Group("/user")
 	{
 		users.POST("", userCtrl.CreateUser, authMW.AuthorizeAny(authz.UsersCreate))

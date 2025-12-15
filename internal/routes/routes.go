@@ -38,6 +38,7 @@ func InitRouter(
 	cfg *config.Config,
 	bus *eventbus.Bus,
 	wsHub *websocket.Hub,
+	adService services.ADServiceInterface,
 	appCtx context.Context,
 ) {
 	loggers.Main.Info("InitRouter: Начало создания маршрутов")
@@ -73,7 +74,7 @@ func InitRouter(
 	dashboardRepo := repositories.NewDashboardRepository(dbConn, loggers.Main)
 
 	// --- 2. СЕРВИСЫ ---
-	ruleEngineService := services.NewRuleEngineService(ruleRepo, userRepo, positionRepo, loggers.Main)
+	ruleEngineService := services.NewRuleEngineService(ruleRepo, userRepo, loggers.Main)
 	roleService := services.NewRoleService(roleRepo, userRepo, statusRepo, authPermissionService, loggers.Main)
 	permissionService := services.NewPermissionService(permissionRepo, userRepo, loggers.Main)
 	rpService := services.NewRolePermissionService(rpRepo, userRepo, authPermissionService, loggers.Main)
@@ -97,12 +98,12 @@ func InitRouter(
 
 	// --- 3. КОНТРОЛЛЕРЫ ---
 	// Создаем ВСЕ контроллеры здесь, в одном месте.
-	userController := controllers.NewUserController(userService, fileStorage, loggers.User)
+	userController := controllers.NewUserController(userService, adService, fileStorage, loggers.User)
 	historyController := controllers.NewOrderHistoryController(historyService, orderService, loggers.OrderHistory)
 	wsController := controllers.NewWebSocketController(wsHub, jwtSvc, loggers.Main)
 	dashboardController := controllers.NewDashboardController(dashboardService, loggers.Main.Named("Dashboard"))
 
-	// --- 3. РОУТЕРЫ ---
+	// --- 4. РОУТЕРЫ ---
 	secureGroup := api.Group("", authMW.Auth)
 
 	runReportRouter(secureGroup, reportService, loggers.Main, authMW)
@@ -136,8 +137,7 @@ func InitRouter(
 
 	// для интеграции
 	runSyncRouter(api, dbConn, cfg, loggers)
-
-	// Регистрируем новый маршрут для дашборда
+	// Dashboard
 	secureGroup.GET("/dashboard", dashboardController.GetDashboardStats)
 
 	loggers.Main.Info("INIT_ROUTER: Создание маршрутов завершено")

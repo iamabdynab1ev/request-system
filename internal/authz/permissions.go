@@ -145,4 +145,7 @@ const (
 
 	// Дает право изменять настройки интеграций (в будущем)
 	IntegrationsUpdate = "integration:update"
+
+	// Active Directory
+	UserManageADLink = "user:manage_ad_link"
 )

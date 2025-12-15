@@ -70,6 +70,7 @@ type Position1CDTO struct {
 type User1CDTO struct {
 	ExternalID           string  `json:"externalId"`
 	Fio                  string  `json:"fio"`
+	Username             string  `json:"username"`
 	Email                string  `json:"email"`
 	PhoneNumber          string  `json:"phoneNumber"`
 	IsActive             bool    `json:"isActive"`

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
@@ -24,8 +25,8 @@ type HTTPResponse struct {
 }
 
 const (
-	DefaultLimit = 200
-	MaxLimit     = 500
+	DefaultLimit = 500
+	MaxLimit     = 1000
 )
 
 func StringPtr(s string) *string {
@@ -259,4 +260,24 @@ func ErrorResponse(c echo.Context, err error, logger *zap.Logger) error {
 		"status":  false,
 		"message": "Внутренняя ошибка сервера",
 	})
+}
+
+func TimeEqual(old, new *time.Time) bool {
+	if old == nil && new == nil {
+		return true
+	}
+	if old == nil || new == nil {
+		return false
+	}
+	return old.Equal(*new)
+}
+
+func StringPtrEqual(old, new *string) bool {
+	if old == nil && new == nil {
+		return true
+	}
+	if old == nil || new == nil {
+		return false
+	}
+	return *old == *new
 }

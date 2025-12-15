@@ -2,7 +2,7 @@ package services
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -29,7 +29,7 @@ type OrderRoutingRuleServiceInterface interface {
 type OrderRoutingRuleService struct {
 	repo          repositories.OrderRoutingRuleRepositoryInterface
 	userRepo      repositories.UserRepositoryInterface
-	positionRepo  repositories.PositionRepositoryInterface // <-- ДОБАВЛЕНО
+	positionRepo  repositories.PositionRepositoryInterface
 	orderTypeRepo repositories.OrderTypeRepositoryInterface
 	txManager     repositories.TxManagerInterface
 	logger        *zap.Logger
@@ -38,7 +38,7 @@ type OrderRoutingRuleService struct {
 func NewOrderRoutingRuleService(
 	r repositories.OrderRoutingRuleRepositoryInterface,
 	u repositories.UserRepositoryInterface,
-	p repositories.PositionRepositoryInterface, // <-- ДОБАВЛЕНО
+	p repositories.PositionRepositoryInterface,
 	tm repositories.TxManagerInterface,
 	l *zap.Logger,
 	otr repositories.OrderTypeRepositoryInterface,
@@ -46,7 +46,7 @@ func NewOrderRoutingRuleService(
 	return &OrderRoutingRuleService{
 		repo:          r,
 		userRepo:      u,
-		positionRepo:  p, // <-- ДОБАВЛЕНО
+		positionRepo:  p,
 		txManager:     tm,
 		logger:        l,
 		orderTypeRepo: otr,
@@ -64,6 +64,8 @@ func (s *OrderRoutingRuleService) toResponseDTO(ctx context.Context, entity *ent
 		OrderTypeID:  entity.OrderTypeID,
 		DepartmentID: entity.DepartmentID,
 		OtdelID:      entity.OtdelID,
+		BranchID:     entity.BranchID,
+		OfficeID:     entity.OfficeID,
 		PositionID:   entity.PositionID,
 		StatusID:     entity.StatusID,
 		CreatedAt:    entity.CreatedAt.Format(time.RFC3339),
@@ -72,19 +74,30 @@ func (s *OrderRoutingRuleService) toResponseDTO(ctx context.Context, entity *ent
 
 	if entity.PositionID != nil {
 		pos, err := s.positionRepo.FindByID(ctx, nil, uint64(*entity.PositionID))
-		if err == nil && pos.Type != nil {
-			response.PositionType = *pos.Type
-			if name, ok := constants.PositionTypeNames[constants.PositionType(*pos.Type)]; ok {
-				response.PositionTypeName = name
+		if err != nil {
+			s.logger.Warn("Не удалось загрузить должность для правила",
+				zap.Int("rule_id", entity.ID),
+				zap.Int("position_id", *entity.PositionID),
+				zap.Error(err))
+		} else if pos != nil {
+			if pos.Type != nil {
+				response.PositionType = *pos.Type
+				if name, ok := constants.PositionTypeNames[constants.PositionType(*pos.Type)]; ok {
+					response.PositionTypeName = name
+				}
+			} else {
+				s.logger.Warn("У должности отсутствует тип",
+					zap.Int("position_id", *entity.PositionID))
 			}
 		}
 	}
-
 	return response, nil
 }
 
+// === CREATE ===
 func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderRoutingRuleDTO) (*dto.OrderRoutingRuleResponseDTO, error) {
-	authContext, err := buildAuthzContext(ctx, s.userRepo)
+	// 1. Авторизация
+	authContext, err := buildRuleAuthzContext(ctx, s.userRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -92,50 +105,94 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 		return nil, apperrors.ErrForbidden
 	}
 
-	var depID, otdelID *uint64
+	// [ВАЖНО] 2. Сначала готовим переменные поиска (преобразуем *int DTO в *uint64)
+	var searchDept *uint64
 	if d.DepartmentID != nil {
 		v := uint64(*d.DepartmentID)
-		depID = &v
+		searchDept = &v
 	}
+	var searchOtdel *uint64
 	if d.OtdelID != nil {
 		v := uint64(*d.OtdelID)
-		otdelID = &v
+		searchOtdel = &v
+	}
+	var searchBranch *uint64
+	if d.BranchID != nil {
+		v := uint64(*d.BranchID)
+		searchBranch = &v
+	}
+	var searchOffice *uint64
+	if d.OfficeID != nil {
+		v := uint64(*d.OfficeID)
+		searchOffice = &v
 	}
 
-	positions, err := s.positionRepo.FindByTypeAndOrg(ctx, nil, d.PositionType, depID, otdelID)
+	// [ВАЖНО] 3. Очищаем лишние поля в зависимости от типа должности
+	// (Если это Директор Департамента, нам неважно, что прислали BranchID - мы его обнуляем)
+	switch constants.PositionType(d.PositionType) {
+	case constants.PositionTypeHeadOfDepartment, constants.PositionTypeDeputyHeadOfDepartment:
+		searchOtdel = nil
+		searchBranch = nil
+		searchOffice = nil
+		d.OtdelID = nil
+		d.BranchID = nil
+		d.OfficeID = nil
+
+	case constants.PositionTypeManagerOfOtdel:
+		searchOffice = nil
+		searchBranch = nil // Обычно отдел в структуре Head Office не имеет Branch
+		d.BranchID = nil
+		d.OfficeID = nil
+
+	case constants.PositionTypeBranchDirector, constants.PositionTypeDeputyBranchDirector:
+		searchDept = nil
+		searchOtdel = nil
+		searchOffice = nil
+		d.DepartmentID = nil
+		d.OtdelID = nil
+		d.OfficeID = nil
+
+	case constants.PositionTypeHeadOfOffice, constants.PositionTypeDeputyHeadOfOffice:
+		searchDept = nil
+		searchOtdel = nil
+		d.DepartmentID = nil
+		d.OtdelID = nil
+	}
+
+	// [ИСПРАВЛЕНИЕ ЗДЕСЬ!]
+	// Мы используем новый метод репозитория. Он вернет точный ID должности (200),
+	// который привязан к сотруднику в ЭТОМ департаменте.
+
+	realPositionID, err := s.userRepo.FindPositionIDByStructureAndType(ctx, nil, searchBranch, searchOffice, searchDept, searchOtdel, d.PositionType)
 	if err != nil {
 		return nil, err
 	}
-	if len(positions) == 0 {
-		errMsg := fmt.Sprintf("Не найдено ни одной должности с типом '%s'", d.PositionType)
-		if depID != nil {
-			errMsg += fmt.Sprintf(" в департаменте ID %d", *depID)
-		}
-		if otdelID != nil {
-			errMsg += fmt.Sprintf(" и отделе ID %d", *otdelID)
-		}
-		return nil, apperrors.NewHttpError(http.StatusBadRequest, errMsg, nil, nil)
+
+	// Если вернулся 0 - значит сотрудника нет
+	if realPositionID == 0 {
+		msg := "В выбранном подразделении отсутствуют активные сотрудники с данной должностью. Сначала наймите сотрудника."
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, msg, nil, nil)
 	}
 
-	foundPositionID := positions[0].ID
-	positionID := int(foundPositionID)
+	// 4. Создаем правило с ПРАВИЛЬНЫМ ID (realPositionID)
+	finalPosID := int(realPositionID) // тут будет 200, а не 5
 
 	rule := &entities.OrderRoutingRule{
 		RuleName:     d.RuleName,
 		OrderTypeID:  d.OrderTypeID,
-		DepartmentID: d.DepartmentID,
+		DepartmentID: d.DepartmentID, // Уже почищенные выше
 		OtdelID:      d.OtdelID,
-		PositionID:   &positionID,
+		BranchID:     d.BranchID,
+		OfficeID:     d.OfficeID,
+		PositionID:   &finalPosID, // <-- Используем ID из реальной структуры
 		StatusID:     d.StatusID,
 	}
+
 	var newID int
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		id, errTx := s.repo.Create(ctx, tx, rule)
-		if errTx != nil {
-			return errTx
-		}
 		newID = id
-		return nil
+		return errTx
 	})
 	if err != nil {
 		return nil, err
@@ -145,12 +202,11 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 	if err != nil {
 		return nil, err
 	}
-
 	return s.toResponseDTO(ctx, created)
 }
 
 func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.UpdateOrderRoutingRuleDTO, rawBody []byte) (*dto.OrderRoutingRuleResponseDTO, error) {
-	authContext, err := buildAuthzContext(ctx, s.userRepo)
+	authContext, err := buildRuleAuthzContext(ctx, s.userRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -163,40 +219,132 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 		return nil, err
 	}
 
-	// Сначала применяем все простые поля через патчер
-	if err := utils.ApplyPatchFinal(existing, d, rawBody); err != nil {
-		return nil, err
+	// 1. Обновление простых полей (изменений не было)
+	if d.RuleName.Valid {
+		existing.RuleName = d.RuleName.String
+	}
+	if d.OrderTypeID.Valid {
+		val := d.OrderTypeID.Int
+		existing.OrderTypeID = &val
+	}
+	if d.StatusID.Valid {
+		existing.StatusID = d.StatusID.Int
 	}
 
-	// Отдельно обрабатываем сложную логику для position_type
-	if utils.WasFieldSent("position_type", rawBody) {
-		if d.PositionType.Valid && d.PositionType.String != "" {
-			var depID, otdelID *uint64
-			if existing.DepartmentID != nil {
-				v := uint64(*existing.DepartmentID)
-				depID = &v
-			}
-			if existing.OtdelID != nil {
-				v := uint64(*existing.OtdelID)
-				otdelID = &v
-			}
+	// 2. Обработка изменений
+	needsReRouting := false
+	targetPosType := ""
 
-			positions, err := s.positionRepo.FindByTypeAndOrg(ctx, nil, d.PositionType.String, depID, otdelID)
-			if err != nil {
-				return nil, err
-			}
-			if len(positions) == 0 {
-				return nil, apperrors.NewHttpError(http.StatusBadRequest, "Должность с указанным типом не найдена в рамках оргструктуры правила", nil, nil)
-			}
+	var changes map[string]interface{}
+	if err := json.Unmarshal(rawBody, &changes); err != nil {
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат JSON", err, nil)
+	}
 
-			positionID := int(positions[0].ID)
-			existing.PositionID = &positionID
-		} else {
-			// Если пришел {"position_type": null}
-			existing.PositionID = nil
+	// Если прислали новые значения полей, обновляем их в существующем объекте
+	if d.BranchID.Valid {
+		existing.BranchID = &d.BranchID.Int
+		needsReRouting = true
+	} else if _, ok := changes["branch_id"]; ok {
+		existing.BranchID = nil
+		needsReRouting = true
+	}
+
+	if d.OfficeID.Valid {
+		existing.OfficeID = &d.OfficeID.Int
+		needsReRouting = true
+	} else if _, ok := changes["office_id"]; ok {
+		existing.OfficeID = nil
+		needsReRouting = true
+	}
+
+	if d.DepartmentID.Valid {
+		existing.DepartmentID = &d.DepartmentID.Int
+		needsReRouting = true
+	} else if _, ok := changes["department_id"]; ok {
+		existing.DepartmentID = nil
+		needsReRouting = true
+	}
+
+	if d.OtdelID.Valid {
+		existing.OtdelID = &d.OtdelID.Int
+		needsReRouting = true
+	} else if _, ok := changes["otdel_id"]; ok {
+		existing.OtdelID = nil
+		needsReRouting = true
+	}
+
+	// Проверяем изменение Типа Должности
+	if posTypeVal, ok := changes["position_type"]; ok {
+		needsReRouting = true
+		targetPosType = posTypeVal.(string)
+	} else if existing.PositionID != nil {
+		pos, _ := s.positionRepo.FindByID(ctx, nil, uint64(*existing.PositionID))
+		if pos != nil && pos.Type != nil {
+			targetPosType = *pos.Type
 		}
 	}
 
+	// 3. Динамический поиск нового PositionID
+	if needsReRouting && targetPosType != "" {
+		// Подготавливаем переменные ТОЛЬКО ДЛЯ ПОИСКА
+		var sDept, sBranch, sOffice, sOtdel *uint64
+		if existing.DepartmentID != nil {
+			v := uint64(*existing.DepartmentID)
+			sDept = &v
+		}
+		if existing.OtdelID != nil {
+			v := uint64(*existing.OtdelID)
+			sOtdel = &v
+		}
+		if existing.BranchID != nil {
+			v := uint64(*existing.BranchID)
+			sBranch = &v
+		}
+		if existing.OfficeID != nil {
+			v := uint64(*existing.OfficeID)
+			sOffice = &v
+		}
+
+		// Очищаем ПЕРЕМЕННЫЕ ПОИСКА согласно логике,
+		// НО НЕ трогаем поля в `existing` (базе данных).
+		switch constants.PositionType(targetPosType) {
+		case constants.PositionTypeHeadOfDepartment, constants.PositionTypeDeputyHeadOfDepartment:
+			// Ищем только в Департаменте, игнорируем отдел/офис при поиске
+			sOtdel = nil
+			sBranch = nil
+			sOffice = nil
+
+		case constants.PositionTypeManagerOfOtdel:
+			// Для начальника отдела игнорируем офис и ветку
+			sBranch = nil
+			sOffice = nil
+
+		case constants.PositionTypeBranchDirector, constants.PositionTypeDeputyBranchDirector:
+			sDept = nil
+			sOtdel = nil
+			sOffice = nil
+
+		case constants.PositionTypeHeadOfOffice, constants.PositionTypeDeputyHeadOfOffice:
+			sDept = nil
+			sOtdel = nil
+		}
+
+		// Вызываем новый метод, передавая отфильтрованные sDept, sOtdel...
+		realPosID, err := s.userRepo.FindPositionIDByStructureAndType(ctx, nil, sBranch, sOffice, sDept, sOtdel, targetPosType)
+		if err != nil {
+			return nil, err
+		}
+		if realPosID == 0 {
+			// Опционально: можно вернуть ошибку, если в такой конфигурации нет сотрудника
+			return nil, apperrors.NewHttpError(http.StatusBadRequest, "В данной структуре (согласно фильтрам) нет активного сотрудника с таким типом должности.", nil, nil)
+		}
+
+		// Сохраняем ТОЛЬКО новый PositionID (который стал 200)
+		newID := int(realPosID)
+		existing.PositionID = &newID
+	}
+
+	// 4. Сохраняем результат
 	now := time.Now()
 	existing.UpdatedAt = &now
 
@@ -211,12 +359,11 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 	if err != nil {
 		return nil, err
 	}
-
 	return s.toResponseDTO(ctx, updated)
 }
 
 func (s *OrderRoutingRuleService) GetByID(ctx context.Context, id int) (*dto.OrderRoutingRuleResponseDTO, error) {
-	authContext, err := buildAuthzContext(ctx, s.userRepo)
+	authContext, err := buildRuleAuthzContext(ctx, s.userRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +380,7 @@ func (s *OrderRoutingRuleService) GetByID(ctx context.Context, id int) (*dto.Ord
 }
 
 func (s *OrderRoutingRuleService) GetAll(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.OrderRoutingRuleResponseDTO], error) {
-	authContext, err := buildAuthzContext(ctx, s.userRepo)
+	authContext, err := buildRuleAuthzContext(ctx, s.userRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +414,7 @@ func (s *OrderRoutingRuleService) GetAll(ctx context.Context, limit, offset uint
 }
 
 func (s *OrderRoutingRuleService) Delete(ctx context.Context, id int) error {
-	authContext, err := buildAuthzContext(ctx, s.userRepo)
+	authContext, err := buildRuleAuthzContext(ctx, s.userRepo)
 	if err != nil {
 		return err
 	}
@@ -278,6 +425,16 @@ func (s *OrderRoutingRuleService) Delete(ctx context.Context, id int) error {
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		return s.repo.Delete(ctx, tx, id)
 	})
-
 	return err
+}
+
+// Переименованная утилита, чтобы избежать конфликтов
+func buildRuleAuthzContext(ctx context.Context, repo repositories.UserRepositoryInterface) (*authz.Context, error) {
+	userID, _ := utils.GetUserIDFromCtx(ctx)
+	perms, _ := utils.GetPermissionsMapFromCtx(ctx)
+	user, err := repo.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return &authz.Context{Actor: user, Permissions: perms}, nil
 }

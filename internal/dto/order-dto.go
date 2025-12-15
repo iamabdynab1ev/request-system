@@ -9,8 +9,8 @@ type OrderResponseDTO struct {
 	Name            string                  `json:"name"`
 	OrderTypeID     *uint64                 `json:"order_type_id,omitempty"`
 	Address         *string                 `json:"address,omitempty"`
-	Creator         ShortUserDTO            `json:"creator"`
-	Executor        *ShortUserDTO           `json:"executor"`
+	CreatorID       uint64                  `json:"creator_id"`
+	ExecutorID      *uint64                 `json:"executor_id,omitempty"`
 	DepartmentID    *uint64                 `json:"department_id"`
 	OtdelID         *uint64                 `json:"otdel_id,omitempty"`
 	BranchID        *uint64                 `json:"branch_id,omitempty"`
@@ -21,10 +21,11 @@ type OrderResponseDTO struct {
 	PriorityID      *uint64                 `json:"priority_id,omitempty"`
 	Attachments     []AttachmentResponseDTO `json:"attachments"`
 	Duration        *time.Time              `json:"duration,omitempty"`
-
-	CreatedAt   string     `json:"created_at"`
-	UpdatedAt   string     `json:"updated_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	CreatorName     string                  `json:"creator_name"`
+	ExecutorName    *string                 `json:"executor_name,omitempty"`
+	CreatedAt       string                  `json:"created_at"`
+	UpdatedAt       string                  `json:"updated_at"`
+	CompletedAt     *time.Time              `json:"completed_at,omitempty"`
 
 	// Метрики (показатели)
 	ResolutionTimeSeconds      *uint64 `json:"resolution_time_seconds,omitempty"`
