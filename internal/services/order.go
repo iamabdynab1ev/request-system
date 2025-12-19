@@ -385,99 +385,122 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 		return nil, apperrors.ErrForbidden
 	}
 
-	// ГЛАВНОЕ ИСПРАВЛЕНИЕ: Проверяем наличие изменений ДО транзакции
-	// Если нет явных полей, нет файла - сразу отказываем
+	// Базовая защита: если нет файла и пустой JSON
 	if len(explicitFields) == 0 && file == nil {
-		return nil, apperrors.NewBadRequestError("Нет изменений в запросе")
+		return nil, apperrors.NewBadRequestError("Нет данных для обновления")
 	}
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		txID := uuid.New()
-		now := time.Now().UTC()
 
-		// 1. Делаем копию заявки для изменений
+		// === 1. Синхронизация времени ===
+		// Чтобы разница времени (Created vs Completed) была математически точной,
+		// берем текущее время в ТОМ ЖЕ часовом поясе, где создана заявка.
+		loc := currentOrder.CreatedAt.Location()
+		if loc == nil {
+			loc = time.Local
+		}
+		now := time.Now().In(loc)
+
+		// === 2. Обновление полей (Smart Update) ===
 		updated := *currentOrder
-
-		// 2. ИСПОЛЬЗУЕМ SMART UPDATE
+		// SmartUpdate сам разберется: где значение, где null, где пропуск.
+		// Возвращает true, если структура реально изменилась.
 		fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
 
-		// 3. Обновляем время
 		updated.UpdatedAt = now
 
-		// 4. БИЗНЕС-ЛОГИКА (Side Effects)
-
-		// А. Смена структуры -> пересчет исполнителя
+		// === 3. Логика смены подразделения (Рероутинг) ===
 		structureChanged := utils.DiffPtr(currentOrder.DepartmentID, updated.DepartmentID) ||
 			utils.DiffPtr(currentOrder.OtdelID, updated.OtdelID) ||
-			utils.DiffPtr(currentOrder.BranchID, updated.BranchID)
+			utils.DiffPtr(currentOrder.BranchID, updated.BranchID) ||
+			utils.DiffPtr(currentOrder.OfficeID, updated.OfficeID)
 
 		if structureChanged {
-			s.logger.Info("Изменение структуры заявки", zap.Uint64("order_id", orderID))
+			s.logger.Info("Изменение структуры -> Поиск исполнителя", zap.Uint64("order_id", orderID))
 
 			orderCtx := OrderContext{
 				DepartmentID: utils.SafeDeref(updated.DepartmentID),
-				OtdelID:      updated.OtdelID,
+				OtdelID:      updated.OtdelID, // Может быть nil (SmartUpdate)
 				BranchID:     updated.BranchID,
 				OfficeID:     updated.OfficeID,
 			}
 
+			// Пытаемся найти нового начальника автоматически
 			res, err := s.ruleEngine.ResolveExecutor(ctx, tx, orderCtx, nil)
 			if err != nil {
-				return apperrors.NewBadRequestError("Не найден руководитель для выбранного подразделения. Настройте правила маршрутизации или укажите исполнителя вручную.")
+				// Если автоматика не нашла — сбрасываем исполнителя (пусть назначают вручную)
+				updated.ExecutorID = nil
+			} else {
+				updated.ExecutorID = &res.Executor.ID
 			}
-			if res.Executor.ID == 0 {
-				return apperrors.NewBadRequestError("Не найден руководитель для выбранного подразделения. Настройте правила маршрутизации или укажите исполнителя вручную.")
-			}
-			updated.ExecutorID = &res.Executor.ID
-
 			fieldsChanged = true
 		}
 
-		// Б. Обработка смены Статуса (CLOSED/COMPLETED)
+		// === 4. Логика смены статуса (Завершение / Открытие) ===
 		if currentOrder.StatusID != updated.StatusID {
+			// Получаем коды статусов
 			st, _ := s.statusRepo.FindByIDInTx(ctx, tx, updated.StatusID)
-			if st != nil && st.Code != nil {
-				code := strings.ToUpper(*st.Code)
-				oldSt, _ := s.statusRepo.FindByIDInTx(ctx, tx, currentOrder.StatusID)
-				oldCode := ""
-				if oldSt != nil && oldSt.Code != nil {
-					oldCode = strings.ToUpper(*oldSt.Code)
-				}
+			oldSt, _ := s.statusRepo.FindByIDInTx(ctx, tx, currentOrder.StatusID)
 
+			code := ""
+			if st != nil && st.Code != nil {
+				code = strings.ToUpper(*st.Code)
+			}
+
+			oldCode := ""
+			if oldSt != nil && oldSt.Code != nil {
+				oldCode = strings.ToUpper(*oldSt.Code)
+			}
+
+			if code != "" {
+				// А) Переход в Финальный статус
 				if constants.IsFinalStatus(code) {
 					updated.CompletedAt = &now
 
+					// Расчет времени решения (Resolution Time)
 					diff := now.Sub(currentOrder.CreatedAt).Seconds()
-					seconds := uint64(diff)
-					updated.ResolutionTimeSeconds = &seconds
+					// ЗАЩИТА: Время не может быть отрицательным
+					if diff < 0 {
+						diff = 0
+					}
 
-					isFCR := currentOrder.FirstResponseTimeSeconds != nil &&
-						*currentOrder.FirstResponseTimeSeconds == seconds
+					val := uint64(diff)
+					updated.ResolutionTimeSeconds = &val
+
+					// Проверка FCR (Решено ли с первого раза)
+					// (Если время реакции совпадает со временем решения или оно пустое)
+					isFCR := false
+					if currentOrder.FirstResponseTimeSeconds != nil && *currentOrder.FirstResponseTimeSeconds >= val {
+						isFCR = true
+					}
 					updated.IsFirstContactResolution = &isFCR
 
-					fieldsChanged = true
 				} else {
+					// Б) Обычная смена статуса -> снимаем дату завершения
 					updated.CompletedAt = nil
 				}
 
-				if constants.IsFinalStatus(code) && constants.IsFinalStatus(oldCode) {
+				// В) Реопен (Если была закрыта, а стала открыта) -> СБРАСЫВАЕМ метрики успеха
+				if constants.IsFinalStatus(oldCode) && !constants.IsFinalStatus(code) {
 					updated.CompletedAt = nil
-					updated.ResolutionTimeSeconds = nil
+					updated.ResolutionTimeSeconds = nil // Сброс
 					updated.IsFirstContactResolution = nil
 				}
 			}
+			fieldsChanged = true
 		}
 
-		// В. Метрики (FCR / First Response)
+		// === 5. Расчет метрик (SLA / First Response) ===
 		s.calculateMetrics(&updated, currentOrder, updateDTO, authCtx.Actor.ID, now)
 
-		// 4. ЗАПИСЬ В ИСТОРИЮ (Аудит)
+		// === 6. Логирование (Order History) ===
 		histChanged, err := s.detectAndLogChanges(ctx, tx, currentOrder, &updated, updateDTO, authCtx.Actor, txID, now)
 		if err != nil {
 			return err
 		}
 
-		// 5. Файл
+		// === 7. Файлы ===
 		fileAttached := false
 		if file != nil {
 			if _, err := s.attachFileToOrderInTx(ctx, tx, orderID, authCtx.Actor.ID, file, &txID, &updated); err != nil {
@@ -486,13 +509,11 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 			fileAttached = true
 		}
 
-		// 6. Финальная проверка: есть ли что сохранять?
-		// КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Проверяем fieldsChanged правильно
+		// === 8. Финал ===
 		if !fieldsChanged && !histChanged && !fileAttached {
-			return apperrors.NewBadRequestError("Нет изменений в запросе")
+			return apperrors.ErrNoChanges
 		}
 
-		// 7. Сохранение в БД
 		return s.orderRepo.Update(ctx, tx, &updated)
 	})
 	if err != nil {
@@ -814,25 +835,45 @@ func (s *OrderService) buildAuthzContextWithTarget(ctx context.Context, t *entit
 	return ctxAuth, nil
 }
 
+// calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
 func (s *OrderService) calculateMetrics(newOrder, oldOrder *entities.Order, dto dto.UpdateOrderDTO, actorID uint64, now time.Time) {
-	meaningful := dto.StatusID != nil || (dto.Comment != nil && *dto.Comment != "") || dto.ExecutorID != nil
+	// 1. First Response Time (Время первого отклика)
+	if oldOrder.FirstResponseTimeSeconds == nil && actorID != oldOrder.CreatorID {
+		if newOrder.StatusID != oldOrder.StatusID { // Исполнитель что-то сделал
+			diff := now.Sub(oldOrder.CreatedAt).Seconds()
+			if diff < 0 {
+				diff = 0
+			}
+			seconds := uint64(diff)
+			newOrder.FirstResponseTimeSeconds = &seconds
+		}
+	}
 
-	isValidDate := !oldOrder.CreatedAt.IsZero() && oldOrder.CreatedAt.Year() > 2000
+	// 2. Resolution Time (Время решения)
 
-	if oldOrder.FirstResponseTimeSeconds == nil && actorID != oldOrder.CreatorID && meaningful && isValidDate {
-		diff := now.Sub(oldOrder.CreatedAt).Seconds()
+	status, _ := s.statusRepo.FindStatus(context.Background(), newOrder.StatusID)
+	if status != nil && status.Code != nil && (*status.Code == "COMPLETED" || *status.Code == "CLOSED") {
 
+		newOrder.CompletedAt = &now
+
+		diff := now.Sub(newOrder.CreatedAt).Seconds()
 		if diff < 0 {
 			diff = 0
 		}
-
 		seconds := uint64(diff)
-		newOrder.FirstResponseTimeSeconds = &seconds
+		newOrder.ResolutionTimeSeconds = &seconds
 
-		isFCR := false
-		if dto.StatusID != nil {
+		// Проверка на FCR (решено с первого ответа?)
+		if newOrder.FirstResponseTimeSeconds != nil && *newOrder.FirstResponseTimeSeconds >= (seconds-60) {
+			t := true
+			newOrder.IsFirstContactResolution = &t
+		} else {
+			f := false
+			newOrder.IsFirstContactResolution = &f
 		}
-		newOrder.IsFirstContactResolution = &isFCR
+	} else if status != nil && status.Code != nil && *status.Code != "COMPLETED" && *status.Code != "CLOSED" {
+		// Если вернули обратно в работу - обнуляем CompletedAt
+		newOrder.CompletedAt = nil
 	}
 }
 
@@ -889,9 +930,6 @@ func timePointersEqual(t1, t2 *time.Time) bool {
 	return t1.Equal(*t2)
 }
 
-// ------------------------------------------
-// Validation Logic
-// ------------------------------------------
 func (s *OrderService) GetValidationConfigForOrderType(ctx context.Context, orderTypeID uint64) (map[string]interface{}, error) {
 	code, err := s.orderTypeRepo.FindCodeByID(ctx, orderTypeID)
 	if err != nil {
@@ -914,7 +952,7 @@ func (s *OrderService) validateOrderRules(ctx context.Context, d dto.CreateOrder
 	code, err := s.orderTypeRepo.FindCodeByID(ctx, *d.OrderTypeID)
 	if err != nil {
 		return nil
-	} // ignore if type not found
+	} 
 
 	if rules, ok := OrderValidationRules[code]; ok {
 		for _, field := range rules {

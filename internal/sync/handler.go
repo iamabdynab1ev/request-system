@@ -519,3 +519,4 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 		return nil
 	})
 }
+	

@@ -32,7 +32,7 @@ func IsFinalStatus(code string) bool {
 	return false
 }
 
-// --- ТИПЫ ЗАЯВОК ---
+
 const (
 	OrderTypeEquipment      = "EQUIPMENT"
 	OrderTypeAdministrative = "ADMINISTRATIVE"

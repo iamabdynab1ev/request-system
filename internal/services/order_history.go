@@ -199,7 +199,7 @@ func addEventToBlock(ctx context.Context, block *dto.TimelineEventDTO, event rep
 		case "DURATION_CHANGE":
 			parsedTime, err := time.Parse(time.RFC3339, newValue)
 			if err == nil {
-				line = fmt.Sprintf("Установлен срок выполнения: %s", parsedTime.Format("02.01.2006 15:04"))
+				line = fmt.Sprintf("Установлен срок выполнения до: %s", parsedTime.Format("02.01.2006 15:04"))
 			} else {
 				line = fmt.Sprintf("Срок выполнения изменен на: %s", newValue)
 			}

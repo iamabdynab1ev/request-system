@@ -73,7 +73,7 @@ type LDAPConfig struct {
 	Port    int
 	Domain  string
 
-	// Параметры поиска
+
 	SearchEnabled       bool
 	BindDN              string
 	BindPassword        string

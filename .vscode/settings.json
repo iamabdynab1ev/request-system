@@ -16,7 +16,7 @@
 
   "makefile.configureOnOpen": true,
   "workbench.panel.showLabels": false,
-  "editor.minimap.enabled": false,
+  "editor.minimap.enabled": true,
   "editor.fontFamily": "Consolas, 'Fira Code', 'JetBrains Mono', monospace",
   "workbench.iconTheme": "vscode-icons",
 

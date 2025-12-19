@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
@@ -36,29 +37,51 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 	}
 
 	authContext := authz.Context{Actor: actor, Permissions: permissionsMap}
-	securityBuilder := sq.And{}
 
+	// === ЖЕЛЕЗОБЕТОННАЯ СБОРКА УСЛОВИЙ ===
+	// Используем nil интерфейс по умолчанию.
+	var securityBuilder sq.Sqlizer = nil
+
+	// Временный список условий (не sq.And, а просто массив)
+	var preds []sq.Sqlizer
+
+	// Если пользователь НЕ админ и НЕ аудитор — включаем фильтры
 	if !authContext.HasPermission(authz.ScopeAll) && !authContext.HasPermission(authz.ScopeAllView) {
-		scopeConditions := sq.Or{}
+
+		// Собираем условия "ИЛИ" (ScopeDepartment OR ScopeBranch ...)
+		var orPreds []sq.Sqlizer
+
 		if authContext.HasPermission(authz.ScopeDepartment) && actor.DepartmentID != nil {
-			scopeConditions = append(scopeConditions, sq.Eq{"o.department_id": *actor.DepartmentID})
+			orPreds = append(orPreds, sq.Eq{"o.department_id": *actor.DepartmentID})
 		}
 		if authContext.HasPermission(authz.ScopeBranch) && actor.BranchID != nil {
-			scopeConditions = append(scopeConditions, sq.Eq{"o.branch_id": *actor.BranchID})
+			orPreds = append(orPreds, sq.Eq{"o.branch_id": *actor.BranchID})
 		}
 		if authContext.HasPermission(authz.ScopeOtdel) && actor.OtdelID != nil {
-			scopeConditions = append(scopeConditions, sq.Eq{"o.otdel_id": *actor.OtdelID})
+			orPreds = append(orPreds, sq.Eq{"o.otdel_id": *actor.OtdelID})
 		}
 		if authContext.HasPermission(authz.ScopeOwn) {
-			scopeConditions = append(scopeConditions, sq.Eq{"o.user_id": actor.ID})
-			scopeConditions = append(scopeConditions, sq.Eq{"o.executor_id": actor.ID})
+			orPreds = append(orPreds, sq.Eq{"o.user_id": actor.ID})
+			orPreds = append(orPreds, sq.Eq{"o.executor_id": actor.ID})
 		}
-		if len(scopeConditions) > 0 {
-			securityBuilder = append(securityBuilder, scopeConditions)
+
+		if len(orPreds) > 0 {
+			// Если набрали скоупы — добавляем их как (cond1 OR cond2 OR ...)
+			preds = append(preds, sq.Or(orPreds))
 		} else {
-			securityBuilder = append(securityBuilder, sq.Eq{"o.user_id": actor.ID})
+			// Если прав нет никаких вообще — показываем только своё (защита от пустой выборки)
+			preds = append(preds, sq.Eq{"o.user_id": actor.ID})
 		}
 	}
+
+	// ФИНАЛ: Если мы насобирали условия — упаковываем их в AND
+	if len(preds) > 0 {
+		securityBuilder = sq.And(preds)
+	} else {
+		// Если массив пуст (Админ), оставляем nil
+		securityBuilder = nil
+	}
+	// ======================================
 
 	var (
 		wg        sync.WaitGroup
@@ -73,6 +96,7 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 		topCat    []types.DashboardCountByGroup
 		lastAct   []types.DashboardActivityItem
 		depts     []types.DashboardDepartmentStat
+		branches  []types.DashboardDepartmentStat
 
 		errs []error
 		mu   sync.Mutex
@@ -90,8 +114,10 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 		}()
 	}
 
+	// Запускаем параллельные запросы
 	addTask(func() (err error) { alerts, err = s.repo.GetAlerts(ctx, securityBuilder); return })
-	addTask(func() (err error) { kpis, err = s.repo.GetKPIs(ctx, securityBuilder); return })
+	// Передаем actor.ID для расчета "Моих" показателей
+	addTask(func() (err error) { kpis, err = s.repo.GetKPIsWithUser(ctx, securityBuilder, actor.ID); return })
 	addTask(func() (err error) { sla, err = s.repo.GetSLAStats(ctx, securityBuilder); return })
 	addTask(func() (err error) { timePrior, err = s.repo.GetAvgTimeByPriority(ctx, securityBuilder); return })
 	addTask(func() (err error) { timeType, err = s.repo.GetAvgTimeByOrderType(ctx, securityBuilder); return })
@@ -101,62 +127,52 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 	addTask(func() (err error) { topCat, err = s.repo.GetTopCategories(ctx, securityBuilder); return })
 	addTask(func() (err error) { lastAct, err = s.repo.GetLastActivity(ctx, securityBuilder); return })
 	addTask(func() (err error) { depts, err = s.repo.GetDepartmentStats(ctx, securityBuilder); return })
+	addTask(func() (err error) { branches, err = s.repo.GetBranchStats(ctx, securityBuilder); return })
 
 	wg.Wait()
 
 	if len(errs) > 0 {
-		s.logger.Error("Dashboard errors", zap.Error(errs[0]))
-		return nil, apperrors.ErrInternalServer
+		// Логируем ошибку, чтобы понять какой именно запрос упал
+		s.logger.Error("Dashboard fetching error", zap.Error(errs[0]))
+		return nil, apperrors.NewInternalError("Ошибка загрузки дашборда")
 	}
 
-	// Форматирование (Бизнес логика текстов и трендов)
+	// 1. Заполняем пропуски в графике нулями
+	weekly = fillMissingDays(weekly)
+
+	// 2. Рассчитываем тренды для KPI
 	if kpis != nil {
 		process := func(m *types.DashboardKPIMetric, unit string, isTime bool) {
-			// 1. Считаем % изменения
 			if m.Previous > 0 {
 				m.TrendPct = ((m.Current - m.Previous) / m.Previous) * 100
 			} else if m.Current > 0 {
-				m.TrendPct = 100 // Рост с нуля
+				m.TrendPct = 100
 			} else {
 				m.TrendPct = 0
 			}
-
-			// Округляем процент до целого для красоты
 			m.TrendPct = math.Round(m.TrendPct)
 
-			// 2. Формируем текст тренда
 			sign := ""
-			suffix := "за месяц"
-
 			if m.TrendPct > 0 {
 				sign = "+"
 			}
 
 			if isTime {
-				// ДЛЯ ВРЕМЕНИ (секунды):
-				// Меньше - значит улучшение (быстрее работаем)
-				// Больше - ухудшение
 				if m.TrendPct < 0 {
-					// Отрицательный процент (время уменьшилось)
 					m.TrendText = fmt.Sprintf("%d%% улучшение", int(math.Abs(m.TrendPct)))
 				} else if m.TrendPct > 0 {
 					m.TrendText = fmt.Sprintf("%s%.0f%% за месяц", sign, m.TrendPct)
 				} else {
 					m.TrendText = "без изменений"
 				}
-
-				// Перевод секунд в часы для отображения
 				hrs := m.Current / 3600
 				m.Formatted = fmt.Sprintf("%.1fч", hrs)
-
 			} else {
-				// ДЛЯ ЧИСЕЛ И ПРОЦЕНТОВ (Количество):
 				if m.TrendPct != 0 {
-					m.TrendText = fmt.Sprintf("%s%.0f%% %s", sign, m.TrendPct, suffix)
+					m.TrendText = fmt.Sprintf("%s%.0f%% за месяц", sign, m.TrendPct)
 				} else {
 					m.TrendText = "0% за месяц"
 				}
-
 				if unit == "%" {
 					m.Formatted = fmt.Sprintf("%.0f%%", m.Current)
 				} else {
@@ -165,23 +181,19 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 			}
 		}
 
-		// Применяем ко всем
 		process(&kpis.TotalTickets, "", false)
 		process(&kpis.ResolvedTickets, "", false)
-
 		process(&kpis.SLACompliance, "%", false)
 		process(&kpis.FCRRate, "%", false)
-
 		process(&kpis.AvgResponseTime, "time", true)
 		process(&kpis.AvgResolveTime, "time", true)
 
-		// Для открытых тренд не считается по прошлому периоду
 		kpis.OpenTickets.Formatted = fmt.Sprintf("%.0f", kpis.OpenTickets.Current)
 		kpis.OpenTickets.TrendText = "Актуальные"
 		kpis.OpenTickets.TrendPct = 0
 	}
 
-	// Списки времени (форматируем секунды)
+	// 3. Форматируем время в таблицах
 	for i := range timePrior {
 		timePrior[i].AvgTimeFormatted = utils.FormatFloatSecondsToHumanReadable(timePrior[i].AvgSeconds)
 	}
@@ -189,10 +201,15 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 		timeType[i].AvgTimeFormatted = utils.FormatFloatSecondsToHumanReadable(timeType[i].AvgSeconds)
 	}
 
-	// Отделы (% выполнения)
+	// 4. Расчет процентов (Solved %)
 	for i := range depts {
 		if depts[i].TotalCount > 0 {
 			depts[i].SolvedPercent = math.Round((float64(depts[i].ResolvedCount) / float64(depts[i].TotalCount)) * 100)
+		}
+	}
+	for i := range branches {
+		if branches[i].TotalCount > 0 {
+			branches[i].SolvedPercent = math.Round((float64(branches[i].ResolvedCount) / float64(branches[i].TotalCount)) * 100)
 		}
 	}
 
@@ -208,5 +225,37 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 		TopCategories:   topCat,
 		LastActivity:    lastAct,
 		Departments:     depts,
+		Branches:        branches,
 	}, nil
+}
+
+// fillMissingDays генерирует 14 точек графика (от "13 дней назад" до "сегодня")
+func fillMissingDays(data []types.DashboardChartData) []types.DashboardChartData {
+	dataMap := make(map[string]int64)
+	for _, item := range data {
+		dataMap[item.Label] = item.Value
+	}
+
+	var result []types.DashboardChartData
+	// Используем время сервера, выровненное по часам, или просто Day
+	now := time.Now()
+	// Важно: если БД хранит UTC, а тут Local, метки могут не совпасть на границе дня.
+	// Но для dashboard "приблизительно сегодня" обычно достаточно.
+	start := now.AddDate(0, 0, -13)
+
+	for i := 0; i < 14; i++ {
+		day := start.AddDate(0, 0, i)
+		label := day.Format("02.01")
+
+		val := int64(0)
+		if v, exists := dataMap[label]; exists {
+			val = v
+		}
+
+		result = append(result, types.DashboardChartData{
+			Label: label,
+			Value: val,
+		})
+	}
+	return result
 }

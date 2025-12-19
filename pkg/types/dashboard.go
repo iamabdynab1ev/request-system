@@ -13,6 +13,7 @@ type DashboardKPIMetric struct {
 	Formatted string  `json:"formatted"`
 	TrendPct  float64 `json:"trend_pct"`
 	TrendText string  `json:"trend_text"`
+	Personal  float64 `json:"personal"`
 }
 
 // KPI Groups
@@ -55,7 +56,6 @@ type DashboardActivityItem struct {
 	AuthorName string `json:"author_name"`
 	OrderName  string `json:"order_name"`
 }
-
 
 type DashboardDepartmentStat struct {
 	Name          string  `json:"name" db:"name"`
