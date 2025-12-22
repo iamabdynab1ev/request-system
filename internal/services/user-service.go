@@ -151,7 +151,7 @@ func (s *UserService) CreateUser(ctx context.Context, p dto.CreateUserDTO) (*dto
 	}
 
 	entity := &entities.User{
-		Fio: p.Fio, Email: p.Email, PhoneNumber: p.PhoneNumber, Password: hash,
+		Fio: p.Fio, Username: p.Username, Email: p.Email, PhoneNumber: p.PhoneNumber, Password: hash,
 		PositionID: &p.PositionID, StatusID: stID,
 		BranchID: p.BranchID, DepartmentID: p.DepartmentID,
 		OfficeID: p.OfficeID, OtdelID: p.OtdelID,

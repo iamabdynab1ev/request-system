@@ -2,6 +2,7 @@ package dto
 
 type CreateUserDTO struct {
 	Fio         string  `json:"fio" validate:"required,min=2"`
+	Username    *string `json:"username" validate:"omitempty,min=4"`
 	Email       string  `json:"email" validate:"email,omitempty"`
 	PhoneNumber string  `json:"phone_number" validate:"required"`
 	PositionID  uint64  `json:"position_id" validate:"required"`

@@ -109,7 +109,7 @@ func New() *Config {
 	ldapSearchEnabled := strings.ToLower(getEnv("LDAP_SEARCH_ENABLED", "false")) == "true"
 	return &Config{
 		Server: ServerConfig{
-			Port:           getEnv("SERVER_PORT", "8080"),
+			Port:           getEnv("SERVER_PORT", "8091"),
 			BaseURL:        getEnv("SERVER_BASE_URL", ""),
 			AllowedOrigins: strings.Split(getEnv("ALLOWED_ORIGINS", "http://localhost:4040"), ","),
 		},

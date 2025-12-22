@@ -176,15 +176,14 @@ func main() {
 	defer cancel()
 
 	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, adService, appCtx)
-
-	mainLogger.Info("🚀 Сервер запущен на :8080")
+	serverAddress := ":" + cfg.Server.Port
+	mainLogger.Info("🚀 Сервер запущен на " + serverAddress)
 
 	go func() {
-		if err := e.Start(":8080"); err != nil && err != http.ErrServerClosed {
+		if err := e.Start(serverAddress); err != nil && err != http.ErrServerClosed {
 			mainLogger.Fatal("Не удалось запустить сервер", zap.Error(err))
 		}
 	}()
-
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
