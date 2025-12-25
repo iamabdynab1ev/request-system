@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile
     container_name: request-system-app
     ports:
-      - "8080:8080"
+      - "8091:8091"
     env_file:
       - .env
     depends_on:
@@ -32,7 +32,7 @@ services:
 
   # Сервис базы данных PostgreSQL
   postgresql:
-    image: postgres:latest
+    image: postgres:17
     container_name: postgres
     environment:
       POSTGRES_USER: postgres

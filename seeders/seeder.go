@@ -6,6 +6,9 @@ import (
 	"log"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	
+	// !!! ДОБАВЬТЕ ЭТУ СТРОКУ !!!
+	"request-system/pkg/config" 
 )
 
 // SeedCoreDictionaries наполняет самые базовые справочники, не имеющие зависимостей.
@@ -29,7 +32,6 @@ func SeedCoreDictionaries(db *pgxpool.Pool) {
 }
 
 // SeedEquipmentData наполняет справочники, связанные с оборудованием.
-// ВАЖНО: Требует наличия в БД офисов и филиалов.
 func SeedEquipmentData(db *pgxpool.Pool) {
 	ctx := context.Background()
 	log.Println("▶️ Запуск наполнения справочников оборудования...")
@@ -38,8 +40,6 @@ func SeedEquipmentData(db *pgxpool.Pool) {
 		log.Fatalf("Ошибка наполнения Типов оборудования: %v", err)
 	}
 	if err := seedEquipments(ctx, db); err != nil {
-		// Эта ошибка теперь не будет фатальной для всего сидера,
-		// так как она вызывается отдельно.
 		log.Printf("ПРЕДУПРЕЖДЕНИЕ: Ошибка наполнения Оборудования: %v", err)
 		log.Println("ℹ️ Это может быть нормально, если оргструктура (офисы, филиалы) еще не загружена.")
 	}
@@ -47,18 +47,21 @@ func SeedEquipmentData(db *pgxpool.Pool) {
 }
 
 // SeedRolesAndAdmin настраивает роли, их связи и создает суперпользователя.
-// ВАЖНО: Требует наличия базовых справочников (Permissions, Statuses).
-func SeedRolesAndAdmin(db *pgxpool.Pool) {
+func SeedRolesAndAdmin(db *pgxpool.Pool, cfg *config.Config) {
 	ctx := context.Background()
 	log.Println("▶️ Запуск настройки ролей и администратора...")
+	
 	if err := seedRoles(ctx, db); err != nil {
 		log.Fatalf("Ошибка наполнения Ролей (Roles): %v", err)
 	}
 	if err := seedRolePermissions(ctx, db); err != nil {
 		log.Fatalf("Ошибка наполнения Связей Ролей и Прав: %v", err)
 	}
-	if err := seedSuperAdmin(ctx, db); err != nil {
-		log.Fatalf("Ошибка создания Супер-Администратора: %v", err)
+	
+	// Теперь cfg доступен, так как мы импортировали пакет config
+	if err := SeedSuperAdmin(db, cfg); err != nil { 
+		log.Fatalf("Ошибка создания SuperAdmin: %v", err)
 	}
+
 	log.Println("✅ Настройка ролей и администратора завершена!")
 }

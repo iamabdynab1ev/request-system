@@ -9,7 +9,10 @@ import (
 
 	"github.com/joho/godotenv"
 )
-
+type SeederConfig struct {
+	AdminEmail    string
+	AdminPassword string
+}
 type FrontendConfig struct {
 	BaseURL string
 }
@@ -35,6 +38,7 @@ type AuthConfig struct {
 	MaxResetAttempts    int
 	MaxLoginAttempts    int
 	LockoutDuration     time.Duration
+	SystemRootLogin     string 
 }
 
 type JWTConfig struct {
@@ -93,12 +97,15 @@ type Config struct {
 	Telegram     TelegramConfig
 	Frontend     FrontendConfig
 	LDAP         LDAPConfig
+	Seeder SeederConfig 
 }
 
 func New() *Config {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Предупреждение: .env файл не найден или не удалось его загрузить.")
 	}
+	seedEmail := getEnv("SEED_ADMIN_EMAIL", "")
+	seedPass := getEnv("SEED_ADMIN_PASSWORD", "")
 	ldapPort, err := strconv.Atoi(getEnv("LDAP_PORT", "389"))
 	if err != nil {
 		log.Printf("Предупреждение: неверный формат LDAP_PORT, используется значение по умолчанию 389. Ошибка: %v", err)
@@ -131,6 +138,11 @@ func New() *Config {
 			LockoutDuration:     time.Minute * 15,
 			ResetTokenTTL:       time.Minute * 15,
 			VerificationCodeTTL: time.Minute * 15,
+			SystemRootLogin: strings.ToLower(seedEmail),
+		},
+		Seeder: SeederConfig{
+			AdminEmail:    seedEmail,
+			AdminPassword: seedPass,
 		},
 		Integrations: IntegrationsConfig{
 			ActiveProvider:         getEnv("INTEGRATION_ACTIVE_PROVIDER", "mock"),
