@@ -45,15 +45,15 @@ func main() {
 	if err != nil {
 		panic("Не удалось создать главный логгер")
 	}
-	// --- БЛОК ДЛЯ GOOSE ---
+
+	// --- БЛОК ДЛЯ GOOSE (только миграции, БЕЗ сидеров) ---
 	mainLogger.Info("Запуск проверки и применения миграций...")
 	dsnForGoose := cfg.Postgres.DSN
-	mainLogger.Info("DSN для миграций Goose", zap.String("dsn", dsnForGoose))
 	db, err := sql.Open("pgx", dsnForGoose)
 	if err != nil {
 		mainLogger.Fatal("Не удалось создать подключение к БД для миграций", zap.Error(err))
 	}
-	defer db.Close() // defer здесь, чтобы db.Close() гарантированно сработал
+	defer db.Close()
 
 	if err := db.Ping(); err != nil {
 		mainLogger.Fatal("Не удалось проверить соединение с БД для миграций", zap.Error(err))
@@ -101,7 +101,8 @@ func main() {
 		return c.JSON(http.StatusOK, map[string]string{"message": "pong"})
 	})
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
-		DisableStackAll: false, StackSize: 8 << 10,
+		DisableStackAll: false,
+		StackSize:       8 << 10,
 		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
 			mainLogger.Error("!!! ПАНИКА В ПРИЛОЖЕНИИ !!!", zap.Error(err), zap.String("stack", string(stack)))
 			return err
@@ -134,26 +135,21 @@ func main() {
 		mainLogger.Fatal("Не удалось подключиться к Redis", zap.Error(err))
 	}
 
-	// 6. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ И ЗАПУСК РОУТЕРОВ
+	// 6. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ
 	jwtSvc := service.NewJWTService(cfg.JWT.SecretKey, cfg.JWT.AccessTokenTTL, cfg.JWT.RefreshTokenTTL, authLogger)
 	permissionRepo := repositories.NewPermissionRepository(dbConn, mainLogger)
 	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
 	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, authLogger, 10*time.Minute)
 
-	//  НОВЫЙ БЛОК ДЛЯ СИСТЕМЫ УВЕДОМЛЕНИЙ ===
-	// 1. Создаем Шину Событий.
+	// СИСТЕМА УВЕДОМЛЕНИЙ
 	bus := eventbus.New(mainLogger)
-
-	// 2. Сначала создаем и запускаем WebSocket Хаб.
 	wsHub := websocket.NewHub()
 	go wsHub.Run()
 
-	// 3. Создаем "отправщиков" уведомлений: для Telegram и для WebSocket.
 	tgService := telegram.NewService(cfg.Telegram.BotToken)
 	notificationService := services.NewTelegramNotificationService(tgService, mainLogger)
 	wsNotificationService := services.NewWebSocketNotificationService(wsHub, mainLogger.Named("WebSocketNotifier"))
 
-	//  4. Создаем и регистрируем "Слушателя", передавая ему ОБА сервиса-отправщика.
 	userRepoForListener := repositories.NewUserRepository(dbConn, userLogger)
 	statusRepoForListener := repositories.NewStatusRepository(dbConn)
 	priorityRepoForListener := repositories.NewPriorityRepository(dbConn, mainLogger)
@@ -169,6 +165,7 @@ func main() {
 		mainLogger.Named("NotificationListener"),
 	)
 	notificationListener.Register(bus)
+
 	adLogger, _ := logger.CreateLogger(logLevel, "ad_service")
 	adService := services.NewADService(&cfg.LDAP, adLogger)
 
@@ -176,6 +173,7 @@ func main() {
 	defer cancel()
 
 	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, adService, appCtx)
+
 	serverAddress := ":" + cfg.Server.Port
 	mainLogger.Info("🚀 Сервер запущен на " + serverAddress)
 
@@ -184,6 +182,7 @@ func main() {
 			mainLogger.Fatal("Не удалось запустить сервер", zap.Error(err))
 		}
 	}()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit

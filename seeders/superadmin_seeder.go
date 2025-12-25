@@ -6,11 +6,10 @@ import (
 	"log"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"request-system/pkg/config" // <--- Важно
+	"request-system/pkg/config"
 	"request-system/pkg/utils"
 )
 
-// Теперь принимаем еще и конфиг
 func SeedSuperAdmin(db *pgxpool.Pool, cfg *config.Config) error {
 	ctx := context.Background()
 	log.Println("  - Запуск сидера SuperAdmin...")
@@ -19,7 +18,7 @@ func SeedSuperAdmin(db *pgxpool.Pool, cfg *config.Config) error {
 	password := cfg.Seeder.AdminPassword
 
 	if email == "" || password == "" {
-		log.Println("    [INFO] SEED_ADMIN_EMAIL не задан. Пропускаем создание.")
+		log.Println("    ℹ️  SEED_ADMIN_EMAIL или SEED_ADMIN_PASSWORD не заданы. Пропускаем создание.")
 		return nil
 	}
 
@@ -30,13 +29,12 @@ func SeedSuperAdmin(db *pgxpool.Pool, cfg *config.Config) error {
 	defer tx.Rollback(ctx)
 
 	var userID uint64
-	// Используем email для поиска существующего админа
 	err = tx.QueryRow(ctx, "SELECT id FROM users WHERE email = $1", email).Scan(&userID)
 
 	if err == nil {
-		log.Println("    - Root пользователь уже существует. Не трогаем.")
-		return tx.Commit(ctx) 
-	} 
+		log.Println("    ℹ️  Root пользователь уже существует. Не трогаем.")
+		return tx.Commit(ctx)
+	}
 
 	log.Println("    - Создаем нового Root пользователя...")
 
@@ -50,37 +48,35 @@ func SeedSuperAdmin(db *pgxpool.Pool, cfg *config.Config) error {
 		return err
 	}
 
-	// ИСПРАВЛЕННЫЙ ЗАПРОС: заменяем 'login' на 'username'
 	query := `
 		INSERT INTO users (
-			fio, email, phone_number, password, 
+			fio, email, phone_number, password,
 			status_id, must_change_password, source_system, username
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
 	`
-	// Записываем "root" в колонку username
 	err = tx.QueryRow(ctx, query,
-		"System Administrator", email, "LOCAL-ROOT", hashedPassword, 
-		statusID, true, "LOCAL", "root", 
+		"System Administrator", email, "LOCAL-ROOT", hashedPassword,
+		statusID, true, "LOCAL", "root",
 	).Scan(&userID)
 
 	if err != nil {
 		return fmt.Errorf("ошибка SQL при создании Root: %w", err)
 	}
 
-	// Выдача ролей (оставляем как было)
+	// Выдача ролей
 	roleNames := []string{"Базовые привилегии", "Управление доступом"}
 	for _, rName := range roleNames {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO user_roles (user_id, role_id) 
+			INSERT INTO user_roles (user_id, role_id)
 			SELECT $1, id FROM roles WHERE name = $2
 			ON CONFLICT DO NOTHING
 		`, userID, rName)
 		if err != nil {
-			log.Printf("Не удалось выдать роль %s: %v", rName, err)
+			log.Printf("⚠️  Не удалось выдать роль %s: %v", rName, err)
 		}
 	}
 
-	log.Printf("    - Пользователь %s успешно создан (Username: root, Source: LOCAL)", email)
+	log.Printf("    ✅ Пользователь %s успешно создан (Username: root, Source: LOCAL)", email)
 	return tx.Commit(ctx)
 }
