@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
+"path/filepath"
 	"github.com/joho/godotenv"
 )
 type SeederConfig struct {
@@ -38,7 +38,7 @@ type AuthConfig struct {
 	MaxResetAttempts    int
 	MaxLoginAttempts    int
 	LockoutDuration     time.Duration
-	SystemRootLogin     string 
+	SystemRootLogin     string
 }
 
 type JWTConfig struct {
@@ -51,6 +51,8 @@ type ServerConfig struct {
 	Port           string
 	BaseURL        string
 	AllowedOrigins []string
+	CertFile       string
+	KeyFile        string
 }
 
 type PostgresConfig struct {
@@ -97,13 +99,28 @@ type Config struct {
 	Telegram     TelegramConfig
 	Frontend     FrontendConfig
 	LDAP         LDAPConfig
-	Seeder SeederConfig 
+	Seeder SeederConfig
 }
 
 func New() *Config {
-	if err := godotenv.Load(); err != nil {
-		log.Println("Предупреждение: .env файл не найден или не удалось его загрузить.")
-	}
+    // 1. Получаем абсолютный путь к папке, где запущен терминал
+    pwd, _ := os.Getwd()
+    envPath := filepath.Join(pwd, ".env")
+
+    log.Printf("🔍 Проверка файла настроек по пути: %s", envPath)
+
+    // 2. Проверяем физическое наличие файла средствами ОС
+    if _, err := os.Stat(envPath); os.IsNotExist(err) {
+        log.Printf("❌ ФАЙЛ НЕ НАЙДЕН ПО ПУТИ: %s", envPath)
+    } else {
+        // 3. Пытаемся загрузить найденный файл
+        err := godotenv.Load(envPath)
+        if err != nil {
+            log.Printf("⚠️  Файл найден, но ошибка чтения (проверьте кодировку UTF-8): %v", err)
+        } else {
+            log.Println("✅ Файл .env успешно загружен!")
+        }
+    }
 	seedEmail := getEnv("SEED_ADMIN_EMAIL", "")
 	seedPass := getEnv("SEED_ADMIN_PASSWORD", "")
 	ldapPort, err := strconv.Atoi(getEnv("LDAP_PORT", "389"))
@@ -119,6 +136,8 @@ func New() *Config {
 			Port:           getEnv("SERVER_PORT", "8091"),
 			BaseURL:        getEnv("SERVER_BASE_URL", ""),
 			AllowedOrigins: strings.Split(getEnv("ALLOWED_ORIGINS", "http://localhost:4040"), ","),
+			CertFile:       getEnv("SSL_CERT_PATH", "server.crt"),
+			KeyFile:        getEnv("SSL_KEY_PATH", "server.key"),
 		},
 		Postgres: PostgresConfig{
 			DSN: getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/request-system?sslmode=disable"),

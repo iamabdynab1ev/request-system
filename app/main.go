@@ -33,6 +33,10 @@ import (
 )
 
 func main() {
+	os.Setenv("HTTP_PROXY", "http://192.168.10.42:3128")
+    os.Setenv("HTTPS_PROXY", "http://192.168.10.42:3128")
+os.Setenv("NO_PROXY", "localhost,127.0.0.1,192.168.10.79,arvand.local,192.168.10.42")
+
 	// 1. КОНФИГ
 	cfg := config.New()
 
@@ -175,13 +179,15 @@ func main() {
 	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, adService, appCtx)
 
 	serverAddress := ":" + cfg.Server.Port
-	mainLogger.Info("🚀 Сервер запущен на " + serverAddress)
 
 	go func() {
-		if err := e.Start(serverAddress); err != nil && err != http.ErrServerClosed {
-			mainLogger.Fatal("Не удалось запустить сервер", zap.Error(err))
+		if err := e.StartTLS(serverAddress, cfg.Server.CertFile, cfg.Server.KeyFile); err != nil && err != http.ErrServerClosed {
+			mainLogger.Fatal("🔴 Ошибка запуска HTTPS сервера", zap.Error(err))
 		}
 	}()
+
+	mainLogger.Info("🚀 Безопасный сервер (HTTPS) запущен на " + serverAddress)
+    mainLogger.Info("🔗 Проверка: https://192.168.10.79" + serverAddress + "/ping")
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)

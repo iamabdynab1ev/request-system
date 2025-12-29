@@ -952,7 +952,7 @@ func (s *OrderService) validateOrderRules(ctx context.Context, d dto.CreateOrder
 	code, err := s.orderTypeRepo.FindCodeByID(ctx, *d.OrderTypeID)
 	if err != nil {
 		return nil
-	} 
+	}
 
 	if rules, ok := OrderValidationRules[code]; ok {
 		for _, field := range rules {

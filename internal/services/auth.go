@@ -115,89 +115,84 @@ func (s *AuthService) authenticateInAD(username, password string) error {
 func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error) {
 	loginInput := strings.ToLower(payload.Login)
 
-	// --- ЛОГИКА "ВКЛЮЧАТЕЛЯ", АНАЛОГИЧНАЯ PHP-СКРИПТУ ---
+	// Это логин из .env (например root@helpdesk.bank)
+	systemRootEmail := strings.ToLower(s.cfg.SystemRootLogin)
 
-	if s.ldapCfg.Enabled {
-		// --- СЦЕНАРИЙ 1: LDAP ВКЛЮЧЕН (Точно как в вашем PHP) ---
-		s.logger.Info("LDAP включен. Попытка аутентификации в Active Directory...")
+	// 1. Сначала ищем, кто это в нашей базе
+	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
+	if err != nil {
+		s.logger.Warn("Попытка входа: пользователь не найден в БД", zap.String("login", loginInput))
+		return nil, apperrors.ErrInvalidCredentials
+	}
 
-		// ШАГ 1: Аутентификация в Active Directory.
-		// Это соответствует @ldap_bind в вашем PHP коде.
-		if err := s.authenticateInAD(loginInput, payload.Password); err != nil {
-			// Если AD вернул ошибку (неверный пароль или что-то еще), прекращаем работу.
-			// Так же как 'else' блок в PHP, который делает редирект на 'index.php?trueableLogin=false'.
-			s.logger.Warn("Аутентификация в AD не удалась", zap.String("login", loginInput), zap.Error(err))
-			return nil, err
+	// 2. Базовые проверки (статус, блокировка)
+	if err := s.checkLockout(ctx, user.ID); err != nil {
+		return nil, err
+	}
+	if user.StatusCode != constants.UserStatusActiveCode {
+		return nil, apperrors.ErrUserDisabled
+	}
+
+	// 3. ПРОВЕРКА МЕТОДА ВХОДА
+	authenticated := false
+
+	// ЖЕСТКОЕ УСЛОВИЕ: Только если введён логин/email из .env, проверяем локально.
+	// Даже если у другого юзера стоит SourceSystem = 'LOCAL', он всё равно пойдет в AD.
+	if systemRootEmail != "" && (loginInput == systemRootEmail || user.Email == systemRootEmail) {
+
+		s.logger.Info("ВХОД ТЕХНИЧЕСКОГО АДМИНИСТРАТОРА (ROOT)", zap.String("login", loginInput))
+
+		// Проверяем локальный хэш
+		if err := utils.ComparePasswords(user.Password, payload.Password); err != nil {
+			s.handleFailedLoginAttempt(ctx, user.ID)
+			return nil, apperrors.ErrInvalidCredentials
 		}
-
-		// Если мы дошли сюда, значит логин и пароль в AD верные.
-
-		// ШАГ 2: Ищем пользователя в НАШЕЙ базе данных, чтобы получить его роли и статус.
-		// Это соответствует "select au.userRoll from Arvand.userrolestatus..." в PHP.
-		user, err := s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
-		if err != nil {
-			s.logger.Warn("Пользователь прошел аутентификацию в AD, но не найден в локальной БД", zap.String("login", loginInput))
-			// Это важная проверка безопасности: пользователь есть в AD, но ему не дан доступ к этой системе.
-			return nil, apperrors.NewHttpError(http.StatusForbidden, "У вас нет доступа к данной системе. Обратитесь к администратору.", nil, nil)
-		}
-
-		// ШАГ 3: Стандартные проверки нашей системы (статус, блокировка и т.д.)
-		// В PHP у вас этого нет, но это хорошая практика.
-		if err := s.checkLockout(ctx, user.ID); err != nil {
-			return nil, err
-		}
-		if user.StatusCode != constants.UserStatusActiveCode {
-			return nil, apperrors.ErrUserDisabled
-		}
-
-		s.resetLoginAttempts(ctx, user.ID)
-		return user, nil // УСПЕХ
+		authenticated = true
 
 	} else {
-		// --- СЦЕНАРИЙ 2: LDAP ОТКЛЮЧЕН (локальная аутентификация) ---
-		s.logger.Info("LDAP отключен. Используется локальная аутентификация.")
+		// ДЛЯ ВСЕХ ОСТАЛЬНЫХ — ТОЛЬКО AD (Active Directory)
+		s.logger.Info("Аутентификация через Active Directory", zap.String("login", loginInput))
 
-		// ШАГ 1: Сначала ищем пользователя в нашей базе.
-		user, err := s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
-		if err != nil {
-			s.logger.Warn("Попытка входа для пользователя, не найденного в локальной БД", zap.String("login", loginInput))
-			return nil, apperrors.ErrInvalidCredentials // Неверный логин или пароль
+		if !s.ldapCfg.Enabled {
+			s.logger.Error("LDAP выключен. Вход невозможен для не-root пользователя.")
+			return nil, apperrors.NewHttpError(http.StatusServiceUnavailable, "Вход через AD временно недоступен", nil, nil)
 		}
 
-		// ШАГ 2: Проверяем пароль из нашей базы.
-		if err := utils.ComparePasswords(user.Password, payload.Password); err != nil {
-			s.handleFailedLoginAttempt(ctx, user.ID)    // Фиксируем неудачную попытку
-			return nil, apperrors.ErrInvalidCredentials // Неверный логин или пароль
+		// Выбираем логин для AD
+		adUsername := loginInput
+		if user.Username != nil && *user.Username != "" {
+			adUsername = *user.Username
 		}
 
-		// ШАГ 3: Стандартные проверки нашей системы.
-		if err := s.checkLockout(ctx, user.ID); err != nil {
-			return nil, err
+		// Стучимся в LDAP
+		if err := s.authenticateInAD(adUsername, payload.Password); err != nil {
+			s.logger.Warn("LDAP: Отказ в доступе", zap.String("ad_user", adUsername))
+			return nil, err // Здесь вернется ErrInvalidCredentials из AD
 		}
-		if user.StatusCode != constants.UserStatusActiveCode {
-			s.handleFailedLoginAttempt(ctx, user.ID)
-			return nil, apperrors.ErrUserDisabled
-		}
-
-		// Пароль верный и все проверки пройдены
-		if user.MustChangePassword {
-			resetToken := uuid.New().String()
-			cacheKey := fmt.Sprintf(constants.CacheKeyForceChangeToken, resetToken)
-			if err := s.cacheRepo.Set(ctx, cacheKey, user.ID, 5*time.Minute); err != nil {
-				return nil, apperrors.ErrInternalServer
-			}
-			responseDTO := dto.ChangePasswordRequiredDTO{
-				ResetToken: resetToken,
-				Message:    "Необходимо установить новый пароль для завершения входа.",
-			}
-			errWithDetails := apperrors.ErrChangePasswordWithToken
-			errWithDetails.Details = responseDTO
-			return nil, errWithDetails
-		}
-
-		s.resetLoginAttempts(ctx, user.ID)
-		return user, nil
+		authenticated = true
 	}
+
+	if !authenticated {
+		return nil, apperrors.ErrInvalidCredentials
+	}
+
+	// 4. ПРОВЕРКА СМЕНЫ ПАРОЛЯ (актуально для ROOT при первом входе)
+	if user.MustChangePassword {
+		s.logger.Info("Требуется принудительная смена пароля", zap.Uint64("id", user.ID))
+		resetToken := uuid.New().String()
+		cacheKey := fmt.Sprintf(constants.CacheKeyForceChangeToken, resetToken)
+		s.cacheRepo.Set(ctx, cacheKey, user.ID, 15*time.Minute)
+
+		errDetails := apperrors.ErrChangePasswordWithToken
+		errDetails.Details = dto.ChangePasswordRequiredDTO{
+			ResetToken: resetToken,
+			Message:    "Первый вход: необходимо сменить временный пароль.",
+		}
+		return nil, errDetails
+	}
+
+	s.resetLoginAttempts(ctx, user.ID)
+	return user, nil
 }
 
 func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error {

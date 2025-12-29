@@ -37,15 +37,14 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: request-system
+      POSTGRES_DB: otabek
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      # Это для автоматического создания пользователя Ivan@example.com при первом старте
       - ./database/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d request-system"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d request-system" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -81,12 +80,12 @@ services:
       - request-system
 
 # Общие настройки сети
-networks: 
+networks:
   request-system:
     driver: bridge
 
 # Настройки для сохранения данных между перезапусками
 volumes:
-  pg_data: 
+  pg_data:
   redis_data:
   pgadmin_data:
