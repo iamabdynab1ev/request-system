@@ -53,10 +53,6 @@ func main() {
 		log.Println("======================================================")
 	}
 
-	if *runAll || *runEquipment {
-		seeders.SeedEquipmentData(dbPool)
-		log.Println("======================================================")
-	}
 
 	if *runAll || *runRoles {
 		// Роли и админ зависят от базовых справочников

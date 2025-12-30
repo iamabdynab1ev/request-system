@@ -28,21 +28,6 @@ func SeedCoreDictionaries(db *pgxpool.Pool) {
 	log.Println("✅ Наполнение базовых справочников завершено!")
 }
 
-// SeedEquipmentData наполняет справочники, связанные с оборудованием.
-func SeedEquipmentData(db *pgxpool.Pool) {
-	ctx := context.Background()
-	log.Println("▶️  Запуск наполнения справочников оборудования...")
-
-	if err := seedEquipmentTypes(ctx, db); err != nil {
-		log.Fatalf("❌ Ошибка наполнения Типов оборудования: %v", err)
-	}
-	if err := seedEquipments(ctx, db); err != nil {
-		log.Printf("⚠️  ПРЕДУПРЕЖДЕНИЕ: Ошибка наполнения Оборудования: %v", err)
-		log.Println("ℹ️  Это может быть нормально, если оргструктура (офисы, филиалы) еще не загружена.")
-	}
-	log.Println("✅ Наполнение справочников оборудования завершено!")
-}
-
 // SeedRolesAndAdmin настраивает роли, их связи и создает суперпользователя.
 func SeedRolesAndAdmin(db *pgxpool.Pool, cfg *config.Config) {
 	ctx := context.Background()

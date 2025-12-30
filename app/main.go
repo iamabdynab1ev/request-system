@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"database/sql"
+	"flag"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -30,122 +31,119 @@ import (
 	"request-system/pkg/telegram"
 	"request-system/pkg/validation"
 	"request-system/pkg/websocket"
+	"request-system/seeders" // Важно!
 )
 
 func main() {
+	// ==========================================================
+	// 1. ИНИЦИАЛИЗАЦИЯ И НАСТРОЙКА СРЕДЫ
+	// ==========================================================
+	
+	// Настройка прокси банка (в коде)
 	os.Setenv("HTTP_PROXY", "http://192.168.10.42:3128")
-    os.Setenv("HTTPS_PROXY", "http://192.168.10.42:3128")
-os.Setenv("NO_PROXY", "localhost,127.0.0.1,192.168.10.79,arvand.local,192.168.10.42")
+	os.Setenv("HTTPS_PROXY", "http://192.168.10.42:3128")
+	// Важные исключения: база данных и внутренние сервера идут без прокси!
+	os.Setenv("NO_PROXY", "localhost,127.0.0.1,192.168.10.79,arvand.local,192.168.10.42,192.168.8.106")
 
-	// 1. КОНФИГ
+	// Флаги для режима сидеров
+	runCore := flag.Bool("core", false, "Наполнение базовых справочников")
+	runRoles := flag.Bool("roles", false, "Создание ролей и Рут-Админа")
+	runEquipment := flag.Bool("equipment", false, "Наполнение оборудования")
+	runAll := flag.Bool("all", false, "Запустить все сидеры сразу")
+	flag.Parse()
+
+	// Загружаем настройки (.env)
 	cfg := config.New()
 
-	// 2. ЛОГГЕРЫ
+	// ==========================================================
+	// 2. БЛОК СИДЕРОВ (Если запущены с флагом, сервер НЕ стартуем)
+	// ==========================================================
+	if *runCore || *runRoles || *runEquipment || *runAll {
+		log.Println("🛠️ ЗАПУСК СИДЕРОВ (Наполнение базы)...")
+		
+		// Подключаемся к базе для сидов
+		dbPool := postgresql.ConnectDB(cfg.Postgres.DSN)
+		defer dbPool.Close()
+
+		if *runAll || *runCore {
+			seeders.SeedCoreDictionaries(dbPool)
+		}
+	
+		if *runAll || *runRoles {
+			// Передаем и конфиг, чтобы знать пароль Root!
+			seeders.SeedRolesAndAdmin(dbPool, cfg)
+		}
+
+		log.Println("✅ Все сидеры выполнены успешно. Выход.")
+		return // ЗАВЕРШАЕМ ПРОГРАММУ
+	}
+
+	// ==========================================================
+	// 3. ОБЫЧНЫЙ ЗАПУСК СЕРВЕРА
+	// ==========================================================
+
+	// Логгеры
 	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel == "" {
 		logLevel = "info"
 	}
 	mainLogger, err := logger.CreateLogger(logLevel, "system")
 	if err != nil {
-		panic("Не удалось создать главный логгер")
+		panic("Не удалось создать логгер")
 	}
 
-	// --- БЛОК ДЛЯ GOOSE (только миграции, БЕЗ сидеров) ---
-	mainLogger.Info("Запуск проверки и применения миграций...")
-	dsnForGoose := cfg.Postgres.DSN
-	db, err := sql.Open("pgx", dsnForGoose)
+	// Миграции (Goose)
+	mainLogger.Info("Запуск миграций Goose...")
+	dbGoose, err := sql.Open("pgx", cfg.Postgres.DSN)
 	if err != nil {
-		mainLogger.Fatal("Не удалось создать подключение к БД для миграций", zap.Error(err))
+		mainLogger.Fatal("Ошибка соединения для миграций", zap.Error(err))
 	}
-	defer db.Close()
+	defer dbGoose.Close()
 
-	if err := db.Ping(); err != nil {
-		mainLogger.Fatal("Не удалось проверить соединение с БД для миграций", zap.Error(err))
-	}
-
-	if err := goose.SetDialect("postgres"); err != nil {
-		mainLogger.Fatal("Ошибка установки диалекта для goose", zap.Error(err))
+	if err := goose.SetDialect("postgres"); err == nil {
+		// Миграции будут искать папку "database/migrations" относительно запускаемого .exe
+		if err := goose.Up(dbGoose, "./database/migrations"); err != nil {
+			mainLogger.Error("Внимание: ошибка миграций (возможно они уже накатаны)", zap.Error(err))
+		}
 	}
 
-	if err := goose.Up(db, "./database/migrations"); err != nil {
-		mainLogger.Fatal("Ошибка применения миграций", zap.Error(err))
-	}
-	mainLogger.Info("Миграции успешно проверены/применены.")
-	// --- КОНЕЦ БЛОКА GOOSE ---
+	// Остальные логгеры
+	authLogger, _ := logger.CreateLogger(logLevel, "auth")
+	orderLogger, _ := logger.CreateLogger(logLevel, "orders")
+	userLogger, _ := logger.CreateLogger(logLevel, "users")
+	orderHistoryLogger, _ := logger.CreateLogger(logLevel, "order_history")
 
-	authLogger, err := logger.CreateLogger(logLevel, "auth")
-	if err != nil {
-		panic("Не удалось создать логгер 'auth'")
-	}
-	orderLogger, err := logger.CreateLogger(logLevel, "orders")
-	if err != nil {
-		panic("Не удалось создать логгер 'orders'")
-	}
-	userLogger, err := logger.CreateLogger(logLevel, "users")
-	if err != nil {
-		panic("Не удалось создать логгер 'users'")
-	}
-	orderHistoryLogger, err := logger.CreateLogger(logLevel, "order_history")
-	if err != nil {
-		panic("Не удалось создать логгер 'order_history'")
-	}
 	appLoggers := &routes.Loggers{
-		Main:         mainLogger,
-		Auth:         authLogger,
-		Order:        orderLogger,
-		User:         userLogger,
-		OrderHistory: orderHistoryLogger,
+		Main: mainLogger, Auth: authLogger, Order: orderLogger, User: userLogger, OrderHistory: orderHistoryLogger,
 	}
 
-	// 3. НАСТРОЙКА ECHO
+	// Настройка Echo
 	e := echo.New()
 	e.HideBanner = true
-	e.HidePort = true
-	e.GET("/ping", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"message": "pong"})
-	})
-	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
-		DisableStackAll: false,
-		StackSize:       8 << 10,
-		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
-			mainLogger.Error("!!! ПАНИКА В ПРИЛОЖЕНИИ !!!", zap.Error(err), zap.String("stack", string(stack)))
-			return err
-		},
-	}))
-
-	// 4. НАСТРОЙКА MIDDLEWARES
+	e.Use(middleware.Recover())
+	// Важно для фронта: CORS
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     cfg.Server.AllowedOrigins,
 		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "ngrok-skip-browser-warning"},
+		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
 		AllowCredentials: true,
 	}))
-	absPath, err := filepath.Abs("./uploads")
-	if err != nil {
-		mainLogger.Fatal("Не удалось получить путь к ./uploads", zap.Error(err))
-	}
-	e.Static("/uploads", absPath)
-	e.Validator = validation.New()
 
+	e.Validator = validation.New()
+	
+	// Подключение к основной БД (Pool)
 	dbConn := postgresql.ConnectDB(cfg.Postgres.DSN)
 	defer dbConn.Close()
 
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     cfg.Redis.Address,
-		Password: cfg.Redis.Password,
-		DB:       0,
-	})
-	if _, err := redisClient.Ping(context.Background()).Result(); err != nil {
-		mainLogger.Fatal("Не удалось подключиться к Redis", zap.Error(err))
-	}
-
-	// 6. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ
+	// Подключение к Redis
+	redisClient := redis.NewClient(&redis.Options{Addr: cfg.Redis.Address, Password: cfg.Redis.Password})
+	
+	// Сервисы
 	jwtSvc := service.NewJWTService(cfg.JWT.SecretKey, cfg.JWT.AccessTokenTTL, cfg.JWT.RefreshTokenTTL, authLogger)
 	permissionRepo := repositories.NewPermissionRepository(dbConn, mainLogger)
 	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
 	authPermissionService := services.NewAuthPermissionService(permissionRepo, cacheRepo, authLogger, 10*time.Minute)
 
-	// СИСТЕМА УВЕДОМЛЕНИЙ
 	bus := eventbus.New(mainLogger)
 	wsHub := websocket.NewHub()
 	go wsHub.Run()
@@ -154,47 +152,54 @@ os.Setenv("NO_PROXY", "localhost,127.0.0.1,192.168.10.79,arvand.local,192.168.10
 	notificationService := services.NewTelegramNotificationService(tgService, mainLogger)
 	wsNotificationService := services.NewWebSocketNotificationService(wsHub, mainLogger.Named("WebSocketNotifier"))
 
-	userRepoForListener := repositories.NewUserRepository(dbConn, userLogger)
-	statusRepoForListener := repositories.NewStatusRepository(dbConn)
-	priorityRepoForListener := repositories.NewPriorityRepository(dbConn, mainLogger)
-
 	notificationListener := listeners.NewNotificationListener(
-		notificationService,
-		wsNotificationService,
-		userRepoForListener,
-		statusRepoForListener,
-		priorityRepoForListener,
-		cfg.Frontend,
-		cfg.Server,
-		mainLogger.Named("NotificationListener"),
+		notificationService, wsNotificationService,
+		repositories.NewUserRepository(dbConn, userLogger),
+		repositories.NewStatusRepository(dbConn),
+		repositories.NewPriorityRepository(dbConn, mainLogger),
+		cfg.Frontend, cfg.Server, mainLogger.Named("NotificationListener"),
 	)
 	notificationListener.Register(bus)
 
-	adLogger, _ := logger.CreateLogger(logLevel, "ad_service")
-	adService := services.NewADService(&cfg.LDAP, adLogger)
+	adService := services.NewADService(&cfg.LDAP, mainLogger)
 
+	// Роутинг
 	appCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, adService, appCtx)
 
+	// ==========================================================
+	// 4. ЗАПУСК СЕРВЕРА HTTPS (StartTLS)
+	// ==========================================================
+	
 	serverAddress := ":" + cfg.Server.Port
 
+	// Проверяем наличие сертификатов
+	certPath := cfg.Server.CertFile
+	keyPath := cfg.Server.KeyFile
+	
+	if _, err := os.Stat(certPath); os.IsNotExist(err) {
+		mainLogger.Fatal("Не найден файл сертификата! Проверьте SSL_CERT_PATH", zap.String("path", certPath))
+	}
+
 	go func() {
-		if err := e.StartTLS(serverAddress, cfg.Server.CertFile, cfg.Server.KeyFile); err != nil && err != http.ErrServerClosed {
-			mainLogger.Fatal("🔴 Ошибка запуска HTTPS сервера", zap.Error(err))
+		// Запуск в безопасном режиме
+		if err := e.StartTLS(serverAddress, certPath, keyPath); err != nil && err != http.ErrServerClosed {
+			mainLogger.Fatal("🔴 Ошибка запуска HTTPS", zap.Error(err))
 		}
 	}()
 
-	mainLogger.Info("🚀 Безопасный сервер (HTTPS) запущен на " + serverAddress)
-    mainLogger.Info("🔗 Проверка: https://192.168.10.79" + serverAddress + "/ping")
+	mainLogger.Info("🚀 HTTPS СЕРВЕР ЗАПУЩЕН УСПЕШНО")
+	mainLogger.Info("🔗 Адрес (Локально): https://localhost" + serverAddress + "/ping")
+	mainLogger.Info("🔗 Адрес (На сервере): https://192.168.10.79" + serverAddress + "/ping")
 
+	// Graceful Shutdown (Красивое выключение при Ctrl+C)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
-	mainLogger.Info("🛑 Получен сигнал завершения, начинаем graceful shutdown...")
-
+	mainLogger.Info("🛑 Получен сигнал завершения...")
 	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)

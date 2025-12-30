@@ -167,12 +167,11 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyP
 		}
 	}
 
-	// 4. Флаг "Только мое участие"
+	// 4. Флаг "Только мое участие" — показываем только создателя и текущего исполнителя
 	if onlyParticipant {
 		participantCondition := sq.Or{
 			sq.Eq{"o.user_id": actor.ID},
 			sq.Eq{"o.executor_id": actor.ID},
-			sq.Expr("o.id IN (SELECT DISTINCT order_id FROM order_history WHERE user_id = ?)", actor.ID),
 		}
 		securityBuilder = append(securityBuilder, participantCondition)
 	}
