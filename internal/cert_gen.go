@@ -30,7 +30,7 @@ func main() {
 			CommonName:   "192.168.10.79",
 		},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(1, 0, 0), // на 1 год
+		NotAfter:              time.Now().AddDate(10, 0, 0), // на 10 лет
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
