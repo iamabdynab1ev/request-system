@@ -38,7 +38,7 @@ func main() {
 	// ==========================================================
 	// 1. ИНИЦИАЛИЗАЦИЯ И НАСТРОЙКА СРЕДЫ
 	// ==========================================================
-	
+
 	// Настройка прокси банка (в коде)
 	os.Setenv("HTTP_PROXY", "http://192.168.10.42:3128")
 	os.Setenv("HTTPS_PROXY", "http://192.168.10.42:3128")
@@ -60,7 +60,7 @@ func main() {
 	// ==========================================================
 	if *runCore || *runRoles || *runEquipment || *runAll {
 		log.Println("🛠️ ЗАПУСК СИДЕРОВ (Наполнение базы)...")
-		
+
 		// Подключаемся к базе для сидов
 		dbPool := postgresql.ConnectDB(cfg.Postgres.DSN)
 		defer dbPool.Close()
@@ -68,7 +68,7 @@ func main() {
 		if *runAll || *runCore {
 			seeders.SeedCoreDictionaries(dbPool)
 		}
-	
+
 		if *runAll || *runRoles {
 			// Передаем и конфиг, чтобы знать пароль Root!
 			seeders.SeedRolesAndAdmin(dbPool, cfg)
@@ -123,21 +123,28 @@ func main() {
 	e.Use(middleware.Recover())
 	// Важно для фронта: CORS
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins:     cfg.Server.AllowedOrigins,
-		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
+		AllowOrigins: cfg.Server.AllowedOrigins,
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodHead},
+		AllowHeaders: []string{
+			echo.HeaderOrigin,
+			echo.HeaderContentType,
+			echo.HeaderAccept,
+			echo.HeaderAuthorization,
+			echo.HeaderXRequestedWith,
+			"ngrok-skip-browser-warning",
+		},
 		AllowCredentials: true,
 	}))
 
 	e.Validator = validation.New()
-	
+
 	// Подключение к основной БД (Pool)
 	dbConn := postgresql.ConnectDB(cfg.Postgres.DSN)
 	defer dbConn.Close()
-
+	e.Static("/uploads", "uploads")
 	// Подключение к Redis
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.Redis.Address, Password: cfg.Redis.Password})
-	
+
 	// Сервисы
 	jwtSvc := service.NewJWTService(cfg.JWT.SecretKey, cfg.JWT.AccessTokenTTL, cfg.JWT.RefreshTokenTTL, authLogger)
 	permissionRepo := repositories.NewPermissionRepository(dbConn, mainLogger)
@@ -172,13 +179,13 @@ func main() {
 	// ==========================================================
 	// 4. ЗАПУСК СЕРВЕРА HTTPS (StartTLS)
 	// ==========================================================
-	
+
 	serverAddress := ":" + cfg.Server.Port
 
 	// Проверяем наличие сертификатов
 	certPath := cfg.Server.CertFile
 	keyPath := cfg.Server.KeyFile
-	
+
 	if _, err := os.Stat(certPath); os.IsNotExist(err) {
 		mainLogger.Fatal("Не найден файл сертификата! Проверьте SSL_CERT_PATH", zap.String("path", certPath))
 	}

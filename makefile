@@ -40,3 +40,17 @@ migrate-reset:
 migrations-init:
 	@mkdir -p ${GOOSE_DIR}
 	@echo "Created migrations directory at ${GOOSE_DIR}"
+
+
+# ==========================================
+# SSL Certificate Generation (OpenSSL)
+# ==========================================
+cert-gen:
+	@echo "Создаем SSL сертификат для 192.168.10.79..."
+	openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
+		-keyout server.key \
+		-out server.crt \
+		-days 3650 \
+		-subj "/C=TJ/O=Bank HelpDesk SSL/CN=192.168.10.79" \
+		-addext "subjectAltName=IP:192.168.10.79,IP:127.0.0.1"
+	@echo "✅ Сертификат создан (валиден 10 лет)"

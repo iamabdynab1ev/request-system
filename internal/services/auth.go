@@ -136,13 +136,9 @@ func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entitie
 	// 3. ПРОВЕРКА МЕТОДА ВХОДА
 	authenticated := false
 
-	// ЖЕСТКОЕ УСЛОВИЕ: Только если введён логин/email из .env, проверяем локально.
-	// Даже если у другого юзера стоит SourceSystem = 'LOCAL', он всё равно пойдет в AD.
+	// Сценарий А: Это Супер-Админ из конфига (ВСЕГДА локально)
 	if systemRootEmail != "" && (loginInput == systemRootEmail || user.Email == systemRootEmail) {
-
 		s.logger.Info("ВХОД ТЕХНИЧЕСКОГО АДМИНИСТРАТОРА (ROOT)", zap.String("login", loginInput))
-
-		// Проверяем локальный хэш
 		if err := utils.ComparePasswords(user.Password, payload.Password); err != nil {
 			s.handleFailedLoginAttempt(ctx, user.ID)
 			return nil, apperrors.ErrInvalidCredentials
@@ -150,33 +146,43 @@ func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entitie
 		authenticated = true
 
 	} else {
-		// ДЛЯ ВСЕХ ОСТАЛЬНЫХ — ТОЛЬКО AD (Active Directory)
-		s.logger.Info("Аутентификация через Active Directory", zap.String("login", loginInput))
+		// Сценарий Б: Обычные пользователи
 
-		if !s.ldapCfg.Enabled {
-			s.logger.Error("LDAP выключен. Вход невозможен для не-root пользователя.")
-			return nil, apperrors.NewHttpError(http.StatusServiceUnavailable, "Вход через AD временно недоступен", nil, nil)
-		}
+		if s.ldapCfg.Enabled {
+			// ВАРИАНТ 1: LDAP ВКЛЮЧЕН -> идем в AD
+			s.logger.Info("Аутентификация через Active Directory", zap.String("login", loginInput))
 
-		// Выбираем логин для AD
-		adUsername := loginInput
-		if user.Username != nil && *user.Username != "" {
-			adUsername = *user.Username
-		}
+			adUsername := loginInput
+			if user.Username != nil && *user.Username != "" {
+				adUsername = *user.Username
+			}
 
-		// Стучимся в LDAP
-		if err := s.authenticateInAD(adUsername, payload.Password); err != nil {
-			s.logger.Warn("LDAP: Отказ в доступе", zap.String("ad_user", adUsername))
-			return nil, err // Здесь вернется ErrInvalidCredentials из AD
+			if err := s.authenticateInAD(adUsername, payload.Password); err != nil {
+				s.logger.Warn("LDAP: Отказ в доступе", zap.String("ad_user", adUsername))
+				// Тут мы не блокируем локально, просто возвращаем ошибку AD
+				return nil, err
+			}
+			authenticated = true
+
+		} else {
+			// ВАРИАНТ 2: LDAP ВЫКЛЮЧЕН -> проверяем локально (БД)
+			// Вот оно, нужное тебе исправление!
+			s.logger.Info("LDAP выключен. Выполняется локальная проверка пароля (БД)", zap.String("login", loginInput))
+
+			if err := utils.ComparePasswords(user.Password, payload.Password); err != nil {
+				s.logger.Warn("Локальный вход: неверный пароль", zap.String("login", loginInput))
+				s.handleFailedLoginAttempt(ctx, user.ID)
+				return nil, apperrors.ErrInvalidCredentials
+			}
+			authenticated = true
 		}
-		authenticated = true
 	}
 
 	if !authenticated {
 		return nil, apperrors.ErrInvalidCredentials
 	}
 
-	// 4. ПРОВЕРКА СМЕНЫ ПАРОЛЯ (актуально для ROOT при первом входе)
+	// 4. ПРОВЕРКА СМЕНЫ ПАРОЛЯ
 	if user.MustChangePassword {
 		s.logger.Info("Требуется принудительная смена пароля", zap.Uint64("id", user.ID))
 		resetToken := uuid.New().String()

@@ -255,8 +255,12 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 
 	hasDept := createDTO.DepartmentID != nil
 	hasBranch := createDTO.BranchID != nil
-	if !hasDept && !hasBranch {
-		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Необходимо выбрать либо Департамент, либо Филиал.", nil, nil)
+	hasOtdel := createDTO.OtdelID != nil
+	hasOffice := createDTO.OfficeID != nil
+
+	// Проверяем: если ВСЕ четыре поля пусты, тогда ошибка.
+	if !hasDept && !hasBranch && !hasOtdel && !hasOffice {
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Необходимо указать хотя бы одно подразделение (Департамент, Филиал, Отдел или Офис ЦБО).", nil, nil)
 	}
 
 	var createdID uint64

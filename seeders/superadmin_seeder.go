@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"request-system/pkg/config"
 	"request-system/pkg/utils"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func SeedSuperAdmin(db *pgxpool.Pool, cfg *config.Config) error {
@@ -63,8 +64,8 @@ func SeedSuperAdmin(db *pgxpool.Pool, cfg *config.Config) error {
 		"992-000-TEST", // Заглушка номера
 		hashedPassword,
 		statusID,
-		true,      // Требуем сменить пароль при входе
-		"LOCAL",   // Пометка для БД, что он локальный
+		true,         // Требуем сменить пароль при входе
+		"LOCAL",      // Пометка для БД, что он локальный
 		"admin_test", // Тот самый логин для входа
 	).Scan(&userID)
 
@@ -73,7 +74,7 @@ func SeedSuperAdmin(db *pgxpool.Pool, cfg *config.Config) error {
 	}
 
 	// 6. Даем права (роли)
-	roles := []string{"Базовые привилегии", "Управление доступом", "Администратор Системы"}
+	roles := []string{"Базовые привилегии", "Администратор Системы"}
 	for _, rName := range roles {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO user_roles (user_id, role_id)
