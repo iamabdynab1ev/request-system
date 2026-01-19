@@ -46,6 +46,7 @@ func runAuthRouter(
 		txManager,
 		userRepository,
 		cacheRepository,
+		 fileStorage,
 		logger,
 		&cfg.Auth,
 		&cfg.LDAP,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls" 
 	"database/sql"
 	"flag"
 	"log"
@@ -31,66 +32,64 @@ import (
 	"request-system/pkg/telegram"
 	"request-system/pkg/validation"
 	"request-system/pkg/websocket"
-	"request-system/seeders" // Важно!
+	"request-system/seeders"
 )
 
 func main() {
-	// ==========================================================
-	// 1. ИНИЦИАЛИЗАЦИЯ И НАСТРОЙКА СРЕДЫ
-	// ==========================================================
-
-	// Настройка прокси банка (в коде)
+	// 1. ИНИЦИАЛИЗАЦИЯ
+	
+	// Включаем прокси для Интернета (Телеграм и прочее)
 	os.Setenv("HTTP_PROXY", "http://192.168.10.42:3128")
 	os.Setenv("HTTPS_PROXY", "http://192.168.10.42:3128")
-	// Важные исключения: база данных и внутренние сервера идут без прокси!
-	os.Setenv("NO_PROXY", "localhost,127.0.0.1,192.168.10.79,arvand.local,192.168.10.42,192.168.8.106")
 
-	// Флаги для режима сидеров
+	// ВАЖНО: Список адресов, куда нужно ходить НАПРЯМУЮ (БЕЗ ПРОКСИ).
+	// Добавляем сюда localhost, свой сервер и, главное, LDAP серверы (192.168.10.15 и .14)
+	os.Setenv("NO_PROXY", "localhost,127.0.0.1,192.168.10.79,arvand.local,192.168.10.42,192.168.10.15,192.168.10.14")
+	// Флаги для сидеров
 	runCore := flag.Bool("core", false, "Наполнение базовых справочников")
 	runRoles := flag.Bool("roles", false, "Создание ролей и Рут-Админа")
-	runEquipment := flag.Bool("equipment", false, "Наполнение оборудования")
 	runAll := flag.Bool("all", false, "Запустить все сидеры сразу")
+	// Флаи для импорта оборудования из файлов
+	importAtms := flag.String("import-atms", "", "Путь к файлу банкоматов .xlsx")
+    importTerms := flag.String("import-terms", "", "Путь к файлу терминалов .xlsx")
+    importPos := flag.String("import-pos", "", "Путь к файлу ПОС-терминалов .xlsx")
+
+
 	flag.Parse()
 
 	// Загружаем настройки (.env)
 	cfg := config.New()
 
-	// ==========================================================
-	// 2. БЛОК СИДЕРОВ (Если запущены с флагом, сервер НЕ стартуем)
-	// ==========================================================
-	if *runCore || *runRoles || *runEquipment || *runAll {
-		log.Println("🛠️ ЗАПУСК СИДЕРОВ (Наполнение базы)...")
+	// 3. БЛОК СИДЕРОВ И ИМПОРТА (Работает как сидер, если есть хоть один флаг)
+    if *runCore || *runRoles || *runAll || *importAtms != "" || *importTerms != "" || *importPos != "" {
+        log.Println("🛠️ ЗАПУСК ОПЕРАЦИИ СИДИРОВАНИЯ/ИМПОРТА...")
+        dbPool := postgresql.ConnectDB(cfg.Postgres.DSN)
+        defer dbPool.Close()
 
-		// Подключаемся к базе для сидов
-		dbPool := postgresql.ConnectDB(cfg.Postgres.DSN)
-		defer dbPool.Close()
+        // Сидеры (Базовые данные)
+        if *runAll || *runCore { seeders.SeedCoreDictionaries(dbPool) }
+        if *runAll || *runRoles { seeders.SeedRolesAndAdmin(dbPool, cfg) }
 
-		if *runAll || *runCore {
-			seeders.SeedCoreDictionaries(dbPool)
-		}
+        // --- ЛОГИКА ИМПОРТА ИЗ EXCEL ---
+        if *importAtms != "" || *importTerms != "" || *importPos != "" {
+            log.Println("📥 Импортируем оборудование...")
+            svc := services.NewEquipImportService(dbPool)
 
-		if *runAll || *runRoles {
-			// Передаем и конфиг, чтобы знать пароль Root!
-			seeders.SeedRolesAndAdmin(dbPool, cfg)
-		}
+            if *importAtms != ""  { _ = svc.ImportAtms(*importAtms) }
+            if *importTerms != "" { _ = svc.ImportTerminals(*importTerms) }
+            if *importPos != ""   { _ = svc.ImportPos(*importPos) }
+        }
 
-		log.Println("✅ Все сидеры выполнены успешно. Выход.")
-		return // ЗАВЕРШАЕМ ПРОГРАММУ
-	}
+        log.Println("✅ Все операции выполнены успешно.")
+        return // После сидирования сервер НЕ запускается
+    }
 
-	// ==========================================================
 	// 3. ОБЫЧНЫЙ ЗАПУСК СЕРВЕРА
-	// ==========================================================
-
-	// Логгеры
 	logLevel := os.Getenv("LOG_LEVEL")
-	if logLevel == "" {
-		logLevel = "info"
-	}
+	if logLevel == "" { logLevel = "info" }
+	
 	mainLogger, err := logger.CreateLogger(logLevel, "system")
-	if err != nil {
-		panic("Не удалось создать логгер")
-	}
+	if err != nil { panic("Не удалось создать логгер") }
 
 	// Миграции (Goose)
 	mainLogger.Info("Запуск миграций Goose...")
@@ -101,51 +100,39 @@ func main() {
 	defer dbGoose.Close()
 
 	if err := goose.SetDialect("postgres"); err == nil {
-		// Миграции будут искать папку "database/migrations" относительно запускаемого .exe
 		if err := goose.Up(dbGoose, "./database/migrations"); err != nil {
 			mainLogger.Error("Внимание: ошибка миграций (возможно они уже накатаны)", zap.Error(err))
 		}
 	}
 
-	// Остальные логгеры
 	authLogger, _ := logger.CreateLogger(logLevel, "auth")
 	orderLogger, _ := logger.CreateLogger(logLevel, "orders")
 	userLogger, _ := logger.CreateLogger(logLevel, "users")
 	orderHistoryLogger, _ := logger.CreateLogger(logLevel, "order_history")
 
-	appLoggers := &routes.Loggers{
-		Main: mainLogger, Auth: authLogger, Order: orderLogger, User: userLogger, OrderHistory: orderHistoryLogger,
-	}
+	appLoggers := &routes.Loggers{Main: mainLogger, Auth: authLogger, Order: orderLogger, User: userLogger, OrderHistory: orderHistoryLogger}
 
 	// Настройка Echo
 	e := echo.New()
 	e.HideBanner = true
 	e.Use(middleware.Recover())
-	// Важно для фронта: CORS
+	
+	// CORS: Разрешаем куки и заголовки
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: cfg.Server.AllowedOrigins,
+		AllowOrigins: cfg.Server.AllowedOrigins, // Берется из .env (исправленного на Шаге 1)
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodHead},
-		AllowHeaders: []string{
-			echo.HeaderOrigin,
-			echo.HeaderContentType,
-			echo.HeaderAccept,
-			echo.HeaderAuthorization,
-			echo.HeaderXRequestedWith,
-			"ngrok-skip-browser-warning",
-		},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "X-Requested-With", "ngrok-skip-browser-warning"},
 		AllowCredentials: true,
 	}))
 
 	e.Validator = validation.New()
 
-	// Подключение к основной БД (Pool)
 	dbConn := postgresql.ConnectDB(cfg.Postgres.DSN)
 	defer dbConn.Close()
 	e.Static("/uploads", "uploads")
-	// Подключение к Redis
+	
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.Redis.Address, Password: cfg.Redis.Password})
 
-	// Сервисы
 	jwtSvc := service.NewJWTService(cfg.JWT.SecretKey, cfg.JWT.AccessTokenTTL, cfg.JWT.RefreshTokenTTL, authLogger)
 	permissionRepo := repositories.NewPermissionRepository(dbConn, mainLogger)
 	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
@@ -170,51 +157,52 @@ func main() {
 
 	adService := services.NewADService(&cfg.LDAP, mainLogger)
 
-	// Роутинг
 	appCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, adService, appCtx)
 
 	// ==========================================================
-	// 4. ЗАПУСК СЕРВЕРА HTTPS (StartTLS)
+	// 4. ЗАПУСК СЕРВЕРА С ПРАВИЛЬНЫМ TLS
 	// ==========================================================
-
 	serverAddress := ":" + cfg.Server.Port
-
-	// Проверяем наличие сертификатов
 	certPath := cfg.Server.CertFile
 	keyPath := cfg.Server.KeyFile
 
-	if _, err := os.Stat(certPath); os.IsNotExist(err) {
-		mainLogger.Fatal("Не найден файл сертификата! Проверьте SSL_CERT_PATH", zap.String("path", certPath))
+	// Настройка для совместимости со старым софтом и браузерами
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12, // Если 1С совсем старая, поставьте tls.VersionTLS10
+		// CurvePreferences: []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}, // Улучшает совместимость
+		// CipherSuites - можно добавить старые, если 1С не цепляется
+	}
+
+	s := &http.Server{
+		Addr:      serverAddress,
+		Handler:   e,
+		TLSConfig: tlsConfig,
 	}
 
 	go func() {
-		// Запуск в безопасном режиме
-		if err := e.StartTLS(serverAddress, certPath, keyPath); err != nil && err != http.ErrServerClosed {
+		// Запуск сервера вручную через http.Server
+		if err := s.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
 			mainLogger.Fatal("🔴 Ошибка запуска HTTPS", zap.Error(err))
 		}
 	}()
 
-	mainLogger.Info("🚀 HTTPS СЕРВЕР ЗАПУЩЕН УСПЕШНО")
-	mainLogger.Info("🔗 Адрес (Локально): https://localhost" + serverAddress + "/ping")
-	mainLogger.Info("🔗 Адрес (На сервере): https://192.168.10.79" + serverAddress + "/ping")
+	mainLogger.Info("🚀 HTTPS СЕРВЕР ЗАПУЩЕН (ПОРТ "+cfg.Server.Port+")")
+	mainLogger.Info("🔗 Local: https://localhost" + serverAddress + "/ping")
 
-	// Graceful Shutdown (Красивое выключение при Ctrl+C)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
-	mainLogger.Info("🛑 Получен сигнал завершения...")
+	mainLogger.Info("🛑 Остановка сервера...")
 	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
 	if err := e.Shutdown(shutdownCtx); err != nil {
-		mainLogger.Error("Ошибка при остановке сервера", zap.Error(err))
+		mainLogger.Error("Error shutdown", zap.Error(err))
 	}
-
-	mainLogger.Info("✅ Сервер корректно остановлен")
 }

@@ -15,4 +15,5 @@ CREATE TABLE statuses (
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE IF EXISTS statuses;
--- +goose StatementEnd
+-- +goose StatementEnd]
+

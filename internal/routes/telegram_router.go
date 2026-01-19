@@ -6,7 +6,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 
-	"request-system/internal/controllers"
+	tgCtrl "request-system/internal/controllers/telegram"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
 	"request-system/pkg/config"
@@ -29,7 +29,7 @@ func runTelegramRouter(
 	logger *zap.Logger,
 	appCtx context.Context,
 ) {
-	tgController := controllers.NewTelegramController(
+	tgController := tgCtrl.NewTelegramController(
 		userService,
 		orderService,
 		tgService,

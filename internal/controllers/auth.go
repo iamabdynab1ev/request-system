@@ -239,25 +239,37 @@ func (ctrl *AuthController) generateTokensAndRespond(c echo.Context, userID uint
 
 func (ctrl *AuthController) UpdateMe(c echo.Context) error {
 	reqCtx := c.Request().Context()
-
 	var payload dto.UpdateMyProfileDTO
 
+	// 1. Читаем JSON данные
 	dataString := c.FormValue("data")
+	
+	// Это карта для отслеживания: что именно прислал фронтенд?
+	explicitFields := make(map[string]interface{})
+
 	if dataString != "" {
-		if err := json.Unmarshal([]byte(dataString), &payload); err != nil {
-			return ctrl.errorResponse(c, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный JSON в поле 'data'", err, nil))
-		}
+		_ = json.Unmarshal([]byte(dataString), &payload)
+		_ = json.Unmarshal([]byte(dataString), &explicitFields) 
 	}
+
+	// 2. Обрабатываем загрузку файла
 	photoURL, err := ctrl.handlePhotoUpload(c, "profile_photo")
 	if err != nil {
 		return ctrl.errorResponse(c, err)
 	}
-	if photoURL != nil {
-		payload.PhotoURL = photoURL
-	}
 
-	if err := c.Validate(&payload); err != nil {
-		return ctrl.errorResponse(c, err)
+	if photoURL != nil {
+
+		payload.PhotoURL = photoURL
+	} else {
+		
+		if val, exists := explicitFields["photo_url"]; exists && val == nil {
+			deleteSignal := "SET_NULL" 
+			payload.PhotoURL = &deleteSignal // Отправляем спец-сигнал в сервис
+		} else {
+           
+            payload.PhotoURL = nil
+        }
 	}
 
 	updatedUser, err := ctrl.authService.UpdateMyProfile(reqCtx, payload)
@@ -265,7 +277,7 @@ func (ctrl *AuthController) UpdateMe(c echo.Context) error {
 		return ctrl.errorResponse(c, err)
 	}
 
-	return utils.SuccessResponse(c, updatedUser, "Профиль успешно обновлен", http.StatusOK)
+	return utils.SuccessResponse(c, updatedUser, "Профиль обновлен", http.StatusOK)
 }
 
 func (c *AuthController) handlePhotoUpload(ctx echo.Context, uploadContext string) (*string, error) {

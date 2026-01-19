@@ -1,4 +1,3 @@
-// Файл: internal/services/auth_service.go
 package services
 
 import (
@@ -24,6 +23,7 @@ import (
 	"request-system/pkg/config"
 	"request-system/pkg/constants"
 	apperrors "request-system/pkg/errors"
+	"request-system/pkg/filestorage"
 	"request-system/pkg/utils"
 )
 
@@ -36,12 +36,14 @@ type AuthServiceInterface interface {
 	VerifyResetCode(ctx context.Context, payload dto.VerifyCodeDTO) (*dto.VerifyCodeResponseDTO, error)
 	ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error
 	UpdateMyProfile(ctx context.Context, payload dto.UpdateMyProfileDTO) (*dto.UserDTO, error)
+	FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error)
 }
 
 type AuthService struct {
 	txManager         repositories.TxManagerInterface
 	userRepo          repositories.UserRepositoryInterface
 	cacheRepo         repositories.CacheRepositoryInterface
+	fileStorage       filestorage.FileStorageInterface
 	logger            *zap.Logger
 	cfg               *config.AuthConfig
 	ldapCfg           *config.LDAPConfig
@@ -57,6 +59,7 @@ func NewAuthService(
 	txManager repositories.TxManagerInterface,
 	userRepo repositories.UserRepositoryInterface,
 	cacheRepo repositories.CacheRepositoryInterface,
+	fileStorage filestorage.FileStorageInterface,
 	logger *zap.Logger,
 	cfg *config.AuthConfig,
 	ldapCfg *config.LDAPConfig,
@@ -71,6 +74,7 @@ func NewAuthService(
 		txManager:         txManager,
 		userRepo:          userRepo,
 		cacheRepo:         cacheRepo,
+		fileStorage:       fileStorage,
 		logger:            logger,
 		cfg:               cfg,
 		ldapCfg:           ldapCfg,
@@ -83,8 +87,8 @@ func NewAuthService(
 	}
 }
 
+// Приватный метод аутентификации в AD
 func (s *AuthService) authenticateInAD(username, password string) error {
-	// ИСПРАВЛЕНИЕ: Используем ldap.DialURL, он проще и надежнее.
 	l, err := ldap.DialURL(fmt.Sprintf("ldap://%s:%d", s.ldapCfg.Host, s.ldapCfg.Port))
 	if err != nil {
 		s.logger.Error("Не удалось подключиться к LDAP-серверу", zap.Error(err), zap.String("host", s.ldapCfg.Host))
@@ -93,88 +97,47 @@ func (s *AuthService) authenticateInAD(username, password string) error {
 	defer l.Close()
 
 	userRDN := fmt.Sprintf(`%s\%s`, s.ldapCfg.Domain, username)
-	s.logger.Debug("Попытка LDAP bind", zap.String("userRDN", userRDN))
-
-	// ИСПРАВЛЕНИЕ: Просто вызываем Bind. Опции для AD здесь не нужны.
 	err = l.Bind(userRDN, password)
 	if err != nil {
-		s.logger.Warn("LDAP bind не удался", zap.String("userRDN", userRDN), zap.Error(err))
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
-			return apperrors.ErrInvalidCredentials // Возвращаем нашу стандартную ошибку
+			return apperrors.ErrInvalidCredentials
 		}
-		// Если ошибка другая, это системная проблема
 		return apperrors.NewHttpError(http.StatusInternalServerError, "Системная ошибка аутентификации", err, nil)
 	}
-
-	s.logger.Info("LDAP bind успешен", zap.String("userRDN", userRDN))
 	return nil
 }
 
-// Файл: internal/services/auth_service.go
-
 func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error) {
 	loginInput := strings.ToLower(payload.Login)
-
-	// Это логин из .env (например root@helpdesk.bank)
 	systemRootEmail := strings.ToLower(s.cfg.SystemRootLogin)
 
-	// 1. Сначала ищем, кто это в нашей базе
 	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
 	if err != nil {
-		s.logger.Warn("Попытка входа: пользователь не найден в БД", zap.String("login", loginInput))
 		return nil, apperrors.ErrInvalidCredentials
 	}
 
-	// 2. Базовые проверки (статус, блокировка)
-	if err := s.checkLockout(ctx, user.ID); err != nil {
-		return nil, err
-	}
 	if user.StatusCode != constants.UserStatusActiveCode {
 		return nil, apperrors.ErrUserDisabled
 	}
 
-	// 3. ПРОВЕРКА МЕТОДА ВХОДА
 	authenticated := false
-
-	// Сценарий А: Это Супер-Админ из конфига (ВСЕГДА локально)
 	if systemRootEmail != "" && (loginInput == systemRootEmail || user.Email == systemRootEmail) {
-		s.logger.Info("ВХОД ТЕХНИЧЕСКОГО АДМИНИСТРАТОРА (ROOT)", zap.String("login", loginInput))
-		if err := utils.ComparePasswords(user.Password, payload.Password); err != nil {
-			s.handleFailedLoginAttempt(ctx, user.ID)
-			return nil, apperrors.ErrInvalidCredentials
+		if err := utils.ComparePasswords(user.Password, payload.Password); err == nil {
+			authenticated = true
 		}
-		authenticated = true
-
 	} else {
-		// Сценарий Б: Обычные пользователи
-
 		if s.ldapCfg.Enabled {
-			// ВАРИАНТ 1: LDAP ВКЛЮЧЕН -> идем в AD
-			s.logger.Info("Аутентификация через Active Directory", zap.String("login", loginInput))
-
 			adUsername := loginInput
 			if user.Username != nil && *user.Username != "" {
 				adUsername = *user.Username
 			}
-
-			if err := s.authenticateInAD(adUsername, payload.Password); err != nil {
-				s.logger.Warn("LDAP: Отказ в доступе", zap.String("ad_user", adUsername))
-				// Тут мы не блокируем локально, просто возвращаем ошибку AD
-				return nil, err
+			if err := s.authenticateInAD(adUsername, payload.Password); err == nil {
+				authenticated = true
 			}
-			authenticated = true
-
 		} else {
-			// ВАРИАНТ 2: LDAP ВЫКЛЮЧЕН -> проверяем локально (БД)
-			// Вот оно, нужное тебе исправление!
-			s.logger.Info("LDAP выключен. Выполняется локальная проверка пароля (БД)", zap.String("login", loginInput))
-
-			if err := utils.ComparePasswords(user.Password, payload.Password); err != nil {
-				s.logger.Warn("Локальный вход: неверный пароль", zap.String("login", loginInput))
-				s.handleFailedLoginAttempt(ctx, user.ID)
-				return nil, apperrors.ErrInvalidCredentials
+			if err := utils.ComparePasswords(user.Password, payload.Password); err == nil {
+				authenticated = true
 			}
-			authenticated = true
 		}
 	}
 
@@ -182,330 +145,124 @@ func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entitie
 		return nil, apperrors.ErrInvalidCredentials
 	}
 
-	// 4. ПРОВЕРКА СМЕНЫ ПАРОЛЯ
 	if user.MustChangePassword {
-		s.logger.Info("Требуется принудительная смена пароля", zap.Uint64("id", user.ID))
 		resetToken := uuid.New().String()
-		cacheKey := fmt.Sprintf(constants.CacheKeyForceChangeToken, resetToken)
-		s.cacheRepo.Set(ctx, cacheKey, user.ID, 15*time.Minute)
-
+		s.cacheRepo.Set(ctx, fmt.Sprintf(constants.CacheKeyForceChangeToken, resetToken), user.ID, 15*time.Minute)
 		errDetails := apperrors.ErrChangePasswordWithToken
-		errDetails.Details = dto.ChangePasswordRequiredDTO{
-			ResetToken: resetToken,
-			Message:    "Первый вход: необходимо сменить временный пароль.",
-		}
+		errDetails.Details = dto.ChangePasswordRequiredDTO{ResetToken: resetToken, Message: "Первый вход: необходимо сменить временный пароль."}
 		return nil, errDetails
 	}
 
-	s.resetLoginAttempts(ctx, user.ID)
 	return user, nil
-}
-
-func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error {
-	loginInput := strings.ToLower(payload.Login)
-	logger := s.logger.With(zap.String("login_input", loginInput))
-
-	// Защита от спама
-	spamProtectionKey := fmt.Sprintf(constants.CacheKeySpamProtect, loginInput)
-	if _, err := s.cacheRepo.Get(ctx, spamProtectionKey); err == nil {
-		return apperrors.NewHttpError(http.StatusTooManyRequests, "Запрашивать код можно не чаще одного раза в минуту", nil, nil)
-	}
-	s.cacheRepo.Set(ctx, spamProtectionKey, "active", time.Minute)
-
-	// Ищем пользователя
-	var user *entities.User
-	var err error
-	if normalizedPhone := utils.NormalizeTajikPhoneNumber(loginInput); normalizedPhone != "" {
-		user, err = s.userRepo.FindUserByPhone(ctx, normalizedPhone)
-	} else if emailRegex.MatchString(loginInput) {
-		user, err = s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
-	} else {
-		return nil // Тихо выходим, если ввод некорректен
-	}
-
-	if err != nil || user == nil {
-		logger.Warn("Попытка сброса пароля для несуществующего логина/телефона.")
-		return nil
-	}
-
-	// Генерируем 4-значный код
-	resetCode := fmt.Sprintf("%04d", rand.Intn(10000))
-
-	cacheKey := fmt.Sprintf(constants.CacheKeyResetPhoneCode, loginInput)
-	if err := s.cacheRepo.Set(ctx, cacheKey, resetCode, s.cfg.VerificationCodeTTL); err != nil {
-		logger.Error("Не удалось сохранить код сброса в Redis", zap.Error(err))
-		return apperrors.ErrInternalServer
-	}
-
-	// --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
-	// Пытаемся отправить через Telegram в первую очередь
-	if user.TelegramChatID.Valid && user.TelegramChatID.Int64 != 0 {
-
-		// ФОРМИРУЕМ сообщение
-		message := fmt.Sprintf("Ваш код для сброса пароля: %s", resetCode)
-
-		// ВЫЗЫВАЕМ правильный метод SendPlainMessage
-		if err := s.notifySvc.SendPlainMessage(ctx, user.TelegramChatID.Int64, message); err != nil {
-			logger.Error("Не удалось отправить код верификации в Telegram", zap.Error(err), zap.Uint64("userID", user.ID))
-			// Можно добавить резервную логику
-		}
-	} else {
-		logger.Warn("Не удалось отправить код: у пользователя не привязан Telegram.", zap.Uint64("userID", user.ID))
-	}
-
-	return nil
-}
-
-func (s *AuthService) ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error {
-	var userIDStr string
-	var err error
-	var isForcedChange bool
-
-	cacheKeyForce := fmt.Sprintf(constants.CacheKeyForceChangeToken, payload.Token)
-	userIDStr, err = s.cacheRepo.Get(ctx, cacheKeyForce)
-	if err == nil {
-		s.cacheRepo.Del(ctx, cacheKeyForce)
-		isForcedChange = true
-	} else {
-		cacheKeyEmail := fmt.Sprintf(constants.CacheKeyResetEmail, payload.Token)
-		userIDStr, err = s.cacheRepo.Get(ctx, cacheKeyEmail)
-		if err == nil {
-			s.cacheRepo.Del(ctx, cacheKeyEmail)
-		} else {
-			cacheKeyPhone := fmt.Sprintf(constants.CacheKeyVerifyPhone, payload.Token)
-			userIDStr, err = s.cacheRepo.Get(ctx, cacheKeyPhone)
-			if err != nil {
-				return apperrors.NewHttpError(http.StatusBadRequest, "Неверный или истекший токен", err, nil)
-			}
-			s.cacheRepo.Del(ctx, cacheKeyPhone)
-		}
-	}
-
-	parsedID, err := strconv.ParseUint(userIDStr, 10, 64)
-	if err != nil || parsedID == 0 {
-		return apperrors.NewHttpError(http.StatusInternalServerError, "Ошибка получения ID пользователя из кэша", err, nil)
-	}
-
-	hashedPassword, err := utils.HashPassword(payload.NewPassword)
-	if err != nil {
-		return apperrors.NewHttpError(http.StatusInternalServerError, "Ошибка хэширования нового пароля", err, nil)
-	}
-
-	if isForcedChange {
-		if err := s.userRepo.UpdatePasswordAndClearFlag(ctx, parsedID, hashedPassword); err != nil {
-			return apperrors.NewHttpError(http.StatusInternalServerError, "Ошибка обновления пароля и сброса флага", err, nil)
-		}
-	} else {
-		if err := s.userRepo.UpdatePassword(ctx, parsedID, hashedPassword); err != nil {
-			return apperrors.NewHttpError(http.StatusInternalServerError, "Ошибка обновления пароля", err, nil)
-		}
-	}
-	return nil
-}
-
-func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error) {
-	logger := s.logger.With(zap.Uint64("userID", userID))
-
-	// Шаг 1: Получаем основную информацию о пользователе
-	user, err := s.userRepo.FindUserByID(ctx, userID)
-	if err != nil {
-		logger.Error("Не удалось найти пользователя по ID", zap.Error(err))
-		return nil, apperrors.ErrUserNotFound
-	}
-
-	// Шаг 2: Создаем базовую структуру ответа
-	response := &dto.UserProfileDTO{
-		ID:       user.ID,
-		Email:    user.Email,
-		Phone:    user.PhoneNumber,
-		FIO:      user.Fio,
-		PhotoURL: user.PhotoURL,
-	}
-	if user.DepartmentID != nil {
-		response.DepartmentID = *user.DepartmentID
-	}
-	// Шаг 3: Получаем имена для связанных сущностей
-
-	// --- Получаем Департамент ---
-	if user.DepartmentID != nil && *user.DepartmentID > 0 {
-		if depDTO, err := s.departmentService.FindDepartment(ctx, *user.DepartmentID); err == nil {
-			response.DepartmentName = depDTO.Name
-		} else {
-			logger.Warn("Не удалось получить имя департамента", zap.Error(err))
-		}
-	}
-
-	// --- Получаем Отдел (если есть) ---
-	if user.OtdelID != nil && *user.OtdelID > 0 {
-		if otdelDTO, err := s.otdelService.FindOtdel(ctx, *user.OtdelID); err == nil {
-			response.OtdelName = &otdelDTO.Name // Присваиваем указатель на имя
-		} else {
-			logger.Warn("Не удалось получить имя отдела", zap.Error(err))
-		}
-	}
-
-	// --- Получаем Должность ---
-	if user.PositionID != nil {
-		if posDTO, err := s.positionService.GetByID(ctx, uint64(*user.PositionID)); err == nil {
-			response.PositionName = posDTO.Name
-		} else {
-			logger.Warn("Не удалось получить имя должности", zap.Error(err))
-		}
-	}
-
-	if user.BranchID != nil {
-		if branchDTO, err := s.branchService.FindBranch(ctx, *user.BranchID); err == nil {
-			response.BranchName = branchDTO.Name
-		} else {
-			logger.Warn("Не удалось получить имя филиала", zap.Error(err))
-		}
-	}
-
-	// --- Получаем Офис (если есть) ---
-	if user.OfficeID != nil && *user.OfficeID > 0 {
-		if officeDTO, err := s.officeService.FindOffice(ctx, *user.OfficeID); err == nil {
-			response.OfficeName = &officeDTO.Name // Присваиваем указатель на имя
-		} else {
-			logger.Warn("Не удалось получить имя офиса", zap.Error(err))
-		}
-	}
-
-	return response, nil
-}
-
-func (s *AuthService) VerifyResetCode(ctx context.Context, payload dto.VerifyCodeDTO) (*dto.VerifyCodeResponseDTO, error) {
-	loginInput := payload.Login
-	logger := s.logger.With(zap.String("login_input", loginInput))
-
-	attemptsKey := fmt.Sprintf(constants.CacheKeyResetAttempts, loginInput)
-	if attemptsStr, err := s.cacheRepo.Get(ctx, attemptsKey); err == nil {
-		if attempts, _ := strconv.Atoi(attemptsStr); attempts >= s.cfg.MaxResetAttempts {
-			return nil, apperrors.NewHttpError(http.StatusTooManyRequests, fmt.Sprintf("Слишком много попыток. Попробуйте через %.0f минут.", s.cfg.LockoutDuration.Minutes()), nil, nil)
-		}
-	}
-
-	cacheKeyCode := fmt.Sprintf(constants.CacheKeyResetPhoneCode, loginInput)
-	storedCode, err := s.cacheRepo.Get(ctx, cacheKeyCode)
-	if err != nil || storedCode != payload.Code {
-		s.cacheRepo.Incr(ctx, attemptsKey)
-		s.cacheRepo.Expire(ctx, attemptsKey, s.cfg.LockoutDuration)
-		logger.Warn("Неверный или истекший код верификации", zap.Error(err))
-		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Неверный или истекший код верификации", err, nil)
-	}
-
-	// <<<--- НАЧАЛО ИСПРАВЛЕНИЙ ---
-	// Теперь мы нормализуем номер ПЕРЕД ПОИСКОМ пользователя в базе.
-	// Это решает проблему "404 User Not Found".
-	normalizedPhone := utils.NormalizeTajikPhoneNumber(loginInput)
-	if normalizedPhone == "" {
-		// Если ввод нельзя нормализовать, значит, это невалидный номер
-		logger.Warn("Не удалось нормализовать номер телефона при верификации")
-		return nil, apperrors.ErrUserNotFound
-	}
-
-	user, err := s.userRepo.FindUserByPhone(ctx, normalizedPhone)
-	if err != nil {
-		logger.Error("Не удалось найти пользователя по нормализованному номеру", zap.String("normalized_phone", normalizedPhone), zap.Error(err))
-		return nil, apperrors.ErrUserNotFound
-	}
-	// <<<--- КОНЕЦ ИСПРАВЛЕНИЙ ---
-
-	// Создание верификационного токена для шага /reset (остается без изменений)
-	verificationToken := uuid.New().String()
-	cacheKeyVerify := fmt.Sprintf(constants.CacheKeyVerifyPhone, verificationToken)
-	if err := s.cacheRepo.Set(ctx, cacheKeyVerify, user.ID, s.cfg.VerificationCodeTTL); err != nil {
-		return nil, apperrors.ErrInternalServer
-	}
-
-	// Удаляем использованный код и счетчик попыток
-	s.cacheRepo.Del(ctx, cacheKeyCode, attemptsKey)
-
-	return &dto.VerifyCodeResponseDTO{VerificationToken: verificationToken}, nil
-}
-
-func (s *AuthService) checkLockout(ctx context.Context, userID uint64) error {
-	lockoutKey := fmt.Sprintf(constants.CacheKeyLockout, userID)
-	if _, err := s.cacheRepo.Get(ctx, lockoutKey); err == nil {
-		return apperrors.ErrAccountLocked
-	}
-	return nil
-}
-
-func (s *AuthService) handleFailedLoginAttempt(ctx context.Context, userID uint64) {
-	attemptsKey := fmt.Sprintf(constants.CacheKeyLoginAttempts, userID)
-	attempts, _ := s.cacheRepo.Incr(ctx, attemptsKey)
-	if attempts >= int64(s.cfg.MaxLoginAttempts) {
-		lockoutKey := fmt.Sprintf(constants.CacheKeyLockout, userID)
-		s.cacheRepo.Set(ctx, lockoutKey, "locked", s.cfg.LockoutDuration)
-		s.cacheRepo.Del(ctx, attemptsKey)
-	}
-}
-
-func (s *AuthService) resetLoginAttempts(ctx context.Context, userID uint64) {
-	attemptsKey := fmt.Sprintf(constants.CacheKeyLoginAttempts, userID)
-	lockoutKey := fmt.Sprintf(constants.CacheKeyLockout, userID)
-	s.cacheRepo.Del(ctx, attemptsKey, lockoutKey)
 }
 
 func (s *AuthService) UpdateMyProfile(ctx context.Context, payload dto.UpdateMyProfileDTO) (*dto.UserDTO, error) {
 	userID, err := utils.GetUserIDFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
+
 	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
+
 	if _, hasPermission := permissionsMap[authz.ProfileUpdate]; !hasPermission {
 		return nil, apperrors.ErrForbidden
 	}
 
 	userEntity, err := s.userRepo.FindUserByID(ctx, userID)
-	if err != nil {
-		return nil, err
+	if err != nil { return nil, err }
+
+	// Логика удаления/замены фото
+	if payload.PhotoURL != nil {
+		// Физически удаляем старое, если оно было
+		if userEntity.PhotoURL != nil {
+			_ = s.fileStorage.Delete(*userEntity.PhotoURL)
+		}
+
+		if *payload.PhotoURL == "SET_NULL" {
+			userEntity.PhotoURL = nil 
+		} else {
+			userEntity.PhotoURL = payload.PhotoURL
+		}
 	}
 
-	if payload.Fio != nil {
-		userEntity.Fio = *payload.Fio
-	}
-	if payload.PhoneNumber != nil {
-		userEntity.PhoneNumber = *payload.PhoneNumber
-	}
-	if payload.Email != nil {
-		userEntity.Email = *payload.Email
-	}
-	if payload.PhotoURL != nil {
-		userEntity.PhotoURL = payload.PhotoURL
-	}
+	if payload.Fio != nil { userEntity.Fio = *payload.Fio }
+	if payload.PhoneNumber != nil { userEntity.PhoneNumber = *payload.PhoneNumber }
+	if payload.Email != nil { userEntity.Email = *payload.Email }
 
 	tx, err := s.userRepo.BeginTx(ctx)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	defer tx.Rollback(ctx)
 
-	if err := s.userRepo.UpdateUser(ctx, tx, userEntity); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
+	if err := s.userRepo.UpdateUser(ctx, tx, userEntity); err != nil { return nil, err }
+	if err := tx.Commit(ctx); err != nil { return nil, err }
 
 	return s.FindUser(ctx, userID)
 }
 
+func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error) {
+	user, err := s.userRepo.FindUserByID(ctx, userID)
+	if err != nil { return nil, apperrors.ErrUserNotFound }
+
+	res := &dto.UserProfileDTO{ID: user.ID, Email: user.Email, Phone: user.PhoneNumber, FIO: user.Fio, PhotoURL: user.PhotoURL}
+
+	if user.DepartmentID != nil {
+		if dep, err := s.departmentService.FindDepartment(ctx, *user.DepartmentID); err == nil { res.DepartmentName = dep.Name }
+	}
+	if user.OtdelID != nil {
+		if otdel, err := s.otdelService.FindOtdel(ctx, *user.OtdelID); err == nil { res.OtdelName = &otdel.Name }
+	}
+	if user.PositionID != nil {
+		if pos, err := s.positionService.GetByID(ctx, uint64(*user.PositionID)); err == nil { res.PositionName = pos.Name }
+	}
+	if user.BranchID != nil {
+		if br, err := s.branchService.FindBranch(ctx, *user.BranchID); err == nil { res.BranchName = br.Name }
+	}
+
+	return res, nil
+}
+
+func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error {
+	loginInput := strings.ToLower(payload.Login)
+	user, _ := s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
+	if user == nil { return nil }
+
+	resetCode := fmt.Sprintf("%04d", rand.Intn(10000))
+	s.cacheRepo.Set(ctx, fmt.Sprintf(constants.CacheKeyResetPhoneCode, loginInput), resetCode, time.Minute*15)
+
+	if user.TelegramChatID.Valid && user.TelegramChatID.Int64 != 0 {
+		message := fmt.Sprintf("Ваш код для сброса пароля: %s", resetCode)
+		_ = s.notifySvc.SendPlainMessage(ctx, user.TelegramChatID.Int64, message)
+	}
+	return nil
+}
+
+func (s *AuthService) VerifyResetCode(ctx context.Context, payload dto.VerifyCodeDTO) (*dto.VerifyCodeResponseDTO, error) {
+	login := strings.ToLower(payload.Login)
+	storedCode, _ := s.cacheRepo.Get(ctx, fmt.Sprintf(constants.CacheKeyResetPhoneCode, login))
+	if storedCode == "" || storedCode != payload.Code {
+		return nil, apperrors.ErrInvalidCredentials
+	}
+
+	user, _ := s.userRepo.FindUserByEmailOrLogin(ctx, login)
+	vToken := uuid.New().String()
+	s.cacheRepo.Set(ctx, fmt.Sprintf(constants.CacheKeyVerifyPhone, vToken), user.ID, time.Minute*15)
+	return &dto.VerifyCodeResponseDTO{VerificationToken: vToken}, nil
+}
+
+func (s *AuthService) ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error {
+	userIDStr, err := s.cacheRepo.Get(ctx, fmt.Sprintf(constants.CacheKeyVerifyPhone, payload.Token))
+	if err != nil { return apperrors.ErrInvalidCredentials }
+
+	parsedID, _ := strconv.ParseUint(userIDStr, 10, 64)
+	hashedPassword, _ := utils.HashPassword(payload.NewPassword)
+	return s.userRepo.UpdatePassword(ctx, parsedID, hashedPassword)
+}
+
 func (s *AuthService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error) {
 	user, err := s.userRepo.FindUserByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
+	if err != nil { return nil, err }
 	roles, _ := s.userRepo.GetRolesByUserID(ctx, id)
-	d := userEntityToUserDTO(user)
-	for _, r := range roles {
-		d.RoleIDs = append(d.RoleIDs, r.ID)
-	}
-
+	
+	d := &dto.UserDTO{ID: user.ID, Fio: user.Fio, Email: user.Email, PhoneNumber: user.PhoneNumber, PhotoURL: user.PhotoURL}
+	for _, r := range roles { d.RoleIDs = append(d.RoleIDs, r.ID) }
 	return d, nil
 }

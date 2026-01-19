@@ -57,5 +57,5 @@ type UpdateMyProfileDTO struct {
 	Fio         *string `json:"fio" validate:"omitempty,min=2"`
 	PhoneNumber *string `json:"phone_number" validate:"omitempty"`
 	Email       *string `json:"email" validate:"omitempty,email"`
-	PhotoURL    *string `json:"photo_url,omitempty"`
+	PhotoURL    *string `json:"photo_url,omitempty"` 
 }

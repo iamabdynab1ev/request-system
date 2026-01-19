@@ -239,26 +239,9 @@ func EscapeTextForMarkdownV2(text string) string {
 }
 
 func (s *Service) EditOrSendMessage(ctx context.Context, chatID int64, messageID int, text string, options ...MessageOption) error {
-	// Мы добавляем WithMarkdownV2 по умолчанию, если другая опция форматирования не передана.
-	hasParseMode := false
-	for _, opt := range options {
-		tempReq := &sendMessageRequest{}
-		opt(tempReq)
-		if tempReq.ParseMode != "" {
-			hasParseMode = true
-			break
-		}
-	}
-
-	finalOptions := make([]MessageOption, len(options))
-	copy(finalOptions, options)
-
-	if !hasParseMode {
-		finalOptions = append(finalOptions, WithMarkdownV2())
-	}
 
 	if messageID == 0 {
-		return s.SendMessageEx(ctx, chatID, text, finalOptions...)
+		return s.SendMessageEx(ctx, chatID, text, options...)
 	}
-	return s.EditMessageText(ctx, chatID, messageID, text, finalOptions...)
+	return s.EditMessageText(ctx, chatID, messageID, text, options...)
 }

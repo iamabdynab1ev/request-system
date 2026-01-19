@@ -3,21 +3,40 @@ package constants
 type PositionType string
 
 const (
+	// --- Департамент ---
 	PositionTypeHeadOfDepartment       PositionType = "HEAD_OF_DEPARTMENT"
 	PositionTypeDeputyHeadOfDepartment PositionType = "DEPUTY_HEAD_OF_DEPARTMENT"
-	PositionTypeManagerOfOtdel         PositionType = "MANAGER_OF_OTDEL"
+
+	// --- Отдел (БЫВШИЙ ManagerOfOtdel) ---
+	PositionTypeHeadOfOtdel            PositionType = "HEAD_OF_OTDEL"        
+	PositionTypeDeputyHeadOfOtdel      PositionType = "DEPUTY_HEAD_OF_OTDEL" 
+
+	// --- Филиал ---
 	PositionTypeBranchDirector         PositionType = "BRANCH_DIRECTOR"
 	PositionTypeDeputyBranchDirector   PositionType = "DEPUTY_BRANCH_DIRECTOR"
+
+	// --- Офис (ЦБО) ---
 	PositionTypeHeadOfOffice           PositionType = "HEAD_OF_OFFICE"
 	PositionTypeDeputyHeadOfOffice     PositionType = "DEPUTY_HEAD_OF_OFFICE"
+
+	// --- Остальные ---
+	PositionTypeManager                PositionType = "MANAGER" 
+	PositionTypeSpecialist             PositionType = "SPECIALIST"
 )
 
 var PositionTypeNames = map[PositionType]string{
-	PositionTypeHeadOfDepartment:       "Директор Департамента",
-	PositionTypeDeputyHeadOfDepartment: "Зам. Директора Департамента",
-	PositionTypeManagerOfOtdel:         "Менеджер Отдела",
-	PositionTypeBranchDirector:         "Директор Филиала",
-	PositionTypeDeputyBranchDirector:   "Зам. Директора Филиала",
-	PositionTypeHeadOfOffice:           "Руководитель Офиса (ЦБО)",
-	PositionTypeDeputyHeadOfOffice:     "Зам. Руководителя Офиса (ЦБО)",
+	PositionTypeHeadOfDepartment:       "Руководитель департамента",
+	PositionTypeDeputyHeadOfDepartment: "Заместитель руководителя департамента",
+	
+	PositionTypeHeadOfOtdel:            "Руководитель отдела",
+	PositionTypeDeputyHeadOfOtdel:      "Заместитель руководителя отдела",
+
+	PositionTypeBranchDirector:         "Директор филиала",
+	PositionTypeDeputyBranchDirector:   "Заместитель директора филиала",
+	
+	PositionTypeHeadOfOffice:           "Руководитель офиса",
+	PositionTypeDeputyHeadOfOffice:     "Заместитель руководителя офиса",
+	
+	PositionTypeManager:                "Менеджер",
+	PositionTypeSpecialist:             "Специалист",
 }

@@ -19,13 +19,12 @@ func main() {
 	// --- Определяем флаги ---
 	runCore := flag.Bool("core", false, "Запустить наполнение базовых справочников (статусы, права и т.д.)")
 	runRoles := flag.Bool("roles", false, "Запустить создание ролей и Супер-Администратора")
-	runEquipment := flag.Bool("equipment", false, "Запустить наполнение справочников оборудования")
-	runAll := flag.Bool("all", false, "Запустить все сидеры (эквивалентно -core -roles -equipment)")
+	runAll := flag.Bool("all", false, "Запустить все базовые сидеры (core + roles)")
 
 	flag.Parse()
 
-	// Если ни один флаг не указан - показываем справку
-	if !*runCore && !*runRoles && !*runEquipment && !*runAll {
+	// ИСПРАВЛЕНИЕ: Убрали !*runEquipment из проверки ниже
+	if !*runCore && !*runRoles && !*runAll {
 		log.Println("❌ Не выбран ни один сидер для запуска.")
 		log.Println("")
 		log.Println("Доступные флаги:")
@@ -33,7 +32,7 @@ func main() {
 		log.Println("")
 		log.Println("Примеры использования:")
 		log.Println("  go run ./seeders/cmd/seed/main.go -core")
-		log.Println("  go run ./seeders/cmd/seed/main.go -core -roles")
+		log.Println("  go run ./seeders/cmd/seed/main.go -roles")
 		log.Println("  go run ./seeders/cmd/seed/main.go -all")
 		log.Println("======================================================")
 		return
@@ -47,19 +46,17 @@ func main() {
 
 	log.Println("======================================================")
 
-	// Запуск сидеров в правильном порядке
+	// Запуск сидеров
 	if *runAll || *runCore {
 		seeders.SeedCoreDictionaries(dbPool)
 		log.Println("======================================================")
 	}
 
-
 	if *runAll || *runRoles {
-		// Роли и админ зависят от базовых справочников
 		seeders.SeedRolesAndAdmin(dbPool, cfg)
 		log.Println("======================================================")
 	}
 
-	log.Println("✅ Все указанные операции сидирования успешно завершены.")
+	log.Println("✅ Все операции сидирования успешно завершены.")
 	log.Println("======================================================")
 }

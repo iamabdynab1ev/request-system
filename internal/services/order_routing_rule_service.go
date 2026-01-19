@@ -105,7 +105,7 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 		return nil, apperrors.ErrForbidden
 	}
 
-	// [ВАЖНО] 2. Сначала готовим переменные поиска (преобразуем *int DTO в *uint64)
+	// 2. Готовим переменные поиска (int -> uint64)
 	var searchDept *uint64
 	if d.DepartmentID != nil {
 		v := uint64(*d.DepartmentID)
@@ -127,9 +127,10 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 		searchOffice = &v
 	}
 
-	// [ВАЖНО] 3. Очищаем лишние поля в зависимости от типа должности
-	// (Если это Директор Департамента, нам неважно, что прислали BranchID - мы его обнуляем)
+	// 3. Очистка лишних полей в зависимости от типа должности
 	switch constants.PositionType(d.PositionType) {
+	
+	// Руководство ДЕПАРТАМЕНТА (Привязано только к департаменту)
 	case constants.PositionTypeHeadOfDepartment, constants.PositionTypeDeputyHeadOfDepartment:
 		searchOtdel = nil
 		searchBranch = nil
@@ -138,12 +139,17 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 		d.BranchID = nil
 		d.OfficeID = nil
 
-	case constants.PositionTypeManagerOfOtdel:
+	// Руководство ОТДЕЛА и МЕНЕДЖЕРЫ (Привязаны к отделу, игнорируем Офис/ЦБО)
+	case constants.PositionTypeHeadOfOtdel,        // 003
+		 constants.PositionTypeDeputyHeadOfOtdel,  // 004
+		 constants.PositionTypeManager:            // 009 (БЫВШИЙ ManagerOfOtdel)
+		
 		searchOffice = nil
-		searchBranch = nil // Обычно отдел в структуре Head Office не имеет Branch
+		searchBranch = nil 
 		d.BranchID = nil
 		d.OfficeID = nil
 
+	// Руководство ФИЛИАЛА
 	case constants.PositionTypeBranchDirector, constants.PositionTypeDeputyBranchDirector:
 		searchDept = nil
 		searchOtdel = nil
@@ -152,6 +158,7 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 		d.OtdelID = nil
 		d.OfficeID = nil
 
+	// Руководство ОФИСА (ЦБО)
 	case constants.PositionTypeHeadOfOffice, constants.PositionTypeDeputyHeadOfOffice:
 		searchDept = nil
 		searchOtdel = nil
@@ -159,32 +166,28 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 		d.OtdelID = nil
 	}
 
-	// [ИСПРАВЛЕНИЕ ЗДЕСЬ!]
-	// Мы используем новый метод репозитория. Он вернет точный ID должности (200),
-	// который привязан к сотруднику в ЭТОМ департаменте.
-
+	// 4. Поиск реального сотрудника
 	realPositionID, err := s.userRepo.FindPositionIDByStructureAndType(ctx, nil, searchBranch, searchOffice, searchDept, searchOtdel, d.PositionType)
 	if err != nil {
 		return nil, err
 	}
 
-	// Если вернулся 0 - значит сотрудника нет
 	if realPositionID == 0 {
-		msg := "В выбранном подразделении отсутствуют активные сотрудники с данной должностью. Сначала наймите сотрудника."
+		msg := "В выбранном подразделении отсутствуют активные сотрудники с данной должностью (типом). Проверьте, назначен ли сотрудник."
 		return nil, apperrors.NewHttpError(http.StatusBadRequest, msg, nil, nil)
 	}
 
-	// 4. Создаем правило с ПРАВИЛЬНЫМ ID (realPositionID)
-	finalPosID := int(realPositionID) // тут будет 200, а не 5
+	// 5. Создание записи с реальным ID
+	finalPosID := int(realPositionID)
 
 	rule := &entities.OrderRoutingRule{
 		RuleName:     d.RuleName,
 		OrderTypeID:  d.OrderTypeID,
-		DepartmentID: d.DepartmentID, // Уже почищенные выше
+		DepartmentID: d.DepartmentID,
 		OtdelID:      d.OtdelID,
 		BranchID:     d.BranchID,
 		OfficeID:     d.OfficeID,
-		PositionID:   &finalPosID, // <-- Используем ID из реальной структуры
+		PositionID:   &finalPosID,
 		StatusID:     d.StatusID,
 	}
 
@@ -206,6 +209,7 @@ func (s *OrderRoutingRuleService) Create(ctx context.Context, d dto.CreateOrderR
 }
 
 func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.UpdateOrderRoutingRuleDTO, rawBody []byte) (*dto.OrderRoutingRuleResponseDTO, error) {
+	// 1. Авторизация
 	authContext, err := buildRuleAuthzContext(ctx, s.userRepo)
 	if err != nil {
 		return nil, err
@@ -214,12 +218,13 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 		return nil, apperrors.ErrForbidden
 	}
 
+	// 2. Получение текущего объекта
 	existing, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// 1. Обновление простых полей (изменений не было)
+	// 3. Обновление простых полей
 	if d.RuleName.Valid {
 		existing.RuleName = d.RuleName.String
 	}
@@ -231,7 +236,7 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 		existing.StatusID = d.StatusID.Int
 	}
 
-	// 2. Обработка изменений
+	// 4. Логика пересчета маршрута (если меняется структура или тип)
 	needsReRouting := false
 	targetPosType := ""
 
@@ -240,7 +245,7 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат JSON", err, nil)
 	}
 
-	// Если прислали новые значения полей, обновляем их в существующем объекте
+	// Обновление структурных полей
 	if d.BranchID.Valid {
 		existing.BranchID = &d.BranchID.Int
 		needsReRouting = true
@@ -273,7 +278,7 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 		needsReRouting = true
 	}
 
-	// Проверяем изменение Типа Должности
+	// Проверка изменения Типа Должности
 	if posTypeVal, ok := changes["position_type"]; ok {
 		needsReRouting = true
 		targetPosType = posTypeVal.(string)
@@ -284,9 +289,9 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 		}
 	}
 
-	// 3. Динамический поиск нового PositionID
+	// 5. Динамический поиск нового PositionID
 	if needsReRouting && targetPosType != "" {
-		// Подготавливаем переменные ТОЛЬКО ДЛЯ ПОИСКА
+		// Подготовка переменных для поиска (из existing, который уже обновлен)
 		var sDept, sBranch, sOffice, sOtdel *uint64
 		if existing.DepartmentID != nil {
 			v := uint64(*existing.DepartmentID)
@@ -305,17 +310,16 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 			sOffice = &v
 		}
 
-		// Очищаем ПЕРЕМЕННЫЕ ПОИСКА согласно логике,
-		// НО НЕ трогаем поля в `existing` (базе данных).
+		// Очистка ПЕРЕМЕННЫХ ПОИСКА в зависимости от типа должности
 		switch constants.PositionType(targetPosType) {
 		case constants.PositionTypeHeadOfDepartment, constants.PositionTypeDeputyHeadOfDepartment:
-			// Ищем только в Департаменте, игнорируем отдел/офис при поиске
 			sOtdel = nil
 			sBranch = nil
 			sOffice = nil
 
-		case constants.PositionTypeManagerOfOtdel:
-			// Для начальника отдела игнорируем офис и ветку
+		case constants.PositionTypeHeadOfOtdel,
+			 constants.PositionTypeDeputyHeadOfOtdel,
+			 constants.PositionTypeManager: // <-- БЫВШИЙ ManagerOfOtdel
 			sBranch = nil
 			sOffice = nil
 
@@ -329,22 +333,21 @@ func (s *OrderRoutingRuleService) Update(ctx context.Context, id int, d dto.Upda
 			sOtdel = nil
 		}
 
-		// Вызываем новый метод, передавая отфильтрованные sDept, sOtdel...
+		// Поиск
 		realPosID, err := s.userRepo.FindPositionIDByStructureAndType(ctx, nil, sBranch, sOffice, sDept, sOtdel, targetPosType)
 		if err != nil {
 			return nil, err
 		}
 		if realPosID == 0 {
-			// Опционально: можно вернуть ошибку, если в такой конфигурации нет сотрудника
-			return nil, apperrors.NewHttpError(http.StatusBadRequest, "В данной структуре (согласно фильтрам) нет активного сотрудника с таким типом должности.", nil, nil)
+			// Можно вернуть ошибку, если сотрудника больше нет в новой структуре
+			return nil, apperrors.NewHttpError(http.StatusBadRequest, "В обновленной структуре нет активного сотрудника с таким типом должности.", nil, nil)
 		}
 
-		// Сохраняем ТОЛЬКО новый PositionID (который стал 200)
 		newID := int(realPosID)
 		existing.PositionID = &newID
 	}
 
-	// 4. Сохраняем результат
+	// 6. Сохранение
 	now := time.Now()
 	existing.UpdatedAt = &now
 
@@ -428,7 +431,6 @@ func (s *OrderRoutingRuleService) Delete(ctx context.Context, id int) error {
 	return err
 }
 
-// Переименованная утилита, чтобы избежать конфликтов
 func buildRuleAuthzContext(ctx context.Context, repo repositories.UserRepositoryInterface) (*authz.Context, error) {
 	userID, _ := utils.GetUserIDFromCtx(ctx)
 	perms, _ := utils.GetPermissionsMapFromCtx(ctx)

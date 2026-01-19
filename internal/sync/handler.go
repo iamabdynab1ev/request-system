@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
@@ -79,22 +80,35 @@ func stringToPtr(s string) *string {
 	return &s
 }
 
+// isNotFound проверяет, является ли ошибка сигналом о том, что запись не найдена.
+func isNotFound(err error) bool {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true
+	}
+	if errors.Is(err, apperrors.ErrNotFound) {
+		return true
+	}
+	return false
+}
+
+// =========================================================================================
+// ОБРАБОТЧИКИ
+// =========================================================================================
+
 func (h *DBHandler) ProcessDepartments(ctx context.Context, data []dto.Department1CDTO) error {
-	return h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+	countTotal := len(data)
+	countCreated := 0
+	countUpdated := 0
+
+	err := h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		activeStatus, err := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
-		if err != nil {
-			return fmt.Errorf("статус 'ACTIVE' не найден: %w", err)
-		}
+		if err != nil { return err }
 		inactiveStatus, err := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
-		if err != nil {
-			return fmt.Errorf("статус 'INACTIVE' не найден: %w", err)
-		}
+		if err != nil { return err }
 
 		for _, item := range data {
 			statusID := activeStatus.ID
-			if !item.IsActive {
-				statusID = inactiveStatus.ID
-			}
+			if !item.IsActive { statusID = inactiveStatus.ID }
 
 			entity := entities.Department{
 				Name:         item.Name,
@@ -104,37 +118,43 @@ func (h *DBHandler) ProcessDepartments(ctx context.Context, data []dto.Departmen
 			}
 
 			existing, err := h.departmentRepo.FindByExternalID(ctx, tx, item.ExternalID, sourceSystem1C)
-			if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
-				return fmt.Errorf("ошибка поиска департамента '%s': %w", item.ExternalID, err)
+			if err != nil && !isNotFound(err) {
+				return fmt.Errorf("DB Error Dept %s: %w", item.ExternalID, err)
 			}
 
-			if existing != nil {
+			if err == nil {
 				if err := h.departmentRepo.Update(ctx, tx, existing.ID, entity); err != nil {
-					return fmt.Errorf("ошибка обновления департамента '%s': %w", item.Name, err)
+					return fmt.Errorf("Update Error Dept %s: %w", item.Name, err)
 				}
+				countUpdated++
 			} else {
 				if _, err := h.departmentRepo.Create(ctx, tx, entity); err != nil {
-					return fmt.Errorf("ошибка создания департамента '%s': %w", item.Name, err)
+					return fmt.Errorf("Create Error Dept %s: %w", item.Name, err)
 				}
+				countCreated++
 			}
 		}
 		return nil
 	})
+
+	if err == nil {
+		h.logger.Info("📊 ДЕПАРТАМЕНТЫ", zap.Int("Всего", countTotal), zap.Int("Создано", countCreated), zap.Int("Обновлено", countUpdated))
+	}
+	return err
 }
 
 func (h *DBHandler) ProcessBranches(ctx context.Context, data []dto.Branch1CDTO) error {
-	return h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+	countTotal := len(data)
+	countCreated := 0
+	countUpdated := 0
+
+	err := h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		activeStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
 		inactiveStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
-		if activeStatus == nil || inactiveStatus == nil {
-			return fmt.Errorf("не найдены статусы ACTIVE/INACTIVE")
-		}
 
 		for _, item := range data {
 			statusID := activeStatus.ID
-			if !item.IsActive {
-				statusID = inactiveStatus.ID
-			}
+			if !item.IsActive { statusID = inactiveStatus.ID }
 
 			entity := entities.Branch{
 				Name:         item.Name,
@@ -150,67 +170,57 @@ func (h *DBHandler) ProcessBranches(ctx context.Context, data []dto.Branch1CDTO)
 			}
 
 			existing, err := h.branchRepo.FindByExternalID(ctx, tx, item.ExternalID, sourceSystem1C)
-			if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
-				return fmt.Errorf("ошибка поиска филиала '%s': %w", item.ExternalID, err)
+			if err != nil && !isNotFound(err) {
+				return fmt.Errorf("DB Error Branch %s: %w", item.ExternalID, err)
 			}
-			if existing != nil {
+
+			if err == nil {
 				if err := h.branchRepo.UpdateBranch(ctx, tx, existing.ID, entity); err != nil {
-					return fmt.Errorf("ошибка обновления филиала '%s': %w", item.Name, err)
+					return fmt.Errorf("Update Error Branch %s: %w", item.Name, err)
 				}
+				countUpdated++
 			} else {
 				if _, err := h.branchRepo.CreateBranch(ctx, tx, entity); err != nil {
-					return fmt.Errorf("ошибка создания филиала '%s': %w", item.Name, err)
+					return fmt.Errorf("Create Error Branch %s: %w", item.Name, err)
 				}
+				countCreated++
 			}
 		}
 		return nil
 	})
+
+	if err == nil {
+		h.logger.Info("📊 ФИЛИАЛЫ", zap.Int("Всего", countTotal), zap.Int("Создано", countCreated), zap.Int("Обновлено", countUpdated))
+	}
+	return err
 }
 
 func (h *DBHandler) ProcessOtdels(ctx context.Context, data []dto.Otdel1CDTO) error {
-	return h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+	countTotal := len(data)
+	countCreated := 0
+	countUpdated := 0
+
+	err := h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		activeStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
 		inactiveStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
-		if activeStatus == nil || inactiveStatus == nil {
-			return fmt.Errorf("статусы не найдены")
-		}
 
 		for _, item := range data {
-			var depID, branchID, parentID *uint64
-
-			parentExtID := item.ParentExternalID
-			depExtID := item.DepartmentExternalID
-			branchExtID := item.BranchExternalID
-
-			// Новая иерархическая логика проверки родителей
-			if parentExtID != "" {
-				// Приоритет №1: ищем родителя-отдела
-				parent, err := h.otdelRepo.FindByExternalID(ctx, tx, parentExtID, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для вложенного отдела '%s' указан несуществующий родительский отдел (external_id: '%s')", item.Name, parentExtID)
-				}
-				parentID = &parent.ID
-			} else if depExtID != "" {
-				// Приоритет №2: ищем родителя-департамента
-				parent, err := h.departmentRepo.FindByExternalID(ctx, tx, depExtID, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для отдела '%s' указан несуществующий департамент (external_id: '%s')", item.Name, depExtID)
-				}
-				depID = &parent.ID
-			} else if branchExtID != "" {
-				// Приоритет №3: ищем родителя-филиала
-				parent, err := h.branchRepo.FindByExternalID(ctx, tx, branchExtID, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для отдела '%s' указан несуществующий филиал (external_id: '%s')", item.Name, branchExtID)
-				}
-				branchID = &parent.ID
-			} else {
-				return fmt.Errorf("для отдела '%s' не указан ни один из возможных родителей", item.Name)
-			}
-
 			statusID := activeStatus.ID
-			if !item.IsActive {
-				statusID = inactiveStatus.ID
+			if !item.IsActive { statusID = inactiveStatus.ID }
+
+			var depID, branchID, parentID *uint64
+			if item.ParentExternalID != "" {
+				if p, _ := h.otdelRepo.FindByExternalID(ctx, tx, item.ParentExternalID, sourceSystem1C); p != nil {
+					parentID = &p.ID
+				}
+			} else if item.DepartmentExternalID != "" {
+				if p, _ := h.departmentRepo.FindByExternalID(ctx, tx, item.DepartmentExternalID, sourceSystem1C); p != nil {
+					depID = &p.ID
+				}
+			} else if item.BranchExternalID != "" {
+				if p, _ := h.branchRepo.FindByExternalID(ctx, tx, item.BranchExternalID, sourceSystem1C); p != nil {
+					branchID = &p.ID
+				}
 			}
 
 			entity := entities.Otdel{
@@ -218,66 +228,59 @@ func (h *DBHandler) ProcessOtdels(ctx context.Context, data []dto.Otdel1CDTO) er
 				StatusID:      statusID,
 				DepartmentsID: depID,
 				BranchID:      branchID,
-				ParentID:      parentID, // <-- Новое
+				ParentID:      parentID,
 				ExternalID:    stringToPtr(item.ExternalID),
 				SourceSystem:  stringToPtr(sourceSystem1C),
 			}
 
-			// (логика Create/Update)
 			existing, err := h.otdelRepo.FindByExternalID(ctx, tx, item.ExternalID, sourceSystem1C)
-			if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
-				return fmt.Errorf("ошибка поиска отдела '%s': %w", item.ExternalID, err)
+			if err != nil && !isNotFound(err) {
+				return fmt.Errorf("DB Error Otdel %s: %w", item.ExternalID, err)
 			}
 
-			if existing != nil {
+			if err == nil {
 				if err := h.otdelRepo.UpdateOtdel(ctx, tx, existing.ID, entity); err != nil {
-					return fmt.Errorf("ошибка обновления отдела '%s': %w", item.Name, err)
+					return fmt.Errorf("Update Error Otdel %s: %w", item.Name, err)
 				}
+				countUpdated++
 			} else {
 				if _, err := h.otdelRepo.CreateOtdel(ctx, tx, entity); err != nil {
-					return fmt.Errorf("ошибка создания отдела '%s': %w", item.Name, err)
+					return fmt.Errorf("Create Error Otdel %s: %w", item.Name, err)
 				}
+				countCreated++
 			}
 		}
 		return nil
 	})
+
+	if err == nil {
+		h.logger.Info("📊 ОТДЕЛЫ", zap.Int("Всего", countTotal), zap.Int("Создано", countCreated), zap.Int("Обновлено", countUpdated))
+	}
+	return err
 }
 
 func (h *DBHandler) ProcessOffices(ctx context.Context, data []dto.Office1CDTO) error {
-	return h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+	countTotal := len(data)
+	countCreated := 0
+	countUpdated := 0
+
+	err := h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		activeStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
 		inactiveStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
-		if activeStatus == nil || inactiveStatus == nil {
-			return fmt.Errorf("статусы не найдены")
-		}
 
 		for _, item := range data {
-			var branchID, parentID *uint64
-
-			parentExtID := item.ParentExternalID
-			branchExtID := item.BranchExternalID
-
-			if parentExtID != "" {
-
-				parent, err := h.officeRepo.FindByExternalID(ctx, tx, parentExtID, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для вложенного офиса '%s' указан несуществующий родительский офис (external_id: '%s')", item.Name, parentExtID)
-				}
-				parentID = &parent.ID
-			} else if branchExtID != "" {
-
-				parent, err := h.branchRepo.FindByExternalID(ctx, tx, branchExtID, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для офиса '%s' указан несуществующий филиал (external_id: '%s')", item.Name, branchExtID)
-				}
-				branchID = &parent.ID
-			} else {
-				return fmt.Errorf("для офиса '%s' не указан ни один из родителей (ни parent, ни branch)", item.Name)
-			}
-
 			statusID := activeStatus.ID
-			if !item.IsActive {
-				statusID = inactiveStatus.ID
+			if !item.IsActive { statusID = inactiveStatus.ID }
+
+			var branchID, parentID *uint64
+			if item.ParentExternalID != "" {
+				if p, _ := h.officeRepo.FindByExternalID(ctx, tx, item.ParentExternalID, sourceSystem1C); p != nil {
+					parentID = &p.ID
+				}
+			} else if item.BranchExternalID != "" {
+				if p, _ := h.branchRepo.FindByExternalID(ctx, tx, item.BranchExternalID, sourceSystem1C); p != nil {
+					branchID = &p.ID
+				}
 			}
 
 			entity := entities.Office{
@@ -292,66 +295,57 @@ func (h *DBHandler) ProcessOffices(ctx context.Context, data []dto.Office1CDTO) 
 			}
 
 			existing, err := h.officeRepo.FindByExternalID(ctx, tx, item.ExternalID, sourceSystem1C)
-			if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
-				return fmt.Errorf("ошибка поиска офиса '%s': %w", item.ExternalID, err)
+			if err != nil && !isNotFound(err) {
+				return fmt.Errorf("DB Error Office %s: %w", item.ExternalID, err)
 			}
 
-			if existing != nil {
+			if err == nil {
 				if err := h.officeRepo.UpdateOffice(ctx, tx, existing.ID, entity); err != nil {
-					return fmt.Errorf("ошибка обновления офиса '%s': %w", item.Name, err)
+					return fmt.Errorf("Update Error Office %s: %w", item.Name, err)
 				}
+				countUpdated++
 			} else {
 				if _, err := h.officeRepo.CreateOffice(ctx, tx, entity); err != nil {
-					return fmt.Errorf("ошибка создания офиса '%s': %w", item.Name, err)
+					return fmt.Errorf("Create Error Office %s: %w", item.Name, err)
 				}
+				countCreated++
 			}
 		}
 		return nil
 	})
+
+	if err == nil {
+		h.logger.Info("📊 ОФИСЫ", zap.Int("Всего", countTotal), zap.Int("Создано", countCreated), zap.Int("Обновлено", countUpdated))
+	}
+	return err
 }
 
 func (h *DBHandler) ProcessPositions(ctx context.Context, data []dto.Position1CDTO) error {
-	return h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+	countTotal := len(data)
+	countCreated := 0
+	countUpdated := 0
+
+	err := h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		activeStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
 		inactiveStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
-		if activeStatus == nil || inactiveStatus == nil {
-			return fmt.Errorf("статусы не найдены")
-		}
 
 		for _, item := range data {
 			var depID, otdelID, branchID, officeID *uint64
-
-			// Логика осталась прежней: должность может быть привязана к любому уровню оргструктуры
 			if id := item.DepartmentExternalID; id != nil && *id != "" {
-				parent, err := h.departmentRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для должности '%s' указан несуществующий департамент ('%s')", item.Name, *id)
-				}
-				depID = &parent.ID
-			} else if id := item.OtdelExternalID; id != nil && *id != "" {
-				parent, err := h.otdelRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для должности '%s' указан несуществующий отдел ('%s')", item.Name, *id)
-				}
-				otdelID = &parent.ID
-			} else if id := item.BranchExternalID; id != nil && *id != "" {
-				parent, err := h.branchRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для должности '%s' указан несуществующий филиал ('%s')", item.Name, *id)
-				}
-				branchID = &parent.ID
-			} else if id := item.OfficeExternalID; id != nil && *id != "" {
-				parent, err := h.officeRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для должности '%s' указан несуществующий офис ('%s')", item.Name, *id)
-				}
-				officeID = &parent.ID
+				if p, _ := h.departmentRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C); p != nil { depID = &p.ID }
+			}
+			if id := item.OtdelExternalID; id != nil && *id != "" {
+				if p, _ := h.otdelRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C); p != nil { otdelID = &p.ID }
+			}
+			if id := item.BranchExternalID; id != nil && *id != "" {
+				if p, _ := h.branchRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C); p != nil { branchID = &p.ID }
+			}
+			if id := item.OfficeExternalID; id != nil && *id != "" {
+				if p, _ := h.officeRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C); p != nil { officeID = &p.ID }
 			}
 
 			statusID := activeStatus.ID
-			if !item.IsActive {
-				statusID = inactiveStatus.ID
-			}
+			if !item.IsActive { statusID = inactiveStatus.ID }
 
 			entity := entities.Position{
 				Name:         item.Name,
@@ -366,60 +360,86 @@ func (h *DBHandler) ProcessPositions(ctx context.Context, data []dto.Position1CD
 			}
 
 			existing, err := h.positionRepo.FindByExternalID(ctx, tx, item.ExternalID, sourceSystem1C)
-			if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
-				return fmt.Errorf("ошибка поиска должности '%s': %w", item.ExternalID, err)
+			if err != nil && !isNotFound(err) {
+				return fmt.Errorf("DB Error Position %s: %w", item.ExternalID, err)
 			}
 
-			if existing != nil {
+			if err == nil {
 				if err := h.positionRepo.Update(ctx, tx, existing.ID, entity); err != nil {
-					return fmt.Errorf("ошибка обновления должности '%s': %w", item.Name, err)
+					return fmt.Errorf("Update Error Pos %s: %w", item.Name, err)
 				}
+				countUpdated++
 			} else {
 				if _, err := h.positionRepo.Create(ctx, tx, entity); err != nil {
-					return fmt.Errorf("ошибка создания должности '%s': %w", item.Name, err)
+					return fmt.Errorf("Create Error Pos %s: %w", item.Name, err)
 				}
+				countCreated++
 			}
 		}
 		return nil
 	})
+
+	if err == nil {
+		h.logger.Info("📊 ДОЛЖНОСТИ", zap.Int("Всего", countTotal), zap.Int("Создано", countCreated), zap.Int("Обновлено", countUpdated))
+	}
+	return err
 }
 
-func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) error {
-	return h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		activeStatus, err := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
-		if err != nil {
-			return fmt.Errorf("статус 'ACTIVE' не найден: %w", err)
-		}
-		inactiveStatus, err := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
-		if err != nil {
-			return fmt.Errorf("статус 'INACTIVE' не найден: %w", err)
-		}
+// =========================================================================================
+// ПОЛЬЗОВАТЕЛИ
+// =========================================================================================
 
+func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) error {
+	countTotal := len(data)
+	countCreated := 0
+	countUpdated := 0
+	
+	h.logger.Info("⏳ Обработка пользователей (Режим: СТРОГИЙ)", zap.Int("входящих", countTotal))
+
+	err := h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		activeStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
+		inactiveStatus, _ := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
+
+		// 1. ПРЕДВАРИТЕЛЬНО ЗАГРУЖАЕМ РОЛИ ИЗ .env (один раз на всю транзакцию)
 		var defaultRoleIDs []uint64
 		for _, roleName := range h.cfg.DefaultRolesFor1CUsers {
-			if roleName == "" {
+			name := strings.TrimSpace(roleName)
+			if name == "" {
 				continue
 			}
-			role, err := h.roleRepo.FindByName(ctx, tx, roleName)
-			if err != nil {
-				h.logger.Warn("Не удалось найти роль по умолчанию из конфигурации. Она не будет назначена.",
-					zap.String("roleName", roleName), zap.Error(err))
-			} else {
+			role, err := h.roleRepo.FindByName(ctx, tx, name)
+			if err == nil && role != nil {
 				defaultRoleIDs = append(defaultRoleIDs, role.ID)
+			} else {
+				h.logger.Warn("⚠️ Роль из .env не найдена в базе (проверьте написание)", zap.String("name", name))
 			}
 		}
-		if len(h.cfg.DefaultRolesFor1CUsers) > 0 && len(defaultRoleIDs) == 0 {
-			h.logger.Error("Ни одна из ролей по умолчанию, указанных в .env, не найдена в базе. Новые пользователи будут созданы без ролей.")
-		}
 
+		// Обработка сотрудников
 		for _, item := range data {
+			cleanEmail := strings.TrimSpace(item.Email)
+			cleanPhone := strings.TrimSpace(item.PhoneNumber)
+			if item.ExternalID == "" {
+				continue
+			}
+
+			// Формируем уникальные заглушки для базы
+			dbEmail := cleanEmail
+			if dbEmail == "" {
+				dbEmail = fmt.Sprintf("no_email_%s@1c.local", item.ExternalID)
+			}
+			dbPhone := cleanPhone
+			if dbPhone == "" {
+				dbPhone = fmt.Sprintf("N%s", item.ExternalID)
+			}
+			
+			// Проверка должности
 			if item.PositionExternalID == "" {
-				return fmt.Errorf("для пользователя '%s' (external_id: '%s') не указан обязательный ID должности (positionExternalId). Синхронизация пользователей отменена", item.Fio, item.ExternalID)
+				continue
 			}
 			pos, err := h.positionRepo.FindByExternalID(ctx, tx, item.PositionExternalID, sourceSystem1C)
 			if err != nil {
-				return fmt.Errorf("для пользователя '%s' (external_id: '%s') указана несуществующая должность (positionExternalId: '%s'). Убедитесь, что справочник должностей синхронизирован первым. Синхронизация пользователей отменена",
-					item.Fio, item.ExternalID, item.PositionExternalID)
+				continue
 			}
 
 			statusID := activeStatus.ID
@@ -427,58 +447,56 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 				statusID = inactiveStatus.ID
 			}
 
+			// Привязка оргструктуры (сверху вниз или по наследованию от должности)
 			var depID, otdelID, branchID, officeID *uint64
-
 			if id := item.DepartmentExternalID; id != nil && *id != "" {
-				parent, err := h.departmentRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для пользователя '%s' указан несуществующий департамент (external_id: '%s')", item.Fio, *id)
+				if p, _ := h.departmentRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C); p != nil {
+					depID = &p.ID
 				}
-				depID = &parent.ID
 			}
 			if id := item.OtdelExternalID; id != nil && *id != "" {
-				parent, err := h.otdelRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для пользователя '%s' указан несуществующий отдел (external_id: '%s')", item.Fio, *id)
+				if p, _ := h.otdelRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C); p != nil {
+					otdelID = &p.ID
 				}
-				otdelID = &parent.ID
 			}
 			if id := item.BranchExternalID; id != nil && *id != "" {
-				parent, err := h.branchRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для пользователя '%s' указан несуществующий филиал (external_id: '%s')", item.Fio, *id)
+				if p, _ := h.branchRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C); p != nil {
+					branchID = &p.ID
 				}
-				branchID = &parent.ID
 			}
 			if id := item.OfficeExternalID; id != nil && *id != "" {
-				parent, err := h.officeRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C)
-				if err != nil {
-					return fmt.Errorf("для пользователя '%s' указан несуществующий офис (external_id: '%s')", item.Fio, *id)
+				if p, _ := h.officeRepo.FindByExternalID(ctx, tx, *id, sourceSystem1C); p != nil {
+					officeID = &p.ID
 				}
-				officeID = &parent.ID
+			}
+			if depID == nil { depID = pos.DepartmentID }
+			if otdelID == nil { otdelID = pos.OtdelID }
+			if branchID == nil { branchID = pos.BranchID }
+			if officeID == nil { officeID = pos.OfficeID }
+
+			// Поиск пользователя только по EXTERNAL_ID
+			existing, err := h.userRepo.FindByExternalID(ctx, tx, item.ExternalID, sourceSystem1C)
+			userFound := (err == nil && existing != nil && existing.ID != 0)
+
+			// --- Очистка путей для соблюдения уникальности (UNIQUE CONSTRAINTS) ---
+			// Убираем эти же контакты у ЛЮБОГО ДРУГОГО пользователя в базе
+			if cleanEmail != "" {
+				_, _ = tx.Exec(ctx, "UPDATE users SET email = 'old_' || id || '@trash.local' WHERE LOWER(email) = LOWER($1) AND external_id != $2", cleanEmail, item.ExternalID)
+			}
+			if !strings.HasPrefix(dbPhone, "N") {
+				_, _ = tx.Exec(ctx, "UPDATE users SET phone_number = 'D_' || id::text WHERE phone_number = $1 AND external_id != $2", dbPhone, item.ExternalID)
 			}
 
-			if depID == nil {
-				depID = pos.DepartmentID
-			}
-			if otdelID == nil {
-				otdelID = pos.OtdelID
-			}
-			if branchID == nil {
-				branchID = pos.BranchID
-			}
-			if officeID == nil {
-				officeID = pos.OfficeID
-			}
 			var usernamePtr *string
 			if item.Username != "" {
 				val := item.Username
 				usernamePtr = &val
 			}
+
 			entity := entities.User{
 				Fio:          item.Fio,
-				Email:        item.Email,
-				PhoneNumber:  item.PhoneNumber,
+				Email:        dbEmail,
+				PhoneNumber:  dbPhone,
 				StatusID:     statusID,
 				PositionID:   &pos.ID,
 				DepartmentID: depID,
@@ -490,33 +508,37 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 				SourceSystem: stringToPtr(sourceSystem1C),
 			}
 
-			existing, err := h.userRepo.FindByExternalID(ctx, tx, item.ExternalID, sourceSystem1C)
-			if err != nil && !errors.Is(err, apperrors.ErrNotFound) {
-				return fmt.Errorf("ошибка поиска пользователя '%s': %w", item.ExternalID, err)
-			}
-
-			if existing != nil {
-				if err := h.userRepo.UpdateFromSync(ctx, tx, existing.ID, entity); err != nil {
-					return fmt.Errorf("ошибка обновления пользователя '%s': %w", item.Fio, err)
+			if userFound {
+			
+				_, _ = tx.Exec(ctx, "UPDATE users SET deleted_at = NULL WHERE id = $1", existing.ID)
+				if err := h.userRepo.UpdateFromSync(ctx, tx, existing.ID, entity); err == nil {
+					countUpdated++
 				}
 			} else {
+		
 				entity.Password = "SYNC_USER_NO_PASSWORD"
 				newID, err := h.userRepo.CreateFromSync(ctx, tx, entity)
-				if err != nil {
-					return fmt.Errorf("ошибка создания пользователя '%s': %w", item.Fio, err)
-				}
-
-				if len(defaultRoleIDs) > 0 {
-					if err := h.userRepo.SyncUserRoles(ctx, tx, newID, defaultRoleIDs); err != nil {
-						// Ошибка назначения ролей не должна "валить" всю транзакцию,
-						// поэтому мы ее только логируем, но не возвращаем.
-						h.logger.Error("Не удалось назначить роли по умолчанию новому пользователю",
-							zap.Uint64("userID", newID), zap.Error(err))
+				if err == nil {
+					// Назначение ролей по умолчанию ТОЛЬКО для новых сотрудников
+					for _, rID := range defaultRoleIDs {
+						_, _ = tx.Exec(ctx, "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", newID, rID)
 					}
+					countCreated++
 				}
 			}
 		}
 		return nil
 	})
-}
+
+	if err != nil {
+		h.logger.Error("💥 КРИТИЧЕСКАЯ ОШИБКА СИНХРОНИЗАЦИИ", zap.Error(err))
+		return err
+	}
+
+	h.logger.Info("🏁 СИНХРОНИЗАЦИЯ ПОЛЬЗОВАТЕЛЕЙ ЗАВЕРШЕНА", 
+		zap.Int("Пришло", countTotal), 
+		zap.Int("Создано", countCreated), 
+		zap.Int("Обновлено", countUpdated))
 	
+	return nil
+}
