@@ -1,10 +1,12 @@
 package controllers
 
 import (
+	"bytes" 
 	"encoding/json"
+	"io"   
 	"net/http"
 	"strconv"
-
+	"strings"
 	"request-system/config"
 	"request-system/internal/dto"
 	"request-system/internal/services"
@@ -83,19 +85,31 @@ func (c *UserController) FindUser(ctx echo.Context) error {
 
 func (c *UserController) CreateUser(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-	dataString := ctx.FormValue("data")
-	if dataString == "" {
-		return c.errorResponse(ctx, apperrors.NewBadRequestError("Поле 'data' в form-data обязательно"))
-	}
+	contentType := ctx.Request().Header.Get("Content-Type")
+	
 	var formData dto.CreateUserDTO
-	if err := json.Unmarshal([]byte(dataString), &formData); err != nil {
-		return c.errorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный JSON в поле 'data'", err, nil))
+
+	// ЛОГИКА ИСПРАВЛЕНИЯ
+	if strings.HasPrefix(contentType, "application/json") {
+		if err := ctx.Bind(&formData); err != nil {
+			return c.errorResponse(ctx, apperrors.NewBadRequestError("Некорректный JSON в теле запроса"))
+		}
+	} else {
+		dataString := ctx.FormValue("data")
+		if dataString == "" {
+			return c.errorResponse(ctx, apperrors.NewBadRequestError("Поле 'data' в form-data обязательно"))
+		}
+		if err := json.Unmarshal([]byte(dataString), &formData); err != nil {
+			return c.errorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный JSON в поле 'data'", err, nil))
+		}
+		
+		photoURL, err := c.handlePhotoUpload(ctx, constants.UploadContextProfilePhoto.String())
+		if err != nil {
+			return c.errorResponse(ctx, err)
+		}
+		formData.PhotoURL = photoURL
 	}
-	photoURL, err := c.handlePhotoUpload(ctx, constants.UploadContextProfilePhoto.String())
-	if err != nil {
-		return c.errorResponse(ctx, err)
-	}
-	formData.PhotoURL = photoURL
+
 	if err := ctx.Validate(&formData); err != nil {
 		return c.errorResponse(ctx, err)
 	}
@@ -114,27 +128,65 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 	}
 
 	payload := dto.UpdateUserDTO{ID: idFromURL}
+	
+	// Важно инициализировать мапу, иначе SmartUpdate не сработает
 	var explicitFields map[string]interface{}
 
-	dataString := ctx.FormValue("data")
-	if dataString != "" {
-		if err := json.Unmarshal([]byte(dataString), &payload); err != nil {
-			c.logger.Error("UpdateUser: ошибка десериализации 'data' в DTO", zap.Error(err))
-			return c.errorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный JSON в поле 'data'", err, nil))
+	contentType := ctx.Request().Header.Get("Content-Type")
+
+	// 1. JSON
+	if strings.HasPrefix(contentType, "application/json") {
+		// Читаем тело запроса в байты
+		bodyBytes, err := io.ReadAll(ctx.Request().Body)
+		if err != nil {
+			return c.errorResponse(ctx, apperrors.NewBadRequestError("Ошибка чтения тела запроса"))
 		}
-		if err := json.Unmarshal([]byte(dataString), &explicitFields); err != nil {
-			c.logger.Error("UpdateUser: ошибка десериализации 'data' в map", zap.Error(err))
-			return c.errorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Некорректный JSON (map)", err, nil))
+		
+		// Восстанавливаем тело, чтобы Echo мог (если вдруг) прочитать его снова
+		ctx.Request().Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+		// Шаг А: Парсим в DTO (для валидации типов)
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			return c.errorResponse(ctx, apperrors.NewBadRequestError("Некорректный JSON (типы данных)"))
+		}
+
+		// Шаг Б: Парсим в MAP (для SmartUpdate)
+		if err := json.Unmarshal(bodyBytes, &explicitFields); err != nil {
+			return c.errorResponse(ctx, apperrors.NewBadRequestError("Некорректный JSON (структура)"))
+		}
+		
+	} else {
+		// 2. MULTIPART FORM
+		dataString := ctx.FormValue("data")
+		
+		if dataString != "" {
+			// Парсим СТРУКТУРУ (для типов и валидации)
+			if err := json.Unmarshal([]byte(dataString), &payload); err != nil {
+				c.logger.Error("UpdateUser: JSON Unmarshal Error", zap.Error(err))
+				return c.errorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный JSON в 'data'", err, nil))
+			}
+			
+			// Парсим MAP (для SmartUpdate)
+			if err := json.Unmarshal([]byte(dataString), &explicitFields); err != nil {
+				return c.errorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Ошибка парсинга полей JSON", err, nil))
+			}
+		}
+
+		photoURL, err := c.handlePhotoUpload(ctx, constants.UploadContextProfilePhoto.String())
+		if err != nil {
+			return c.errorResponse(ctx, err)
+		}
+		if photoURL != nil {
+			payload.PhotoURL = photoURL
+			if explicitFields == nil {
+				explicitFields = make(map[string]interface{})
+			}
+			explicitFields["photo_url"] = *photoURL
 		}
 	}
 
-	photoURL, err := c.handlePhotoUpload(ctx, constants.UploadContextProfilePhoto.String())
-	if err != nil {
-		return c.errorResponse(ctx, err)
-	}
-	if photoURL != nil {
-		payload.PhotoURL = photoURL
-	}
+	// Важно вернуть ID (json может его затереть, если там было поле id: 0 или null)
+	payload.ID = idFromURL 
 
 	if err = ctx.Validate(&payload); err != nil {
 		return c.errorResponse(ctx, err)
@@ -147,7 +199,6 @@ func (c *UserController) UpdateUser(ctx echo.Context) error {
 
 	return utils.SuccessResponse(ctx, res, "Пользователь успешно обновлен", http.StatusOK)
 }
-
 func (c *UserController) GetUserPermissions(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)

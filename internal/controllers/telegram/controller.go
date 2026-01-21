@@ -243,8 +243,10 @@ func (c *TelegramController) sendInternalError(ctx context.Context, chatID int64
 }
 
 func (c *TelegramController) sendStaleStateError(ctx context.Context, chatID int64, messageID int) error {
-	return c.tgService.EditMessageText(ctx, chatID, messageID,
-		"❌ Сессия истекла\\.\nНачните заново с /my\\_tasks\\.")
+	
+	return c.tgService.SendMessageEx(ctx, chatID, 
+        "⚠️ Срок действия кнопки истек\\.\nПожалуйста, вызовите меню заново: /my\\_tasks", 
+        telegram.WithMarkdownV2())
 }
 
 func getStatusEmoji(status *entities.Status) string {

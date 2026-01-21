@@ -1,4 +1,3 @@
-// internal/controllers/telegram/actions.go
 package telegram
 
 import (
@@ -10,20 +9,24 @@ import (
 
 	"go.uber.org/zap"
 
+	"request-system/internal/authz"
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	"request-system/pkg/telegram"
 	"request-system/pkg/types"
+	"request-system/pkg/utils"
 )
 
 func (c *TelegramController) handleSelectOrderAction(ctx context.Context, chatID int64, mid int, orderID uint64) error {
-	user, _, err := c.prepareUserContext(ctx, chatID)
+	// Подготовка контекста (для проверки прав чтения)
+	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
 		return err
 	}
-	order, err := c.orderService.FindOrderByIDForTelegram(ctx, user.ID, orderID)
+	
+	order, err := c.orderService.FindOrderByIDForTelegram(userCtx, user.ID, orderID)
 	if err != nil {
-		_ = c.tgService.AnswerCallbackQuery(ctx, "", "❌ Заявка не найдена")
+		_ = c.tgService.AnswerCallbackQuery(ctx, "", "❌ Заявка не найдена или нет доступа")
 		return nil
 	}
 	state := dto.NewTelegramState(orderID, mid)
@@ -38,14 +41,16 @@ func (c *TelegramController) handleEditStatusStart(ctx context.Context, chatID i
 	if err != nil {
 		return c.sendStaleStateError(ctx, chatID, messageID)
 	}
-	user, err := c.userService.FindUserByTelegramChatID(ctx, chatID)
+	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
-	order, err := c.orderService.FindOrderByIDForTelegram(ctx, user.ID, state.OrderID)
+	order, err := c.orderService.FindOrderByIDForTelegram(userCtx, user.ID, state.OrderID)
 	if err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
+	
+	// Получаем текущий статус и список доступных
 	currentStatus, err := c.statusRepo.FindStatus(ctx, order.StatusID)
 	if err != nil {
 		return c.sendInternalError(ctx, chatID)
@@ -55,16 +60,18 @@ func (c *TelegramController) handleEditStatusStart(ctx context.Context, chatID i
 		_ = c.tgService.AnswerCallbackQuery(ctx, "", "Нет доступных статусов")
 		return nil
 	}
+
 	state.Mode = "awaiting_new_status"
 	if err := c.setUserState(ctx, chatID, state); err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
+
 	var keyboard [][]telegram.InlineKeyboardButton
 	currentRow := []telegram.InlineKeyboardButton{}
 	for _, status := range allowedStatuses {
 		cb := fmt.Sprintf(`{"action":"set_status","status_id":%d}`, status.ID)
 		currentRow = append(currentRow, telegram.InlineKeyboardButton{
-			Text: status.Name,
+			Text:         status.Name,
 			CallbackData: cb,
 		})
 		if len(currentRow) == 2 {
@@ -78,6 +85,7 @@ func (c *TelegramController) handleEditStatusStart(ctx context.Context, chatID i
 	keyboard = append(keyboard, []telegram.InlineKeyboardButton{
 		{Text: "◀️ Назад", CallbackData: fmt.Sprintf(`{"action":"select_order","order_id":%d}`, state.OrderID)},
 	})
+
 	return c.tgService.EditMessageText(ctx, chatID, messageID,
 		"Выберите новый статус:", telegram.WithKeyboard(keyboard))
 }
@@ -91,8 +99,9 @@ func (c *TelegramController) handleEditDurationStart(ctx context.Context, chatID
 	if err := c.setUserState(ctx, chatID, state); err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
+
 	quickDurations := []struct {
-		Label string
+		Label    string
 		Duration time.Duration
 	}{
 		{"Через 3 часа", 3 * time.Hour},
@@ -108,7 +117,7 @@ func (c *TelegramController) handleEditDurationStart(ctx context.Context, chatID
 		callbackValue := futureTime.Format("02.01.2006 15:04")
 		buttonText := fmt.Sprintf("%s (%s)", qd.Label, futureTime.Format("02.01 15:04"))
 		row = append(row, telegram.InlineKeyboardButton{
-			Text: buttonText,
+			Text:         buttonText,
 			CallbackData: fmt.Sprintf(`{"action":"set_duration","value":"%s"}`, callbackValue),
 		})
 		if len(row) == 2 {
@@ -122,6 +131,7 @@ func (c *TelegramController) handleEditDurationStart(ctx context.Context, chatID
 	keyboard = append(keyboard, []telegram.InlineKeyboardButton{
 		{Text: "◀️ Назад", CallbackData: fmt.Sprintf(`{"action":"select_order","order_id":%d}`, state.OrderID)},
 	})
+
 	text := "Выберите срок или отправьте его текстом в формате `ДД.ММ.ГГГГ ЧЧ:ММ`"
 	return c.tgService.EditMessageText(ctx, chatID, messageID, text,
 		telegram.WithKeyboard(keyboard), telegram.WithMarkdownV2())
@@ -131,9 +141,11 @@ func (c *TelegramController) handleSetDuration(ctx context.Context, chatID int64
 	if len(text) > 20 {
 		return c.tgService.SendMessageEx(ctx, chatID, "❌ Неверный формат даты\\.", telegram.WithMarkdownV2())
 	}
+
 	var value interface{}
 	var parsedTime time.Time
 	var err error
+
 	if strings.ToLower(text) == "clear" {
 		value = nil
 	} else {
@@ -162,6 +174,7 @@ func (c *TelegramController) handleSetDuration(ctx context.Context, chatID int64
 		}
 		value = parsedTime
 	}
+
 	return c.handleSetSomething(ctx, chatID, "duration", value, "✅ Срок обновлен!")
 }
 
@@ -174,6 +187,7 @@ func (c *TelegramController) handleEditCommentStart(ctx context.Context, chatID 
 	if err := c.setUserState(ctx, chatID, state); err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
+
 	text := "💬 *Введите комментарий:*\n\n_Макс\\. 500 символов_"
 	keyboard := [][]telegram.InlineKeyboardButton{
 		{{Text: "◀️ Назад", CallbackData: fmt.Sprintf(`{"action":"select_order","order_id":%d}`, state.OrderID)}},
@@ -194,60 +208,44 @@ func (c *TelegramController) handleSetComment(ctx context.Context, chatID int64,
 	}
 	return c.handleSetSomething(ctx, chatID, "comment", text, "✅ Комментарий добавлен!")
 }
+
+// ======================= DELEGATION LOGIC =======================
 func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int64, messageID int) error {
 	state, err := c.getUserState(ctx, chatID)
 	if err != nil {
 		return c.sendStaleStateError(ctx, chatID, messageID)
 	}
 
-	// 1. Получаем ВАС (кто нажимает кнопку), чтобы подготовить контекст
 	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
 
-	// 2. Получаем ЗАЯВКУ, чтобы узнать текущего Исполнителя
+	// Нужна только чтобы исключить текущего исполнителя
 	order, err := c.orderService.FindOrderByIDForTelegram(userCtx, user.ID, state.OrderID)
 	if err != nil {
 		return c.tgService.EditMessageText(ctx, chatID, messageID, "❌ Ошибка: заявка не найдена\\.", telegram.WithMarkdownV2())
 	}
 
-	// 3. Логика определения отдела для фильтрации
-	var targetDepID *uint64
-	var targetBranchID *uint64
-	
-	// Флаг для заголовка (чей отдел мы показываем)
-	listTitle := "👤 *Коллеги в отделе исполнителя:*"
-
-	if order.ExecutorID != nil {
-		// Если заявка уже на ком-то висит -> берем ЕГО отдел
-		executor, err := c.userRepo.FindUserByID(userCtx, *order.ExecutorID)
-		if err == nil {
-			targetDepID = executor.DepartmentID
-			targetBranchID = executor.BranchID
-		}
-	} 
-
-	// Если исполнителя нет (или не удалось определить отдел) -> берем ВАШ отдел
-	if targetDepID == nil && targetBranchID == nil {
-		targetDepID = user.DepartmentID
-		targetBranchID = user.BranchID
-		listTitle = "👤 *Выберите исполнителя:* " // Если исполнителя не было, просто заголовок
-	}
-
-	// 4. Настраиваем фильтр
 	filter := types.Filter{Filter: make(map[string]interface{}), WithPagination: false}
+	listTitle := ""
 
-	if targetDepID != nil {
-		filter.Filter["department_id"] = *targetDepID
-	} else if targetBranchID != nil {
-		filter.Filter["branch_id"] = *targetBranchID
+	if user.OtdelID != nil {
+		filter.Filter["otdel_id"] = *user.OtdelID
+		listTitle = "👤 *Коллеги вашего отдела:*"
+	} else if user.DepartmentID != nil {
+		filter.Filter["department_id"] = *user.DepartmentID
+		listTitle = "👤 *Коллеги вашего департамента:*"
+	} else if user.OfficeID != nil {
+		filter.Filter["office_id"] = *user.OfficeID
+		listTitle = "👤 *Сотрудники вашего офиса:*"
+	} else if user.BranchID != nil {
+		filter.Filter["branch_id"] = *user.BranchID
+		listTitle = "👤 *Сотрудники вашего филиала:*"
 	} else {
-		// Если совсем ничего не определилось (нет отдела) — покажем поиск
-		listTitle = "👤 *Поиск сотрудника:*"
+		listTitle = "👤 *Все сотрудники (Вы не привязаны к отделу):*"
 	}
 
-	// 5. Загружаем список людей по этому фильтру
 	users, _, err := c.userRepo.GetUsers(userCtx, filter)
 
 	text := listTitle
@@ -261,16 +259,15 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 	addedCount := 0
 	if !showSearch {
 		for _, u := range users {
-			// Исключаем:
-			// 1. Текущего исполнителя заявки (зачем делегировать ему же?)
-			// 2. ВАС самих (зачем делегировать себе через меню "Делегировать"? Для этого есть кнопка "Взять в работу", но если надо, можно убрать это условие)
-			
+			if u.ID == user.ID {
+				continue // Самого себя не предлагать
+			}
 			if order.ExecutorID != nil && u.ID == *order.ExecutorID {
-				continue
+				continue // Текущего исполнителя не предлагать
 			}
 
 			if addedCount >= 10 {
-				showSearch = true // Слишком много людей, остановимся
+				showSearch = true
 				break
 			}
 
@@ -283,15 +280,14 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 	}
 
 	if addedCount == 0 {
-		text = "Сотрудники в этом отделе не найдены\\.\n\n" +
+		text = "В вашем подразделении больше никого нет\\.\n\n" +
 			"Введите ФИО сотрудника для глобального поиска:"
 		state.Mode = "awaiting_executor"
 	} else {
 		if showSearch {
-			// Обязательно экранируем скобки для MarkdownV2!
-			text += "\n_\\(показаны не все, используйте поиск, если нужно\\)_"
+			text += "\n_\\(показаны не все, используйте поиск\\)_"
 		}
-		state.Mode = "awaiting_executor" // Режим ожидания текста, если захотят найти кого-то другого
+		state.Mode = "awaiting_executor"
 	}
 
 	keyboard = append(keyboard, []telegram.InlineKeyboardButton{
@@ -305,47 +301,55 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 	return c.tgService.EditMessageText(ctx, chatID, messageID, text,
 		telegram.WithKeyboard(keyboard), telegram.WithMarkdownV2())
 }
+
 func (c *TelegramController) handleSetExecutorFromText(ctx context.Context, chatID int64, text string) error {
-	// 1. Ограничиваем поиск до 15 человек через Limit
-	users, _, err := c.userRepo.GetUsers(ctx, types.Filter{
-		Filter: map[string]interface{}{"fio_like": text},
-		Limit:  15,
+	user, userCtx, err := c.prepareUserContext(ctx, chatID)
+	if err != nil {
+		return c.sendInternalError(ctx, chatID)
+	}
+
+	filterMap := map[string]interface{}{
+		"fio_like": text,
+	}
+
+	if user.OtdelID != nil {
+		filterMap["otdel_id"] = *user.OtdelID
+	} else if user.DepartmentID != nil {
+		filterMap["department_id"] = *user.DepartmentID
+	} else if user.OfficeID != nil {
+		filterMap["office_id"] = *user.OfficeID
+	} else if user.BranchID != nil {
+		filterMap["branch_id"] = *user.BranchID
+	}
+
+	users, _, err := c.userRepo.GetUsers(userCtx, types.Filter{
+		Filter: filterMap,
+		Limit:  10,
 		Page:   1,
 	})
 
 	if err != nil || len(users) == 0 {
 		return c.tgService.SendMessageEx(ctx, chatID,
-			"❌ Сотрудники не найдены\\.\nПопробуйте уточнить запрос\\.",
+			"❌ Сотрудники в *вашем подразделении* не найдены\\.\nПопробуйте уточнить запрос\\.",
 			telegram.WithMarkdownV2())
 	}
 
 	if len(users) > 1 {
 		var keyboard [][]telegram.InlineKeyboardButton
-		// Показываем максимум 10 кнопок, чтобы не сломать Telegram
-		count := 0
-		for _, user := range users {
-			if count >= 10 {
-				break
-			}
-			cb := fmt.Sprintf(`{"action":"set_executor","user_id":%d}`, user.ID)
+		for _, u := range users {
+			cb := fmt.Sprintf(`{"action":"set_executor","user_id":%d}`, u.ID)
 			keyboard = append(keyboard, []telegram.InlineKeyboardButton{
-				{Text: user.Fio, CallbackData: cb},
+				{Text: u.Fio, CallbackData: cb},
 			})
-			count++
 		}
-		
-		msgText := "Выберите сотрудника:"
-		if len(users) > 10 {
-			msgText += " _(показаны первые 10)_"
-		}
-
-		return c.tgService.SendMessageEx(ctx, chatID, msgText,
-			telegram.WithKeyboard(keyboard), telegram.WithMarkdownV2())
+		msgText := fmt.Sprintf("Найдено %d сотрудников:", len(users))
+		return c.tgService.SendMessageEx(ctx, chatID, msgText, telegram.WithKeyboard(keyboard))
 	}
 
-	// Если нашелся ровно один сотрудник - назначаем сразу
 	return c.handleSetSomething(ctx, chatID, "executor_id", users[0].ID, "✅ Исполнитель назначен!")
 }
+
+// ==================== STATE AND SAVING ====================
 
 func (c *TelegramController) handleSetSomething(ctx context.Context, chatID int64, key string, value interface{}, popupText string) error {
 	state, err := c.getUserState(ctx, chatID)
@@ -353,7 +357,6 @@ func (c *TelegramController) handleSetSomething(ctx context.Context, chatID int6
 		return c.sendStaleStateError(ctx, chatID, 0)
 	}
 
-	// --- Логика обновления State (StatusID, ExecutorID и т.д.) осталась прежней ---
 	switch key {
 	case "status_id":
 		if id, ok := value.(uint64); ok {
@@ -361,7 +364,6 @@ func (c *TelegramController) handleSetSomething(ctx context.Context, chatID int6
 		} else if idFloat, ok := value.(float64); ok {
 			state.SetStatusID(uint64(idFloat))
 		} else {
-			c.logger.Error("Неверный тип для status_id", zap.Any("value", value))
 			return c.sendInternalError(ctx, chatID)
 		}
 	case "executor_id":
@@ -370,15 +372,11 @@ func (c *TelegramController) handleSetSomething(ctx context.Context, chatID int6
 		} else if idFloat, ok := value.(float64); ok {
 			state.SetExecutorID(uint64(idFloat))
 		} else {
-			c.logger.Error("Неверный тип для executor_id", zap.Any("value", value))
 			return c.sendInternalError(ctx, chatID)
 		}
 	case "comment":
 		if comment, ok := value.(string); ok {
 			state.SetComment(comment)
-		} else {
-			c.logger.Error("Неверный тип для comment", zap.Any("value", value))
-			return c.sendInternalError(ctx, chatID)
 		}
 	case "duration":
 		if value == nil {
@@ -387,49 +385,38 @@ func (c *TelegramController) handleSetSomething(ctx context.Context, chatID int6
 			state.SetDuration(&t)
 		} else if tPtr, ok := value.(*time.Time); ok {
 			state.SetDuration(tPtr)
-		} else {
-			c.logger.Error("Неверный тип для duration", zap.Any("value", value))
-			return c.sendInternalError(ctx, chatID)
 		}
-	default:
-		c.logger.Error("Неизвестный ключ", zap.String("key", key))
-		return c.sendInternalError(ctx, chatID)
 	}
-	
-	// --- СОХРАНЕНИЕ STATE ---
+
 	state.Mode = "editing_order"
 	if err := c.setUserState(ctx, chatID, state); err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
+	
 	_ = c.tgService.AnswerCallbackQuery(ctx, "", popupText)
-
 	
-	
-	user, userCtx, err := c.prepareUserContext(ctx, chatID) 
+	// Используем корректный контекст для отрисовки меню
+	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
-		// Если тут ошибка, значит юзера вообще нет
+		return c.sendInternalError(ctx, chatID)
+	}
+	
+	order, err := c.orderService.FindOrderByIDForTelegram(userCtx, user.ID, state.OrderID)
+	if err != nil {
+		return c.tgService.EditMessageText(ctx, chatID, state.MessageID,
+			"❌ Ошибка: заявка не найдена\\.")
+	}
+	return c.sendEditMenu(ctx, chatID, state.MessageID, order)
+}
+
+// --- handleSaveChanges с ИСПРАВЛЕНИЕМ 404 ошибки ---
+func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64, messageID int) error {
+	// ✅ 1. Важное исправление: Получаем UserContext с правами
+	_, userCtx, err := c.prepareUserContext(ctx, chatID)
+	if err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
 
-	// Используем userCtx вместо ctx
-	order, err := c.orderService.FindOrderByIDForTelegram(userCtx, user.ID, state.OrderID)
-	if err != nil {
-		c.logger.Error("Не удалось получить заявку для обновления меню", 
-            zap.Error(err), 
-            zap.Uint64("order_id", state.OrderID),
-            zap.Int64("user_id", int64(user.ID)))
-            
-		return c.tgService.EditMessageText(ctx, chatID, state.MessageID,
-			"❌ Ошибка: заявка не найдена или нет прав\\.")
-	}
-
-	return c.sendEditMenu(ctx, chatID, state.MessageID, order)
-}
-func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64, messageID int) error {
-	_, userCtx, err := c.prepareUserContext(ctx, chatID)
-	if err != nil {
-		return err
-	}
 	state, err := c.getUserState(ctx, chatID)
 	if err != nil {
 		return c.sendStaleStateError(ctx, chatID, messageID)
@@ -438,73 +425,78 @@ func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64
 		_ = c.tgService.AnswerCallbackQuery(ctx, "", "Нет изменений для сохранения")
 		return nil
 	}
-	currentOrder, err := c.orderService.FindOrderByID(ctx, state.OrderID)
+
+	// Загружаем текущее состояние заявки, чтобы сравнить
+	currentOrder, err := c.orderService.FindOrderByIDForTelegram(userCtx, 0, state.OrderID)
 	if err != nil {
-		c.logger.Error("Не удалось получить заявку", zap.Error(err))
+		c.logger.Error("Не удалось получить заявку для сохранения", zap.Error(err))
 		return c.tgService.EditMessageText(ctx, chatID, messageID,
 			"❌ Ошибка при получении данных заявки\\.")
 	}
+
 	updateDTO := dto.UpdateOrderDTO{}
 	changesMap := make(map[string]interface{})
-	
-	// Статус
+
+	// Заполняем DTO и Map из State
 	sid, sidExists, _ := state.GetStatusID()
 	if sidExists && currentOrder.StatusID != sid {
 		updateDTO.StatusID = &sid
 		changesMap["status_id"] = sid
 	}
-	
-// Исполнитель
-eid, eidExists, _ := state.GetExecutorID()
-if eidExists {
-	// Проверяем: если eid == 0, значит пользователь хочет удалить исполнителя
-	if eid == 0 {
-		changesMap["executor_id"] = nil
-		var nullID *uint64
-		updateDTO.ExecutorID = nullID
-	} else if currentOrder.ExecutorID == nil || *currentOrder.ExecutorID != eid {
-		updateDTO.ExecutorID = &eid
-		changesMap["executor_id"] = eid
+
+	eid, eidExists, _ := state.GetExecutorID()
+	if eidExists {
+		if eid == 0 {
+			// Сброс исполнителя (если это поддерживается)
+			changesMap["executor_id"] = nil
+			updateDTO.ExecutorID = nil // будет трактоваться как "не менять" в Go если это nil, но smartUpdate поймет map
+		} else if currentOrder.ExecutorID == nil || *currentOrder.ExecutorID != eid {
+			updateDTO.ExecutorID = &eid
+			changesMap["executor_id"] = eid
+		}
 	}
-}
-	
-	// Комментарий
+
 	com, comExists := state.GetComment()
 	if comExists && strings.TrimSpace(com) != "" {
 		v := com
-		updateDTO.Comment = &v
+		updateDTO.Comment = &v // Комментарий передаем всегда, если он есть
+		// changesMap для комментария не обязателен для smartUpdate entity, т.к. коммент идет отдельно в history
+		// Но для порядка можно оставить. Важно, что сервис читает dto.Comment
 	}
-	
-	// Срок (Duration)
+
 	dur, _ := state.GetDuration()
-	if dur != nil && (currentOrder.Duration == nil || !currentOrder.Duration.Equal(*dur)) {
-		updateDTO.Duration = dur
-		changesMap["duration"] = dur
-	} else {
-		_, durExists := state.Changes["duration"]
-		if durExists && currentOrder.Duration != nil {
-			changesMap["duration"] = nil
-			zeroTime := time.Time{}
-			updateDTO.Duration = &zeroTime
+	if dur != nil {
+		if currentOrder.Duration == nil || !currentOrder.Duration.Equal(*dur) {
+			updateDTO.Duration = dur
+			changesMap["duration"] = dur
 		}
-	} // ← ЭТА СКОБКА БЫЛА ПРОПУЩЕНА!
-	
-	// Сохранение
+	} else {
+		// Если в state длительность явно nil (сброс), проверяем Changes map
+		if _, chExists := state.Changes["duration"]; chExists && currentOrder.Duration != nil {
+			changesMap["duration"] = nil
+			// DTO для сброса требует workaround, но Service SmartUpdate смотрит в MAP.
+			// DTO поле может оставаться nil.
+		}
+	}
+
+	// ✅ 2. Вызываем UpdateOrder с правильным userCtx!
+	// Сервис прочитает UserID из userCtx и AuthPermission из userCtx
 	_, err = c.orderService.UpdateOrder(userCtx, state.OrderID, updateDTO, nil, changesMap)
+	
 	if err != nil {
-		c.logger.Error("Ошибка сохранения",
+		c.logger.Error("Ошибка сохранения через Телеграм",
 			zap.Error(err),
 			zap.Uint64("order_id", state.OrderID),
 			zap.Any("changes", changesMap))
 		return c.tgService.EditMessageText(ctx, chatID, messageID,
-			"❌ Ошибка при сохранении\\. Попробуйте позже\\.")
+			"❌ Ошибка при сохранении\\. Недостаточно прав или сбой\\.")
 	}
-	
-	// Очистка
+
 	_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 	_ = c.tgService.AnswerCallbackQuery(ctx, "", "💾 Сохранено!")
 	return c.handleMyTasksCommand(ctx, chatID, messageID)
 }
+
 func (c *TelegramController) handleCallbackQuery(ctx context.Context, query *TelegramCallbackQuery) error {
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(query.Data), &data); err != nil {
@@ -516,6 +508,7 @@ func (c *TelegramController) handleCallbackQuery(ctx context.Context, query *Tel
 	action, _ := data["action"].(string)
 	chatID := query.Message.Chat.ID
 	msgID := query.Message.MessageID
+
 	switch action {
 	case "main_menu":
 		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
@@ -561,91 +554,130 @@ func (c *TelegramController) handleCallbackQuery(ctx context.Context, query *Tel
 	return nil
 }
 
-// ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+// ==================== sendEditMenu: ИСПРАВЛЕННЫЙ ВЫВОД КНОПОК ====================
 func (c *TelegramController) sendEditMenu(ctx context.Context, chatID int64, messageID int, order *entities.Order) error {
 	status, err := c.statusRepo.FindStatus(ctx, order.StatusID)
 	if err != nil {
 		c.logger.Error("Не удалось получить статус", zap.Error(err))
 		return c.sendInternalError(ctx, chatID)
 	}
+
 	creator, _ := c.userRepo.FindUserByID(ctx, order.CreatorID)
 	var executor *entities.User
 	if order.ExecutorID != nil {
 		executor, _ = c.userRepo.FindUserByID(ctx, *order.ExecutorID)
 	}
-	// Получаем последний комментарий
-	lastComment := ""
-	historyItems, err := c.orderHistoryRepo.GetOrderHistory(ctx, order.ID,
-		types.Filter{Limit: maxHistoryItems, Page: 1})
-	if err == nil && len(historyItems) > 0 {
-		for _, item := range historyItems {
-			if item.EventType == "COMMENT" && item.Comment.Valid && item.Comment.String != "" {
-				lastComment = item.Comment.String
-				break
-			}
-		}
+
+	// 1. Получаем права
+	user, userCtx, err := c.prepareUserContext(ctx, chatID)
+	if err != nil {
+		return c.sendInternalError(ctx, chatID)
 	}
+	perms, _ := utils.GetPermissionsMapFromCtx(userCtx)
+
+	// Создаем контекст авторизации для ЭТОЙ заявки
+	isCreator := (order.CreatorID == user.ID)
+	isExecutor := (order.ExecutorID != nil && *order.ExecutorID == user.ID)
+
+	authCtx := authz.Context{
+		Actor:         user,
+		Permissions:   perms,
+		Target:        order,
+		IsParticipant: isCreator || isExecutor,
+	}
+
+	// --- Текст сообщения ---
 	var text strings.Builder
 	text.WriteString(fmt.Sprintf("📋 *Заявка №%d*\n━━━━━━━━━━━━━━━━━━━━\n\n", order.ID))
-	text.WriteString(fmt.Sprintf("📝 *Описание:*\n%s\n\n",
-		telegram.EscapeTextForMarkdownV2(order.Name)))
+	text.WriteString(fmt.Sprintf("📝 *Описание:*\n%s\n\n", telegram.EscapeTextForMarkdownV2(order.Name)))
+	
 	statusEmoji := getStatusEmoji(status)
-	text.WriteString(fmt.Sprintf("%s *Статус:* %s\n", statusEmoji,
-		telegram.EscapeTextForMarkdownV2(status.Name)))
+	text.WriteString(fmt.Sprintf("%s *Статус:* %s\n", statusEmoji, telegram.EscapeTextForMarkdownV2(status.Name)))
+
 	if creator != nil {
-		text.WriteString(fmt.Sprintf("👤 *Создатель:* %s\n",
-			telegram.EscapeTextForMarkdownV2(creator.Fio)))
+		text.WriteString(fmt.Sprintf("👤 *Создатель:* %s\n", telegram.EscapeTextForMarkdownV2(creator.Fio)))
 	}
 	if executor != nil {
-		text.WriteString(fmt.Sprintf("👨‍💼 *Исполнитель:* %s\n",
-			telegram.EscapeTextForMarkdownV2(executor.Fio)))
+		text.WriteString(fmt.Sprintf("👨‍💼 *Исполнитель:* %s\n", telegram.EscapeTextForMarkdownV2(executor.Fio)))
 	} else {
 		text.WriteString("👨‍💼 *Исполнитель:* _не назначен_\n")
 	}
+
 	if order.Duration != nil {
 		durationStr := order.Duration.Format("02.01.2006 15:04")
 		if order.Duration.Before(time.Now()) {
-			text.WriteString(fmt.Sprintf("⏰ *Срок:* ~%s~ ⚠️ _просрочено_\n",
-				telegram.EscapeTextForMarkdownV2(durationStr)))
+			text.WriteString(fmt.Sprintf("⏰ *Срок:* ~%s~ ⚠️ _просрочено_\n", telegram.EscapeTextForMarkdownV2(durationStr)))
 		} else {
-			text.WriteString(fmt.Sprintf("⏰ *Срок:* %s\n",
-				telegram.EscapeTextForMarkdownV2(durationStr)))
+			text.WriteString(fmt.Sprintf("⏰ *Срок:* %s\n", telegram.EscapeTextForMarkdownV2(durationStr)))
 		}
 	} else {
 		text.WriteString("⏰ *Срок:* _не задан_\n")
 	}
-	if order.Address != nil && *order.Address != "" {
-		text.WriteString(fmt.Sprintf("📍 *Адрес:* %s\n",
-			telegram.EscapeTextForMarkdownV2(*order.Address)))
-	}
-	createdAt := order.CreatedAt.Format("02.01.2006 15:04")
-	text.WriteString(fmt.Sprintf("📅 *Создана:* %s\n",
-		telegram.EscapeTextForMarkdownV2(createdAt)))
-	if lastComment != "" {
-		if len(lastComment) > 100 {
-			lastComment = lastComment[:100] + "..."
-		}
-		text.WriteString(fmt.Sprintf("\n💬 *Последний комментарий:*\n_%s_\n",
-			telegram.EscapeTextForMarkdownV2(lastComment)))
-	}
 	text.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n")
+
+	// --- КНОПКИ (Строгая проверка привилегий) ---
 	var keyboard [][]telegram.InlineKeyboardButton
-	if status.Code != nil && *status.Code == "CLOSED" {
+	
+	isClosed := false
+	if status.Code != nil && (*status.Code == "CLOSED" || *status.Code == "REJECTED") {
+		isClosed = true
+	}
+
+	if isClosed {
 		text.WriteString("\n🔒 *Заявка закрыта\\.*\n_Редактирование недоступно\\._")
 		keyboard = append(keyboard, []telegram.InlineKeyboardButton{
 			{Text: "◀️ К списку", CallbackData: `{"action":"edit_cancel"}`},
 		})
 	} else {
 		text.WriteString("\n_Выберите действие:_")
-		keyboard = [][]telegram.InlineKeyboardButton{
-			{{Text: "🔄 Статус", CallbackData: `{"action":"edit_status_start"}`},
-			 {Text: "⏰ Срок", CallbackData: `{"action":"edit_duration_start"}`}},
-			{{Text: "💬 Комментарий", CallbackData: `{"action":"edit_comment_start"}`},
-			 {Text: "👤 Делегировать", CallbackData: `{"action":"edit_delegate_start"}`}},
-			{{Text: "✅ Сохранить", CallbackData: `{"action":"edit_save"}`},
-			 {Text: "◀️ Назад", CallbackData: `{"action":"edit_cancel"}`}},
+
+		// ПРОВЕРКИ НА ОСНОВЕ СПИСКА ПРИВИЛЕГИЙ
+		
+		// 1. Статус (order:update:status_id)
+		canStatus := authz.CanDo(authz.OrdersUpdateStatusID, authCtx)
+		
+		// 2. Срок (order:update:duration)
+		canDuration := authz.CanDo(authz.OrdersUpdateDuration, authCtx)
+		
+		// 3. Комментарий (order:update:comment или order:view - обычно комментарии разрешены всем, кто видит)
+		// Используем 'order:update:comment', чтобы быть последовательными со списком
+		canComment := authz.CanDo(authz.OrdersUpdateComment, authCtx)
+
+		// 4. Делегирование (order:update:executor_id)
+		canDelegate := authz.CanDo(authz.OrdersUpdateExecutorID, authCtx)
+
+		// === Формирование клавиатуры ===
+		
+		// Ряд 1: Статус и Срок
+		row1 := []telegram.InlineKeyboardButton{}
+		if canStatus {
+			row1 = append(row1, telegram.InlineKeyboardButton{Text: "🔄 Статус", CallbackData: `{"action":"edit_status_start"}`})
 		}
+		if canDuration {
+			row1 = append(row1, telegram.InlineKeyboardButton{Text: "⏰ Срок", CallbackData: `{"action":"edit_duration_start"}`})
+		}
+		if len(row1) > 0 {
+			keyboard = append(keyboard, row1)
+		}
+
+		// Ряд 2: Комментарий и Делегирование
+		row2 := []telegram.InlineKeyboardButton{}
+		if canComment {
+			row2 = append(row2, telegram.InlineKeyboardButton{Text: "💬 Коммент", CallbackData: `{"action":"edit_comment_start"}`})
+		}
+		if canDelegate {
+			row2 = append(row2, telegram.InlineKeyboardButton{Text: "👤 Делегировать", CallbackData: `{"action":"edit_delegate_start"}`})
+		}
+		if len(row2) > 0 {
+			keyboard = append(keyboard, row2)
+		}
+
+		keyboard = append(keyboard, []telegram.InlineKeyboardButton{
+			{Text: "✅ Сохранить", CallbackData: `{"action":"edit_save"}`},
+			{Text: "◀️ Назад", CallbackData: `{"action":"edit_cancel"}`},
+		})
 	}
+
 	return c.tgService.EditMessageText(ctx, chatID, messageID, text.String(),
 		telegram.WithKeyboard(keyboard), telegram.WithMarkdownV2())
 }

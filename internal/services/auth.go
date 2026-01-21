@@ -1,3 +1,4 @@
+// Файл: internal/services/auth_service.go
 package services
 
 import (
@@ -248,13 +249,47 @@ func (s *AuthService) VerifyResetCode(ctx context.Context, payload dto.VerifyCod
 	return &dto.VerifyCodeResponseDTO{VerificationToken: vToken}, nil
 }
 
+// ResetPassword - ИСПРАВЛЕННЫЙ МЕТОД
+// Теперь он проверяет два типа токенов:
+// 1. Токен сброса (VerifyPhone), полученный через SMS.
+// 2. Токен принудительной смены (ForceChange), полученный при Login.
 func (s *AuthService) ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error {
-	userIDStr, err := s.cacheRepo.Get(ctx, fmt.Sprintf(constants.CacheKeyVerifyPhone, payload.Token))
-	if err != nil { return apperrors.ErrInvalidCredentials }
+	var userIDStr string
+	var err error
+	var isForceChange bool
+
+	// 1. Сначала пытаемся найти токен сброса пароля (SMS/Telegram)
+	userIDStr, err = s.cacheRepo.Get(ctx, fmt.Sprintf(constants.CacheKeyVerifyPhone, payload.Token))
+	
+	// 2. Если не нашли, ищем токен принудительной смены пароля (первый вход)
+	if err != nil {
+		userIDStr, err = s.cacheRepo.Get(ctx, fmt.Sprintf(constants.CacheKeyForceChangeToken, payload.Token))
+		if err == nil {
+			isForceChange = true
+		}
+	}
+
+	// 3. Если нигде не нашли -> ошибка
+	if err != nil { 
+		return apperrors.ErrInvalidCredentials 
+	}
 
 	parsedID, _ := strconv.ParseUint(userIDStr, 10, 64)
 	hashedPassword, _ := utils.HashPassword(payload.NewPassword)
-	return s.userRepo.UpdatePassword(ctx, parsedID, hashedPassword)
+	
+	// 4. Обновляем пароль в базе
+	// Если это была принудительная смена (isForceChange), то нужно сбросить флаг must_change_password
+	if isForceChange {
+		err = s.userRepo.UpdatePasswordAndClearFlag(ctx, parsedID, hashedPassword)
+		// Удаляем токен после использования
+		s.cacheRepo.Del(ctx, fmt.Sprintf(constants.CacheKeyForceChangeToken, payload.Token))
+	} else {
+		err = s.userRepo.UpdatePassword(ctx, parsedID, hashedPassword)
+		// Удаляем токен после использования
+		s.cacheRepo.Del(ctx, fmt.Sprintf(constants.CacheKeyVerifyPhone, payload.Token))
+	}
+
+	return err
 }
 
 func (s *AuthService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error) {

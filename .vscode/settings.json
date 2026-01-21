@@ -13,13 +13,11 @@
     "local": "request-system"
   },
   "go.toolsManagement.autoUpdate": true,
-
   "makefile.configureOnOpen": true,
   "workbench.panel.showLabels": false,
   "editor.minimap.enabled": true,
   "editor.fontFamily": "Consolas, 'Fira Code', 'JetBrains Mono', monospace",
   "workbench.iconTheme": "vscode-icons",
-
   "database-client.completionTriggerKey": [
     " ",
     "@",

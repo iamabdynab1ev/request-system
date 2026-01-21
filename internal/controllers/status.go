@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-
+    "strings"
 	"request-system/internal/dto"
 	"request-system/internal/services"
 	apperrors "request-system/pkg/errors"
@@ -80,163 +80,76 @@ func (c *StatusController) FindByCode(ctx echo.Context) error {
 
 func (c *StatusController) CreateStatus(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-	c.logger.Debug("CreateStatus: Начало обработки запроса")
-
-	dataString := ctx.FormValue("data")
-	if dataString == "" {
-		c.logger.Warn("CreateStatus: Поле 'data' отсутствует в form-data")
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Поле 'data' с JSON обязательно",
-				apperrors.ErrBadRequest,
-				nil,
-			),
-			c.logger,
-		)
-	}
-	c.logger.Debug("CreateStatus: Поле 'data' получено", zap.String("data", dataString))
+	contentType := ctx.Request().Header.Get("Content-Type")
 
 	var dto dto.CreateStatusDTO
-	if err := json.Unmarshal([]byte(dataString), &dto); err != nil {
-		c.logger.Error("CreateStatus: Ошибка парсинга JSON", zap.Error(err))
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Неверный JSON в 'data'",
-				err,
-				map[string]interface{}{"data": dataString},
-			),
-			c.logger,
-		)
+
+	// ЛОГИКА ИСПРАВЛЕНИЯ: Поддержка JSON и Multipart
+	if strings.HasPrefix(contentType, "application/json") {
+		// Если пришел чистый JSON
+		if err := ctx.Bind(&dto); err != nil {
+			return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Некорректный JSON в теле запроса"), c.logger)
+		}
+	} else {
+		// Если пришла форма (с файлами или data)
+		dataString := ctx.FormValue("data")
+		if dataString == "" {
+			return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Поле 'data' в form-data обязательно"), c.logger)
+		}
+		if err := json.Unmarshal([]byte(dataString), &dto); err != nil {
+			return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный JSON в 'data'", err, nil), c.logger)
+		}
 	}
-	c.logger.Debug("CreateStatus: JSON успешно распарсен", zap.Any("dto", dto))
 
 	if err := ctx.Validate(&dto); err != nil {
-		c.logger.Error("CreateStatus: Ошибка валидации DTO", zap.Error(err))
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
-	c.logger.Debug("CreateStatus: DTO прошел валидацию")
 
-	iconSmall, errSmall := ctx.FormFile("icon_small")
-	if errSmall != nil && errSmall != http.ErrMissingFile {
-		c.logger.Error("CreateStatus: Критическая ошибка при получении icon_small", zap.Error(errSmall))
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusInternalServerError,
-				"Ошибка при получении файла icon_small",
-				errSmall,
-				nil,
-			),
-			c.logger,
-		)
-	}
-	if errSmall == http.ErrMissingFile {
-		c.logger.Debug("CreateStatus: Файл 'icon_small' не был предоставлен")
-	} else {
-		c.logger.Debug("CreateStatus: Файл 'icon_small' получен", zap.String("filename", iconSmall.Filename))
-	}
+	// Файлы получаем только если они есть (в JSON их не будет, это норм)
+	iconSmall, _ := ctx.FormFile("icon_small")
+	iconBig, _ := ctx.FormFile("icon_big")
 
-	iconBig, errBig := ctx.FormFile("icon_big")
-	if errBig != nil && errBig != http.ErrMissingFile {
-		c.logger.Error("CreateStatus: Критическая ошибка при получении icon_big", zap.Error(errBig))
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusInternalServerError,
-				"Ошибка при получении файла icon_big",
-				errBig,
-				nil,
-			),
-			c.logger,
-		)
-	}
-	if errBig == http.ErrMissingFile {
-		c.logger.Debug("CreateStatus: Файл 'icon_big' не был предоставлен")
-	} else {
-		c.logger.Debug("CreateStatus: Файл 'icon_big' получен", zap.String("filename", iconBig.Filename))
-	}
-
-	c.logger.Debug("CreateStatus: Вызов statusService.CreateStatus")
 	createdStatus, err := c.statusService.CreateStatus(reqCtx, dto, iconSmall, iconBig)
 	if err != nil {
-		c.logger.Error("CreateStatus: ПОЙМАНА ОШИБКА ИЗ СЕРВИСА", zap.Error(err))
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
-	c.logger.Info("CreateStatus: Статус успешно создан", zap.Any("result", createdStatus))
 	return utils.SuccessResponse(ctx, createdStatus, "Статус успешно создан", http.StatusCreated)
 }
 
 func (c *StatusController) UpdateStatus(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
-		c.logger.Warn("UpdateStatus: Неверный ID", zap.String("param", ctx.Param("id")), zap.Error(err))
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusBadRequest,
-				"Неверный ID",
-				err,
-				map[string]interface{}{"param": ctx.Param("id")},
-			),
-			c.logger,
-		)
+		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный ID"), c.logger)
 	}
 
-	dataString := ctx.FormValue("data")
+	contentType := ctx.Request().Header.Get("Content-Type")
 	var dto dto.UpdateStatusDTO
-	if dataString != "" {
-		if err := json.Unmarshal([]byte(dataString), &dto); err != nil {
-			c.logger.Error("UpdateStatus: Неверный JSON в 'data'", zap.String("data", dataString), zap.Error(err))
-			return utils.ErrorResponse(ctx,
-				apperrors.NewHttpError(
-					http.StatusBadRequest,
-					"Неверный JSON в 'data'",
-					err,
-					map[string]interface{}{"data": dataString},
-				),
-				c.logger,
-			)
+
+	// ЛОГИКА ИСПРАВЛЕНИЯ
+	if strings.HasPrefix(contentType, "application/json") {
+		if err := ctx.Bind(&dto); err != nil {
+			return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Некорректный JSON"), c.logger)
+		}
+	} else {
+		dataString := ctx.FormValue("data")
+		if dataString != "" {
+			if err := json.Unmarshal([]byte(dataString), &dto); err != nil {
+				return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный JSON в 'data'", err, nil), c.logger)
+			}
 		}
 	}
 
 	if err := ctx.Validate(&dto); err != nil {
-		c.logger.Error("UpdateStatus: Ошибка валидации DTO", zap.Error(err))
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 
-	iconSmall, errSmall := ctx.FormFile("icon_small")
-	if errSmall != nil && errSmall != http.ErrMissingFile {
-		c.logger.Error("UpdateStatus: Ошибка при получении icon_small", zap.Error(errSmall))
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusInternalServerError,
-				"Ошибка при получении файла icon_small",
-				errSmall,
-				nil,
-			),
-			c.logger,
-		)
-	}
-
-	iconBig, errBig := ctx.FormFile("icon_big")
-	if errBig != nil && errBig != http.ErrMissingFile {
-		c.logger.Error("UpdateStatus: Ошибка при получении icon_big", zap.Error(errBig))
-		return utils.ErrorResponse(ctx,
-			apperrors.NewHttpError(
-				http.StatusInternalServerError,
-				"Ошибка при получении файла icon_big",
-				errBig,
-				nil,
-			),
-			c.logger,
-		)
-	}
+	iconSmall, _ := ctx.FormFile("icon_small")
+	iconBig, _ := ctx.FormFile("icon_big")
 
 	updatedStatus, err := c.statusService.UpdateStatus(reqCtx, id, dto, iconSmall, iconBig)
 	if err != nil {
-		c.logger.Error("UpdateStatus: Ошибка при обновлении статуса", zap.Uint64("id", id), zap.Error(err))
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
 

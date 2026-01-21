@@ -25,8 +25,8 @@ type HTTPResponse struct {
 }
 
 const (
-	DefaultLimit = 500
-	MaxLimit     = 1000
+	DefaultLimit = 2000
+	MaxLimit     = 2000
 )
 
 func StringPtr(s string) *string {

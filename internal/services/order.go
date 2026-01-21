@@ -379,7 +379,10 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 	if err != nil {
 		return nil, err
 	}
-
+status, _ := s.statusRepo.FindStatus(ctx, currentOrder.StatusID)
+	if status != nil && status.Code != nil && *status.Code == "CLOSED" {
+		return nil, apperrors.NewBadRequestError("Заявка закрыта. Редактирование запрещено.")
+	}
 	authCtx, err := s.buildAuthzContextWithTarget(ctx, currentOrder)
 	if err != nil {
 		return nil, err
@@ -840,43 +843,82 @@ func (s *OrderService) buildAuthzContextWithTarget(ctx context.Context, t *entit
 
 // calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
 func (s *OrderService) calculateMetrics(newOrder, oldOrder *entities.Order, dto dto.UpdateOrderDTO, actorID uint64, now time.Time) {
-	// 1. First Response Time (Время первого отклика)
-	if oldOrder.FirstResponseTimeSeconds == nil && actorID != oldOrder.CreatorID {
-		if newOrder.StatusID != oldOrder.StatusID { // Исполнитель что-то сделал
-			diff := now.Sub(oldOrder.CreatedAt).Seconds()
-			if diff < 0 {
-				diff = 0
+	newStatus, _ := s.statusRepo.FindStatus(context.Background(), newOrder.StatusID)
+	newCode := ""
+	if newStatus != nil && newStatus.Code != nil { newCode = *newStatus.Code }
+
+	oldStatus, _ := s.statusRepo.FindStatus(context.Background(), oldOrder.StatusID)
+	oldCode := ""
+	if oldStatus != nil && oldStatus.Code != nil { oldCode = *oldStatus.Code }
+
+	// === 1. ВРЕМЯ ПЕРВОГО ОТКЛИКА ===
+	if oldOrder.FirstResponseTimeSeconds == nil {
+		actorIsCreator := (actorID == oldOrder.CreatorID)
+		if !actorIsCreator {
+			statusChanged := (newOrder.StatusID != oldOrder.StatusID)
+			executorChanged := utils.DiffPtr(oldOrder.ExecutorID, newOrder.ExecutorID) && newOrder.ExecutorID != nil 
+			
+			// Если исполнитель "Отклонил" или взял "В работу" - это реакция.
+			// Таймер реакции фиксируем.
+			if statusChanged || executorChanged {
+				diff := now.Sub(oldOrder.CreatedAt).Seconds()
+				if diff < 0 { diff = 0 }
+				val := uint64(diff)
+				newOrder.FirstResponseTimeSeconds = &val
 			}
-			seconds := uint64(diff)
-			newOrder.FirstResponseTimeSeconds = &seconds
 		}
 	}
 
-	// 2. Resolution Time (Время решения)
+	// === 2. ВРЕМЯ РЕШЕНИЯ (RESOLUTION TIME) ===
+	// Часы останавливаем ТОЛЬКО на Успехе (COMPLETED) или Закрытии (CLOSED).
+	// REJECTED - таймер НЕ останавливает, т.к. задача еще не решена, ее просто отфутболили.
+	isSolvedEvent := (newCode == "COMPLETED" || newCode == "CLOSED")
+	wasSolved := (oldCode == "COMPLETED" || oldCode == "CLOSED")
 
-	status, _ := s.statusRepo.FindStatus(context.Background(), newOrder.StatusID)
-	if status != nil && status.Code != nil && (*status.Code == "COMPLETED" || *status.Code == "CLOSED") {
-
-		newOrder.CompletedAt = &now
-
-		diff := now.Sub(newOrder.CreatedAt).Seconds()
-		if diff < 0 {
-			diff = 0
-		}
-		seconds := uint64(diff)
-		newOrder.ResolutionTimeSeconds = &seconds
-
-		// Проверка на FCR (решено с первого ответа?)
-		if newOrder.FirstResponseTimeSeconds != nil && *newOrder.FirstResponseTimeSeconds >= (seconds-60) {
-			t := true
-			newOrder.IsFirstContactResolution = &t
+	if isSolvedEvent {
+		// Если время решения еще не зафиксировано, или мы перешли из "Рабочего" (включая REJECTED) в "Готово"
+		// ИЛИ если переходим из COMPLETED -> CLOSED (время не меняем, оставляем как было при COMPLETED)
+		
+		shouldCalculate := false
+		if oldOrder.ResolutionTimeSeconds == nil {
+			shouldCalculate = true
 		} else {
-			f := false
-			newOrder.IsFirstContactResolution = &f
+			// Если перешли из "В работе" сразу в "Закрыто" -> Считаем.
+			// Если из "Выполнено" в "Закрыто" -> НЕ считаем (время уже зафиксировано).
+			if oldCode != "COMPLETED" && oldCode != "CLOSED" {
+				shouldCalculate = true
+			}
 		}
-	} else if status != nil && status.Code != nil && *status.Code != "COMPLETED" && *status.Code != "CLOSED" {
-		// Если вернули обратно в работу - обнуляем CompletedAt
+
+		if shouldCalculate {
+			newOrder.CompletedAt = &now
+			diff := now.Sub(newOrder.CreatedAt).Seconds()
+			if diff < 0 { diff = 0 }
+			val := uint64(diff)
+			newOrder.ResolutionTimeSeconds = &val
+
+			// FCR Check
+			if newOrder.FirstResponseTimeSeconds != nil {
+				resp := *newOrder.FirstResponseTimeSeconds
+				if val >= resp && (val - resp) < 600 {
+					t := true; newOrder.IsFirstContactResolution = &t
+				} else {
+					f := false; newOrder.IsFirstContactResolution = &f
+				}
+			} else {
+				t := true; newOrder.IsFirstContactResolution = &t
+				newOrder.FirstResponseTimeSeconds = &val
+			}
+		}
+	} 
+	
+	// Если вернули обратно в работу (REOPEN)
+	// Например: CLOSED -> IN_PROGRESS
+	// Или COMPLETED -> REJECTED (Отклонили решение, сказали "Переделай" или "Передай другому")
+	if wasSolved && !isSolvedEvent {
 		newOrder.CompletedAt = nil
+		newOrder.ResolutionTimeSeconds = nil // Сбрасываем время, часы снова тикают
+		newOrder.IsFirstContactResolution = nil
 	}
 }
 
