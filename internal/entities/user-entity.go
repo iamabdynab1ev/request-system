@@ -24,6 +24,7 @@ type User struct {
 	DepartmentID       *uint64 `json:"department_id" db:"department_id"`
 	OtdelID            *uint64 `json:"otdel_id" db:"otdel_id"`
 	PositionID         *uint64 `json:"position_id" db:"position_id"`
+	PositionIDs        []uint64 `json:"position_ids" db:"-"` 
 	PositionName       *string `json:"position_name,omitempty" db:"position_name"`
 	BranchName         *string `json:"branch_name,omitempty" db:"branch_name"`
 	DepartmentName     *string `json:"department_name,omitempty" db:"department_name"`

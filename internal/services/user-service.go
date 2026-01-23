@@ -77,10 +77,12 @@ func NewUserService(
 // ---------------- READING ----------------
 
 func (s *UserService) GetUsers(ctx context.Context, filter types.Filter) ([]dto.UserDTO, uint64, error) {
+	
 	if _, err := s.checkAccess(ctx, authz.UsersView, nil); err != nil {
 		return nil, 0, err
 	}
 
+	// 1. Получаем список пользователей (как и раньше)
 	users, total, err := s.userRepository.GetUsers(ctx, filter)
 	if err != nil {
 		return nil, 0, err
@@ -89,21 +91,35 @@ func (s *UserService) GetUsers(ctx context.Context, filter types.Filter) ([]dto.
 		return []dto.UserDTO{}, 0, nil
 	}
 
+	// 2. Собираем ID пользователей в массив
 	uids := make([]uint64, len(users))
 	for i, u := range users {
 		uids[i] = u.ID
 	}
 
+	
 	rolesMap, _ := s.userRepository.GetRolesByUserIDs(ctx, uids)
+	positionsMap, _ := s.userRepository.GetPositionIDsByUserIDs(ctx, uids) 
 
 	dtos := make([]dto.UserDTO, len(users))
 	for i, u := range users {
 		d := userEntityToUserDTO(&u)
+		
+	
 		if roles, ok := rolesMap[u.ID]; ok {
 			for _, r := range roles {
 				d.RoleIDs = append(d.RoleIDs, r.ID)
 			}
 		}
+		
+		
+		if posIDs, ok := positionsMap[u.ID]; ok {
+			d.PositionIDs = posIDs
+		} else {
+           
+            d.PositionIDs = []uint64{}
+        }
+
 		dtos[i] = *d
 	}
 	return dtos, total, nil
@@ -114,15 +130,26 @@ func (s *UserService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, er
 	if err != nil {
 		return nil, err
 	}
+	
+
 	if _, err := s.checkAccess(ctx, authz.UsersView, u); err != nil {
 		return nil, err
 	}
 
+	pids, err := s.userRepository.GetPositionIDsByUserID(ctx, id)
+	if err == nil {
+		u.PositionIDs = pids 
+	}
+
+
 	d := userEntityToUserDTO(u)
+	
+
 	roles, _ := s.userRepository.GetRolesByUserID(ctx, id)
 	for _, r := range roles {
 		d.RoleIDs = append(d.RoleIDs, r.ID)
 	}
+	
 	return d, nil
 }
 
@@ -133,13 +160,13 @@ func (s *UserService) GetPermissionDetailsForUser(ctx context.Context, userID ui
 	return s.permissionRepository.GetDetailedPermissionsForUI(ctx, userID)
 }
 
-// ---------------- CREATE ----------------
-
 func (s *UserService) CreateUser(ctx context.Context, p dto.CreateUserDTO) (*dto.UserDTO, error) {
 	if _, err := s.checkAccess(ctx, authz.UsersCreate, nil); err != nil {
 		return nil, err
 	}
-
+	if len(p.PositionIDs) > 3 {
+        return nil, apperrors.NewBadRequestError("Превышен лимит должностей. Максимум можно назначить 3 должности.")
+    }
 	stID, err := s.statusRepository.FindIDByCode(ctx, constants.UserStatusActiveCode)
 	if err != nil {
 		return nil, apperrors.ErrInternalServer
@@ -152,9 +179,9 @@ func (s *UserService) CreateUser(ctx context.Context, p dto.CreateUserDTO) (*dto
 
 	entity := &entities.User{
 		Fio: p.Fio, Username: p.Username, Email: p.Email, PhoneNumber: p.PhoneNumber, Password: hash,
-		PositionID: &p.PositionID, StatusID: stID,
+		PositionID: &p.PositionID,   PositionIDs: p.PositionIDs,  StatusID: stID,
 		BranchID: p.BranchID, DepartmentID: p.DepartmentID,
-		OfficeID: p.OfficeID, OtdelID: p.OtdelID,
+		OfficeID: p.OfficeID, OtdelID: p.OtdelID, 
 		PhotoURL: p.PhotoURL, IsHead: &p.IsHead, MustChangePassword: true,
 	}
 
@@ -190,30 +217,45 @@ func (s *UserService) UpdateUser(ctx context.Context, p dto.UpdateUserDTO, expli
 	if _, err := s.checkAccess(ctx, authz.UsersUpdate, target); err != nil {
 		return nil, err
 	}
-
-	// ПРОВЕРКА ПРАВ НА ИЗМЕНЕНИЕ ЛОГИНА AD
+	if p.PositionIDs != nil {
+        if len(*p.PositionIDs) > 3 {
+            return nil, apperrors.NewBadRequestError("Превышен лимит должностей. Максимум можно назначить 3 должности.")
+        }
+    }
+	// Проверка прав AD
 	if _, fieldExists := explicitFields["username"]; fieldExists {
 		permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
-		if err != nil {
-			return nil, err
-		}
+		if err != nil { return nil, err }
 		if _, hasPermission := permissionsMap[authz.UserManageADLink]; !hasPermission {
-			// !!! ИСПРАВЛЕНИЕ 1 !!! Используем правильный конструктор ошибки
-			return nil, apperrors.NewHttpError(http.StatusForbidden, "У вас нет прав на привязку логина Active Directory", nil, nil)
+			return nil, apperrors.NewHttpError(http.StatusForbidden, "У вас нет прав на привязку логина AD", nil, nil)
 		}
 	}
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		updatedEntity := *target
 
-		// Используем твой SmartUpdate, как ты и хотел
 		utils.SmartUpdate(&updatedEntity, explicitFields)
 
+		// 🔥 ВОТ ЭТОГО БЛОКА НЕ БЫЛО У ВАС. ОН ОБЯЗАТЕЛЕН:
+		// SmartUpdate не работает с массивами ID, переносим их вручную из DTO
+		if p.PositionIDs != nil {
+			updatedEntity.PositionIDs = *p.PositionIDs // Копируем список должностей [314, 313]
+			
+			// Автоматически обновляем главную должность (для списка юзеров)
+			if len(updatedEntity.PositionIDs) > 0 {
+				first := updatedEntity.PositionIDs[0]
+				updatedEntity.PositionID = &first
+			} else {
+				// Если очистили список должностей
+				zero := uint64(0)
+				updatedEntity.PositionID = &zero 
+			}
+		}
+
+		// Остальной код (Пароли, фото)
 		if p.Password != nil && len(*p.Password) >= 6 {
 			hash, err := utils.HashPassword(*p.Password)
-			if err != nil {
-				return err
-			}
+			if err != nil { return err }
 			updatedEntity.Password = hash
 		}
 
@@ -225,6 +267,7 @@ func (s *UserService) UpdateUser(ctx context.Context, p dto.UpdateUserDTO, expli
 			updatedEntity.Username = nil
 		}
 
+		// Вызов репозитория (внутри UpdateUser должен быть вызов SyncUserPositions!)
 		if err := s.userRepository.UpdateUser(ctx, tx, &updatedEntity); err != nil {
 			return err
 		}
@@ -351,7 +394,11 @@ func userEntityToUserDTO(e *entities.User) *dto.UserDTO {
 		Username: e.Username,
 		StatusID: e.StatusID, StatusCode: e.StatusCode,
 		BranchID: e.BranchID, DepartmentID: e.DepartmentID,
-		PositionID: e.PositionID, OfficeID: e.OfficeID, OtdelID: e.OtdelID,
+		PositionID: e.PositionID, 
+    
+        PositionIDs: e.PositionIDs, 
+
+        OfficeID: e.OfficeID, OtdelID: e.OtdelID,
 		PhotoURL: e.PhotoURL, MustChangePassword: e.MustChangePassword,
 		PositionName:   e.PositionName,
 		BranchName:     e.BranchName,

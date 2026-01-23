@@ -6,6 +6,7 @@ type CreateUserDTO struct {
 	Email       string  `json:"email" validate:"email,omitempty"`
 	PhoneNumber string  `json:"phone_number" validate:"required"`
 	PositionID  uint64  `json:"position_id" validate:"required"`
+	PositionIDs []uint64 `json:"position_ids"` 
 	StatusID    *uint64 `json:"status_id" validate:"omitempty"`
 
 	RoleIDs []uint64 `json:"role_ids" validate:"required,dive,gte=1"`
@@ -28,6 +29,7 @@ type UpdateUserDTO struct {
 	Password    *string `json:"password" validate:"omitempty,min=6"`
 
 	PositionID *uint64 `json:"position_id" validate:"omitempty"`
+	PositionIDs  *[]uint64 `json:"position_ids,omitempty"`
 	StatusID   *uint64 `json:"status_id" validate:"omitempty"`
 
 	RoleIDs *[]uint64 `json:"role_ids" validate:"omitempty,dive,gte=1"`
@@ -67,6 +69,7 @@ type UserDTO struct {
 	OtdelName      *string  `json:"otdel_name,omitempty"`
 	OfficeName     *string  `json:"office_name,omitempty"`
 	RoleIDs        []uint64 `json:"role_ids"`
+	PositionIDs []uint64 `json:"position_ids"`
 
 	PhotoURL           *string `json:"photo_url,omitempty"`
 	MustChangePassword bool    `json:"must_change_password"`

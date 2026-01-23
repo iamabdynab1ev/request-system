@@ -72,6 +72,8 @@ type UserRepositoryInterface interface {
 	FindBossByOrgAndType(ctx context.Context, tx pgx.Tx, branchID *uint64, officeID *uint64, deptID uint64, otdelID *uint64, targetType constants.PositionType) (*entities.User, error)
 	UserExistsByOrgAndType(ctx context.Context, tx pgx.Tx, branchID *uint64, officeID *uint64, deptID uint64, otdelID *uint64, posTypeName string) (bool, error)
 	FindPositionIDByStructureAndType(ctx context.Context, tx pgx.Tx, branchID, officeID, deptID, otdelID *uint64, posType string) (uint64, error)
+	GetPositionIDsByUserID(ctx context.Context, userID uint64) ([]uint64, error)
+	GetPositionIDsByUserIDs(ctx context.Context, userIDs []uint64) (map[uint64][]uint64, error)
 }
 
 type UserRepository struct {
@@ -255,20 +257,37 @@ func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter) ([]e
 }
 
 func (r *UserRepository) CreateUser(ctx context.Context, tx pgx.Tx, u *entities.User) (uint64, error) {
-	// Добавляем 'username' в список полей и $14 в VALUES
+
+	if len(u.PositionIDs) > 0 && (u.PositionID == nil || *u.PositionID == 0) {
+		first := u.PositionIDs[0]
+		u.PositionID = &first
+	}
+
+	// Ваш старый SQL (PositionID тоже сохраняем в таблицу users как и раньше)
 	q := `INSERT INTO users (fio, email, phone_number, password, position_id, status_id, branch_id, 
 		department_id, office_id, otdel_id, photo_url, must_change_password, is_head, username, created_at, updated_at) 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW()) RETURNING id`
 
 	var id uint64
 	err := tx.QueryRow(ctx, q,
-		u.Fio, u.Email, u.PhoneNumber, u.Password, u.PositionID,
+		u.Fio, u.Email, u.PhoneNumber, u.Password, u.PositionID, // Вот тут используется основная должность
 		u.StatusID, u.BranchID, u.DepartmentID, u.OfficeID,
 		u.OtdelID, u.PhotoURL, u.MustChangePassword, u.IsHead, u.Username,
 	).Scan(&id)
+	
 	if err != nil {
 		return 0, r.handlePgError(err)
 	}
+
+	if len(u.PositionIDs) > 0 {
+		if err := r.SyncUserPositions(ctx, tx, id, u.PositionIDs); err != nil {
+			return 0, err
+		}
+	} else if u.PositionID != nil {
+	
+		r.SyncUserPositions(ctx, tx, id, []uint64{*u.PositionID})
+	}
+
 	return id, nil
 }
 
@@ -303,6 +322,13 @@ func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, u *entities.
 	if _, err := tx.Exec(ctx, sqlStr, args...); err != nil {
 		return r.handlePgError(err)
 	}
+	if u.PositionIDs != nil { 
+	
+		if err := r.SyncUserPositions(ctx, tx, u.ID, u.PositionIDs); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -577,16 +603,19 @@ func (r *UserRepository) FindBossByOrgAndType(ctx context.Context, tx pgx.Tx,
 	deptID uint64, otdelID *uint64,
 	targetType constants.PositionType,
 ) (*entities.User, error) {
+
 	query := `
-		SELECT u.id, u.fio, u.email, u.phone_number, u.department_id, u.otdel_id, u.branch_id, u.office_id, u.position_id
+		SELECT DISTINCT u.id, u.fio, u.email, u.phone_number, u.department_id, u.otdel_id, u.branch_id, u.office_id, u.position_id
 		FROM users u
-		JOIN positions p ON u.position_id = p.id
+		JOIN user_positions up ON u.id = up.user_id 
+		JOIN positions p ON up.position_id = p.id
 		JOIN statuses s ON u.status_id = s.id
 		WHERE s.code = 'ACTIVE'
 		  AND u.deleted_at IS NULL
 		  AND p.type = $1
 	`
 
+    // Аргументы и фильтры по department/branch/otdel ОСТАЮТСЯ ТЕМИ ЖЕ
 	args := []interface{}{string(targetType)}
 	argIdx := 2
 
@@ -594,7 +623,6 @@ func (r *UserRepository) FindBossByOrgAndType(ctx context.Context, tx pgx.Tx,
 		query += ` AND u.department_id = $` + strconv.Itoa(argIdx)
 		args = append(args, deptID)
 		argIdx++
-
 		if otdelID != nil {
 			query += ` AND u.otdel_id = $` + strconv.Itoa(argIdx)
 			args = append(args, *otdelID)
@@ -606,7 +634,6 @@ func (r *UserRepository) FindBossByOrgAndType(ctx context.Context, tx pgx.Tx,
 		query += ` AND u.branch_id = $` + strconv.Itoa(argIdx)
 		args = append(args, *branchID)
 		argIdx++
-
 		if officeID != nil {
 			query += ` AND u.office_id = $` + strconv.Itoa(argIdx)
 			args = append(args, *officeID)
@@ -630,7 +657,7 @@ func (r *UserRepository) FindBossByOrgAndType(ctx context.Context, tx pgx.Tx,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil // Не найдено (но это не ошибка SQL)
+			return nil, nil 
 		}
 		return nil, err
 	}
@@ -710,4 +737,65 @@ func (r *UserRepository) findOneUser(ctx context.Context, querier Querier, where
 
 	user, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[entities.User])
 	return &user, err
+}
+func (r *UserRepository) SyncUserPositions(ctx context.Context, tx pgx.Tx, userID uint64, posIDs []uint64) error {
+
+	if _, err := tx.Exec(ctx, "DELETE FROM user_positions WHERE user_id=$1", userID); err != nil {
+		return err
+	}
+	if len(posIDs) == 0 {
+		return nil
+	}
+	uniqueIDs := make(map[uint64]bool)
+	var cleanIDs []uint64
+	for _, id := range posIDs {
+		if _, exists := uniqueIDs[id]; !exists {
+			uniqueIDs[id] = true
+			cleanIDs = append(cleanIDs, id)
+		}
+	}
+	rows := make([][]interface{}, len(cleanIDs))
+	for i, pid := range cleanIDs {
+		rows[i] = []interface{}{userID, pid}
+	}
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"user_positions"}, []string{"user_id", "position_id"}, pgx.CopyFromRows(rows))
+	return err
+}
+func (r *UserRepository) GetPositionIDsByUserID(ctx context.Context, userID uint64) ([]uint64, error) {
+	rows, err := r.storage.Query(ctx, "SELECT position_id FROM user_positions WHERE user_id = $1", userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []uint64
+	for rows.Next() {
+		var pid uint64
+		if err := rows.Scan(&pid); err == nil {
+			ids = append(ids, pid)
+		}
+	}
+	return ids, nil
+}
+func (r *UserRepository) GetPositionIDsByUserIDs(ctx context.Context, userIDs []uint64) (map[uint64][]uint64, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+
+	query := `SELECT user_id, position_id FROM user_positions WHERE user_id = ANY($1)`
+	
+	rows, err := r.storage.Query(ctx, query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[uint64][]uint64)
+	for rows.Next() {
+		var uid, pid uint64
+		if err := rows.Scan(&uid, &pid); err == nil {
+			result[uid] = append(result[uid], pid)
+		}
+	}
+	return result, nil
 }

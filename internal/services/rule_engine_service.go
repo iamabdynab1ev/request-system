@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-
+	"request-system/pkg/constants"   
 	"request-system/internal/entities"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
@@ -102,7 +102,7 @@ func (s *RuleEngineService) ResolveExecutor(ctx context.Context, tx pgx.Tx, orde
 		orderCtx.OfficeID,
 	).Scan(&targetPositionID, &targetStatusID)
 
-	// ================= [ЛОГИКА ФОЛБЕКА / ВОДОПАДА] =================
+	
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			s.logger.Info("Правило не найдено. Запуск поиска по иерархии (Priority Waterfall)", zap.Uint64("type", orderCtx.OrderTypeID))
@@ -112,7 +112,6 @@ func (s *RuleEngineService) ResolveExecutor(ctx context.Context, tx pgx.Tx, orde
 		}
 		return nil, fmt.Errorf("ошибка SQL: %w", err)
 	}
-	// ================================================================
 
 	if targetPositionID == nil {
 		return nil, apperrors.NewHttpError(http.StatusInternalServerError, "В правиле маршрутизации не указана должность", nil, nil)
@@ -131,132 +130,174 @@ func (s *RuleEngineService) ResolveExecutor(ctx context.Context, tx pgx.Tx, orde
 	}, nil
 }
 
-// resolveByHierarchy - находит руководителя автоматически
-// ПРИОРИТЕТ: Department -> Otdel -> Branch -> Office
 func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d OrderContext) (*RoutingResult, error) {
-	var targetPosType string
 	
-	// Базовый SQL: ищем юзера, который активен (через join со статусом) и имеет нужный тип должности
-	query := `
-		SELECT u.id, u.fio, u.email, u.position_id, u.department_id, u.branch_id
-		FROM users u
-		JOIN positions p ON u.position_id = p.id
-		JOIN statuses s ON u.status_id = s.id
-		WHERE u.deleted_at IS NULL 
-		  AND UPPER(s.code) = 'ACTIVE' 
-		  AND p.type = $1 
-	`
-	args := []interface{}{}
+	var targetRoles []string
+	var searchScopeName string
 
-	// === ВОДОПАД (WATERFALL) ===
-	
-	// 1. ВЫСОКИЙ ПРИОРИТЕТ: Если есть Департамент -> ищем Директора Департамента
-	// Мы специально ИГНОРИРУЕМ otdel_id, даже если он передан, чтобы найти "Главного" в этом департаменте.
+	var deptID, otdelID, branchID, officeID *uint64
+
+
 	if d.DepartmentID != 0 {
-		targetPosType = "HEAD_OF_DEPARTMENT" 
-		query += " AND u.department_id = $2 "
-		args = append(args, targetPosType, d.DepartmentID)
+	
+		searchScopeName = "Департамент"
+		targetRoles = []string{
+			"HEAD_OF_DEPARTMENT",
+			"DEPUTY_HEAD_OF_DEPARTMENT", 
+		}
+		id := d.DepartmentID
+		deptID = &id 
 
 	} else if d.OtdelID != nil {
-		// 2. СРЕДНИЙ ПРИОРИТЕТ: Если нет Депа, но есть Отдел -> ищем Начальника Отдела
-		targetPosType = "MANAGER_OF_OTDEL"
-		query += " AND u.otdel_id = $2 "
-		args = append(args, targetPosType, *d.OtdelID)
-		
-		// Часто отделы дублируются в разных филиалах (например "Бухгалтерия" в Душанбе и Худжанде).
-		// Поэтому если есть Филиал, мы добавляем его как фильтр для точности.
-		if d.BranchID != nil {
-			query += " AND u.branch_id = $3 "
-			args = append(args, *d.BranchID)
+		// 2. УРОВЕНЬ ОТДЕЛА
+		searchScopeName = "Отдел"
+		targetRoles = []string{
+			"HEAD_OF_OTDEL",
+			"DEPUTY_HEAD_OF_OTDEL",
 		}
+		otdelID = d.OtdelID
+		// Для отделов часто важен Филиал (если это региональный отдел)
+		if d.BranchID != nil { branchID = d.BranchID }
 
 	} else if d.BranchID != nil {
-		// 3. НИЗКИЙ ПРИОРИТЕТ: Только Филиал -> Директор Филиала
-		targetPosType = "BRANCH_DIRECTOR"
-		query += " AND u.branch_id = $2 "
-		// Ищем директора этого филиала
-		args = append(args, targetPosType, *d.BranchID)
+		// 3. УРОВЕНЬ ФИЛИАЛА
+		searchScopeName = "Филиал"
+		targetRoles = []string{
+			"BRANCH_DIRECTOR",
+			"DEPUTY_BRANCH_DIRECTOR",
+		}
+		branchID = d.BranchID
 
 	} else if d.OfficeID != nil {
-		// 4. МИНИМАЛЬНЫЙ: Офис обслуживания
-		targetPosType = "HEAD_OF_OFFICE"
-		query += " AND u.office_id = $2 "
-		args = append(args, targetPosType, *d.OfficeID)
+		// 4. УРОВЕНЬ ОФИСА (ЦБО)
+		searchScopeName = "Офис"
+		targetRoles = []string{
+			"HEAD_OF_OFFICE",
+			"DEPUTY_HEAD_OF_OFFICE",
+		}
+		officeID = d.OfficeID
 
 	} else {
 		return nil, apperrors.NewHttpError(http.StatusBadRequest,
-			"Не выбрано ни одно подразделение, невозможно определить руководителя автоматически.", nil, nil)
+			"Не выбрано ни одно подразделение, невозможно определить руководителя.", nil, nil)
 	}
 
-	query += " LIMIT 1"
+	// === ПОИСК ПО ОЧЕРЕДИ ===
+	for _, role := range targetRoles {
+		
+		// Используем правильный JOIN user_positions (наш новый механизм)
+		query := `
+			SELECT DISTINCT u.id, u.fio, u.email, u.position_id, u.department_id, u.branch_id
+			FROM users u
+			JOIN user_positions up ON u.id = up.user_id
+			JOIN positions p ON up.position_id = p.id
+			JOIN statuses s ON u.status_id = s.id
+			WHERE u.deleted_at IS NULL 
+			  AND UPPER(s.code) = 'ACTIVE' 
+			  AND p.type = $1 
+		`
+		args := []interface{}{role}
+		argIdx := 2
 
-	s.logger.Debug("Auto-Resolve executing", zap.String("query", query), zap.Any("args", args))
-
-	var u entities.User
-	err := tx.QueryRow(ctx, query, args...).Scan(
-		&u.ID, &u.Fio, &u.Email, &u.PositionID, &u.DepartmentID, &u.BranchID,
-	)
-
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			s.logger.Warn("Автоматический поиск не дал результатов",
-				zap.String("role", targetPosType),
-				zap.Any("context", d))
-
-			return nil, apperrors.NewHttpError(http.StatusBadRequest,
-				fmt.Sprintf("Не найден руководитель с ролью '%s' для выбранного подразделения. Проверьте штатную структуру.", targetPosType), nil, nil)
+		// Применяем фильтры (если переменные не nil)
+		if deptID != nil {
+			query += fmt.Sprintf(" AND u.department_id = $%d", argIdx)
+			args = append(args, *deptID)
+			argIdx++
 		}
-		return nil, err
-	}
+		if otdelID != nil {
+			query += fmt.Sprintf(" AND u.otdel_id = $%d", argIdx)
+			args = append(args, *otdelID)
+			argIdx++
+		}
+		if branchID != nil {
+			query += fmt.Sprintf(" AND u.branch_id = $%d", argIdx)
+			args = append(args, *branchID)
+			argIdx++
+		}
+		if officeID != nil {
+			query += fmt.Sprintf(" AND u.office_id = $%d", argIdx)
+			args = append(args, *officeID)
+			argIdx++
+		}
 
-	return &RoutingResult{
-		Executor:  u,
-		StatusID:  0,
-		RuleFound: false, // Это автопоиск
-	}, nil
+		query += " LIMIT 1"
+
+		var u entities.User
+		err := tx.QueryRow(ctx, query, args...).Scan(
+			&u.ID, &u.Fio, &u.Email, &u.PositionID, &u.DepartmentID, &u.BranchID,
+		)
+
+		if err == nil {
+			// Нашли! (Либо Директора, либо Зама)
+			s.logger.Info("Auto-Resolve: Найден сотрудник", zap.String("role", role), zap.String("fio", u.Fio))
+			return &RoutingResult{
+				Executor:  u,
+				StatusID:  0,
+				RuleFound: false,
+			}, nil
+		}
+		// Если ошибка "NoRows" -> идем на следующую итерацию цикла искать Зама.
+	}
+	s.logger.Warn("Автоматический поиск не дал результатов", zap.Strings("roles", targetRoles))
+
+	roleName1 := constants.PositionTypeNames[constants.PositionType(targetRoles[0])]
+	if roleName1 == "" { roleName1 = targetRoles[0] } 
+
+	roleName2 := constants.PositionTypeNames[constants.PositionType(targetRoles[1])]
+	if roleName2 == "" { roleName2 = targetRoles[1] } 
+
+	return nil, apperrors.NewHttpError(http.StatusBadRequest,
+		fmt.Sprintf("В подразделении '%s' не найден ни '%s', ни '%s'. Проверьте штатную структуру.", searchScopeName, roleName1, roleName2), nil, nil)
 }
 
 func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, tx pgx.Tx, posID int, ctxData OrderContext) (*entities.User, error) {
 	positionID := uint64(posID)
-	// Вспомогательная функция, когда мы нашли ПРАВИЛО (пункт 2), но нужно найти человека
+
+	shouldIgnoreBranch := (ctxData.DepartmentID != 0 || ctxData.OtdelID != nil)
+
+
 	query := `
-		SELECT u.id, u.fio, u.email, u.position_id, u.department_id, u.branch_id 
+		SELECT DISTINCT u.id, u.fio, u.email, u.position_id, u.department_id, u.branch_id 
 		FROM users u
+		JOIN user_positions up ON u.id = up.user_id
 		JOIN statuses s ON u.status_id = s.id 
-		WHERE u.position_id = $1 
+		WHERE up.position_id = $1 
 		  AND u.deleted_at IS NULL
 		  AND UPPER(s.code) = 'ACTIVE'
 	`
 	args := []interface{}{positionID}
 	argIdx := 2
 
-	// Здесь мы пытаемся быть мягче: ИЛИ совпадает, ИЛИ у юзера это поле NULL (глобальный начальник)
+
 	if ctxData.DepartmentID != 0 {
 		query += fmt.Sprintf(" AND (u.department_id = $%d OR u.department_id IS NULL)", argIdx)
 		args = append(args, ctxData.DepartmentID)
 		argIdx++
 	}
-	// Если департамент выбран, то обычно Branch игнорируется для поиска головного офиса,
-	// но для региональных правил Branch важен.
-	if ctxData.BranchID != nil {
-		query += fmt.Sprintf(" AND (u.branch_id = $%d OR u.branch_id IS NULL)", argIdx)
-		args = append(args, *ctxData.BranchID)
-		argIdx++
-	}
+
 	if ctxData.OtdelID != nil {
 		query += fmt.Sprintf(" AND (u.otdel_id = $%d OR u.otdel_id IS NULL)", argIdx)
 		args = append(args, *ctxData.OtdelID)
 		argIdx++
 	}
-	
-	query += " ORDER BY u.otdel_id NULLS LAST, u.department_id NULLS LAST, u.branch_id NULLS LAST LIMIT 1"
+
+	if !shouldIgnoreBranch && ctxData.BranchID != nil {
+		query += fmt.Sprintf(" AND (u.branch_id = $%d OR u.branch_id IS NULL)", argIdx)
+		args = append(args, *ctxData.BranchID)
+		argIdx++
+	}
+
+
+	query += " ORDER BY u.id ASC LIMIT 1"
 
 	var u entities.User
 	err := tx.QueryRow(ctx, query, args...).Scan(&u.ID, &u.Fio, &u.Email, &u.PositionID, &u.DepartmentID, &u.BranchID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+	
 			return nil, apperrors.NewHttpError(http.StatusBadRequest,
-				"Правило найдено, но нет активного сотрудника с нужной должностью в данном подразделении.", nil, nil)
+				"Правило найдено (должность определена), но активный сотрудник не найден. Проверьте штатную структуру.", nil, nil)
 		}
 		return nil, err
 	}
