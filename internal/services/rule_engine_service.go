@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"net/http"
 	"request-system/pkg/constants"   
 	"request-system/internal/entities"
@@ -131,61 +133,70 @@ func (s *RuleEngineService) ResolveExecutor(ctx context.Context, tx pgx.Tx, orde
 }
 
 func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d OrderContext) (*RoutingResult, error) {
-	
 	var targetRoles []string
 	var searchScopeName string
-
 	var deptID, otdelID, branchID, officeID *uint64
 
+	// 1. ОПРЕДЕЛЕНИЕ ГОЛОВНОГО ФИЛИАЛА ПО ИМЕНИ
+	isHeadBranch := false
+	if d.BranchID != nil {
+		currentBranchName := ""
+		// Читаем имя из базы
+		_ = tx.QueryRow(ctx, "SELECT name FROM branches WHERE id = $1", *d.BranchID).Scan(&currentBranchName)
 
-	if d.DepartmentID != 0 {
-	
-		searchScopeName = "Департамент"
-		targetRoles = []string{
-			"HEAD_OF_DEPARTMENT",
-			"DEPUTY_HEAD_OF_DEPARTMENT", 
+		// Читаем эталон из настроек
+		headBranchNames := os.Getenv("HEAD_BRANCH_NAMES")
+		if headBranchNames == "" {
+			headBranchNames = "Саридора" 
 		}
-		id := d.DepartmentID
-		deptID = &id 
+
+		// Сравниваем
+		for _, name := range strings.Split(headBranchNames, ",") {
+			if strings.TrimSpace(currentBranchName) == strings.TrimSpace(name) {
+				isHeadBranch = true
+				break
+			}
+		}
+	}
+
+	// 2. ВОДОПАД (WATERFALL): Определяем кого искать
+	if d.DepartmentID != 0 {
+		// Департамент (Высший уровень)
+		searchScopeName = "Департамент"
+		targetRoles = []string{"HEAD_OF_DEPARTMENT", "DEPUTY_HEAD_OF_DEPARTMENT"}
+		id := d.DepartmentID; deptID = &id
+
+	} else if isHeadBranch && d.OfficeID != nil {
+		// Служба в Саридоре (Трактуем как Департамент)
+		searchScopeName = "Служба (Головной филиал)"
+		targetRoles = []string{"HEAD_OF_DEPARTMENT", "DEPUTY_HEAD_OF_DEPARTMENT"}
+		officeID = d.OfficeID
 
 	} else if d.OtdelID != nil {
-		// 2. УРОВЕНЬ ОТДЕЛА
+		// Отдел
 		searchScopeName = "Отдел"
-		targetRoles = []string{
-			"HEAD_OF_OTDEL",
-			"DEPUTY_HEAD_OF_OTDEL",
-		}
+		targetRoles = []string{"HEAD_OF_OTDEL", "DEPUTY_HEAD_OF_OTDEL", "MANAGER"}
 		otdelID = d.OtdelID
-		// Для отделов часто важен Филиал (если это региональный отдел)
 		if d.BranchID != nil { branchID = d.BranchID }
 
 	} else if d.BranchID != nil {
-		// 3. УРОВЕНЬ ФИЛИАЛА
+		// Филиал (Региональный)
 		searchScopeName = "Филиал"
-		targetRoles = []string{
-			"BRANCH_DIRECTOR",
-			"DEPUTY_BRANCH_DIRECTOR",
-		}
+		targetRoles = []string{"BRANCH_DIRECTOR", "DEPUTY_BRANCH_DIRECTOR"}
 		branchID = d.BranchID
 
 	} else if d.OfficeID != nil {
-		// 4. УРОВЕНЬ ОФИСА (ЦБО)
+		// Офис (ЦБО Региональный)
 		searchScopeName = "Офис"
-		targetRoles = []string{
-			"HEAD_OF_OFFICE",
-			"DEPUTY_HEAD_OF_OFFICE",
-		}
+		targetRoles = []string{"HEAD_OF_OFFICE", "DEPUTY_HEAD_OF_OFFICE"}
 		officeID = d.OfficeID
 
 	} else {
-		return nil, apperrors.NewHttpError(http.StatusBadRequest,
-			"Не выбрано ни одно подразделение, невозможно определить руководителя.", nil, nil)
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Не выбрано подразделение.", nil, nil)
 	}
 
-	// === ПОИСК ПО ОЧЕРЕДИ ===
+	// 3. ПОИСК В БАЗЕ (С ПОДДЕРЖКОЙ ЗАМЕСТИТЕЛЯ)
 	for _, role := range targetRoles {
-		
-		// Используем правильный JOIN user_positions (наш новый механизм)
 		query := `
 			SELECT DISTINCT u.id, u.fio, u.email, u.position_id, u.department_id, u.branch_id
 			FROM users u
@@ -199,29 +210,13 @@ func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d
 		args := []interface{}{role}
 		argIdx := 2
 
-		// Применяем фильтры (если переменные не nil)
-		if deptID != nil {
-			query += fmt.Sprintf(" AND u.department_id = $%d", argIdx)
-			args = append(args, *deptID)
-			argIdx++
-		}
-		if otdelID != nil {
-			query += fmt.Sprintf(" AND u.otdel_id = $%d", argIdx)
-			args = append(args, *otdelID)
-			argIdx++
-		}
-		if branchID != nil {
-			query += fmt.Sprintf(" AND u.branch_id = $%d", argIdx)
-			args = append(args, *branchID)
-			argIdx++
-		}
-		if officeID != nil {
-			query += fmt.Sprintf(" AND u.office_id = $%d", argIdx)
-			args = append(args, *officeID)
-			argIdx++
-		}
+		// Подставляем только непустые фильтры
+		if deptID != nil { query += fmt.Sprintf(" AND u.department_id = $%d", argIdx); args = append(args, *deptID); argIdx++ }
+		if otdelID != nil { query += fmt.Sprintf(" AND u.otdel_id = $%d", argIdx); args = append(args, *otdelID); argIdx++ }
+		if branchID != nil { query += fmt.Sprintf(" AND u.branch_id = $%d", argIdx); args = append(args, *branchID); argIdx++ }
+		if officeID != nil { query += fmt.Sprintf(" AND u.office_id = $%d", argIdx); args = append(args, *officeID); argIdx++ }
 
-		query += " LIMIT 1"
+		query += " LIMIT 1" // Назначить на первого найденного (Директор, потом Зам)
 
 		var u entities.User
 		err := tx.QueryRow(ctx, query, args...).Scan(
@@ -229,28 +224,22 @@ func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d
 		)
 
 		if err == nil {
-			// Нашли! (Либо Директора, либо Зама)
-			s.logger.Info("Auto-Resolve: Найден сотрудник", zap.String("role", role), zap.String("fio", u.Fio))
-			return &RoutingResult{
-				Executor:  u,
-				StatusID:  0,
-				RuleFound: false,
-			}, nil
+			// Нашли! (Выходим, даже если это Заместитель, второй круг не нужен)
+			s.logger.Info("Ответственный найден автоматически", zap.String("role", role), zap.String("fio", u.Fio))
+			return &RoutingResult{Executor: u, RuleFound: false}, nil
 		}
-		// Если ошибка "NoRows" -> идем на следующую итерацию цикла искать Зама.
+		// Если не нашли — цикл повторяется со следующей ролью (DEPUTY_...)
 	}
-	s.logger.Warn("Автоматический поиск не дал результатов", zap.Strings("roles", targetRoles))
 
+	// Вывод ошибки (перевод ролей для пользователя)
 	roleName1 := constants.PositionTypeNames[constants.PositionType(targetRoles[0])]
-	if roleName1 == "" { roleName1 = targetRoles[0] } 
-
+	if roleName1 == "" { roleName1 = targetRoles[0] }
 	roleName2 := constants.PositionTypeNames[constants.PositionType(targetRoles[1])]
-	if roleName2 == "" { roleName2 = targetRoles[1] } 
+	if roleName2 == "" { roleName2 = targetRoles[1] }
 
 	return nil, apperrors.NewHttpError(http.StatusBadRequest,
-		fmt.Sprintf("В подразделении '%s' не найден ни '%s', ни '%s'. Проверьте штатную структуру.", searchScopeName, roleName1, roleName2), nil, nil)
+		fmt.Sprintf("В подразделении '%s' не найден ни '%s', ни '%s'.", searchScopeName, roleName1, roleName2), nil, nil)
 }
-
 func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, tx pgx.Tx, posID int, ctxData OrderContext) (*entities.User, error) {
 	positionID := uint64(posID)
 

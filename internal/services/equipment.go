@@ -220,10 +220,10 @@ func (s *EquipmentService) UpdateEquipment(ctx context.Context, id uint64, dto d
 		existingEntity.Address = *dto.Address
 	}
 	if dto.BranchID != nil {
-		existingEntity.BranchID = *dto.BranchID
+		existingEntity.BranchID = dto.BranchID
 	}
 	if dto.OfficeID != nil {
-		existingEntity.OfficeID = *dto.OfficeID
+		existingEntity.OfficeID = dto.OfficeID
 	}
 	if dto.StatusID != nil {
 		existingEntity.StatusID = *dto.StatusID

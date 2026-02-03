@@ -20,7 +20,7 @@ import (
 	"request-system/internal/entities"
 	"request-system/internal/events"
 	"request-system/internal/repositories"
-	"request-system/pkg/constants"
+
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/eventbus"
 	"request-system/pkg/filestorage"
@@ -110,10 +110,6 @@ func NewOrderService(
 	}
 }
 
-// =========================================================================
-// READ OPERATIONS
-// =========================================================================
-
 func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool) (*dto.OrderListResponseDTO, error) {
 	// 1. Получаем актора
 	userID, err := utils.GetUserIDFromCtx(ctx)
@@ -171,7 +167,7 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyP
 	if onlyParticipant {
 		participantCondition := sq.Or{
 			sq.Eq{"o.user_id": actor.ID},
-			sq.Eq{"o.executor_id": actor.ID},
+			//sq.Eq{"o.executor_id": actor.ID},
 		}
 		securityBuilder = append(securityBuilder, participantCondition)
 	}
@@ -209,9 +205,26 @@ func (s *OrderService) FindOrderByID(ctx context.Context, orderID uint64) (*dto.
 }
 
 func (s *OrderService) FindOrderByIDForTelegram(ctx context.Context, userID uint64, orderID uint64) (*entities.Order, error) {
-	// (Оставил без изменений, используется для ТГ бота)
+	// ✅ ЗАЩИТА: userID не может быть 0
+	if userID == 0 {
+		s.logger.Error("FindOrderByIDForTelegram вызван с userID=0",
+			zap.Uint64("orderID", orderID),
+			zap.Stack("stacktrace"))
+		return nil, apperrors.ErrUserNotFound
+	}
+	
+	if orderID == 0 {
+		s.logger.Error("FindOrderByIDForTelegram вызван с orderID=0",
+			zap.Uint64("userID", userID))
+		return nil, apperrors.NewBadRequestError("ID заявки не указан")
+	}
+	
 	order, err := s.orderRepo.FindByID(ctx, orderID)
 	if err != nil {
+		s.logger.Warn("Заявка не найдена",
+			zap.Uint64("orderID", orderID),
+			zap.Uint64("userID", userID),
+			zap.Error(err))
 		return nil, err
 	}
 
@@ -224,16 +237,24 @@ func (s *OrderService) FindOrderByIDForTelegram(ctx context.Context, userID uint
 
 	user, err := s.userRepo.FindUserByID(ctx, userID)
 	if err != nil {
-		return nil, err
+		s.logger.Error("Пользователь не найден при проверке прав через Telegram",
+			zap.Uint64("userID", userID),
+			zap.Uint64("orderID", orderID),
+			zap.Error(err))
+		return nil, apperrors.ErrUserNotFound
 	}
 
 	authCtx := authz.Context{Actor: user, Permissions: permMap, Target: order}
 	if !authz.CanDo(authz.OrdersView, authCtx) {
+		s.logger.Warn("Попытка доступа к заявке без прав через Telegram",
+			zap.Uint64("userID", userID),
+			zap.Uint64("orderID", orderID),
+			zap.String("user_fio", user.Fio))
 		return nil, apperrors.ErrForbidden
 	}
+	
 	return order, nil
 }
-
 // =========================================================================
 // CREATE OPERATION
 // =========================================================================
@@ -379,10 +400,13 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 	if err != nil {
 		return nil, err
 	}
-status, _ := s.statusRepo.FindStatus(ctx, currentOrder.StatusID)
+
+	// 1. Блокировка (только для CLOSED)
+	status, _ := s.statusRepo.FindStatus(ctx, currentOrder.StatusID)
 	if status != nil && status.Code != nil && *status.Code == "CLOSED" {
 		return nil, apperrors.NewBadRequestError("Заявка закрыта. Редактирование запрещено.")
 	}
+
 	authCtx, err := s.buildAuthzContextWithTarget(ctx, currentOrder)
 	if err != nil {
 		return nil, err
@@ -391,6 +415,14 @@ status, _ := s.statusRepo.FindStatus(ctx, currentOrder.StatusID)
 		return nil, apperrors.ErrForbidden
 	}
 
+	// 2. Валидация Комментария
+	orderTypeCode, _ := s.orderTypeRepo.FindCodeByID(ctx, *currentOrder.OrderTypeID)
+	if orderTypeCode != "EQUIPMENT" {
+		if updateDTO.Comment == nil || strings.TrimSpace(*updateDTO.Comment) == "" {
+			return nil, apperrors.NewBadRequestError("Для сохранения изменений необходимо добавить комментарий с описанием действий.")
+		}
+	}
+	
 	// Базовая защита: если нет файла и пустой JSON
 	if len(explicitFields) == 0 && file == nil {
 		return nil, apperrors.NewBadRequestError("Нет данных для обновления")
@@ -398,25 +430,19 @@ status, _ := s.statusRepo.FindStatus(ctx, currentOrder.StatusID)
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		txID := uuid.New()
-
-		// === 1. Синхронизация времени ===
-		// Чтобы разница времени (Created vs Completed) была математически точной,
-		// берем текущее время в ТОМ ЖЕ часовом поясе, где создана заявка.
+		
+		// Синхронизация времени с зоной создания (чтобы часы не скакали)
 		loc := currentOrder.CreatedAt.Location()
-		if loc == nil {
-			loc = time.Local
-		}
+		if loc == nil { loc = time.Local }
 		now := time.Now().In(loc)
 
-		// === 2. Обновление полей (Smart Update) ===
 		updated := *currentOrder
-		// SmartUpdate сам разберется: где значение, где null, где пропуск.
-		// Возвращает true, если структура реально изменилась.
+		
+		// === ОБНОВЛЕНИЕ ПОЛЕЙ ===
 		fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
-
 		updated.UpdatedAt = now
 
-		// === 3. Логика смены подразделения (Рероутинг) ===
+		// === ЛОГИКА РЕРОУТИНГА (Смена ответственного при смене структуры) ===
 		structureChanged := utils.DiffPtr(currentOrder.DepartmentID, updated.DepartmentID) ||
 			utils.DiffPtr(currentOrder.OtdelID, updated.OtdelID) ||
 			utils.DiffPtr(currentOrder.BranchID, updated.BranchID) ||
@@ -424,18 +450,14 @@ status, _ := s.statusRepo.FindStatus(ctx, currentOrder.StatusID)
 
 		if structureChanged {
 			s.logger.Info("Изменение структуры -> Поиск исполнителя", zap.Uint64("order_id", orderID))
-
 			orderCtx := OrderContext{
 				DepartmentID: utils.SafeDeref(updated.DepartmentID),
-				OtdelID:      updated.OtdelID, // Может быть nil (SmartUpdate)
+				OtdelID:      updated.OtdelID,
 				BranchID:     updated.BranchID,
 				OfficeID:     updated.OfficeID,
 			}
-
-			// Пытаемся найти нового начальника автоматически
 			res, err := s.ruleEngine.ResolveExecutor(ctx, tx, orderCtx, nil)
 			if err != nil {
-				// Если автоматика не нашла — сбрасываем исполнителя (пусть назначают вручную)
 				updated.ExecutorID = nil
 			} else {
 				updated.ExecutorID = &res.Executor.ID
@@ -443,70 +465,21 @@ status, _ := s.statusRepo.FindStatus(ctx, currentOrder.StatusID)
 			fieldsChanged = true
 		}
 
-		// === 4. Логика смены статуса (Завершение / Открытие) ===
-		if currentOrder.StatusID != updated.StatusID {
-			// Получаем коды статусов
-			st, _ := s.statusRepo.FindByIDInTx(ctx, tx, updated.StatusID)
-			oldSt, _ := s.statusRepo.FindByIDInTx(ctx, tx, currentOrder.StatusID)
-
-			code := ""
-			if st != nil && st.Code != nil {
-				code = strings.ToUpper(*st.Code)
-			}
-
-			oldCode := ""
-			if oldSt != nil && oldSt.Code != nil {
-				oldCode = strings.ToUpper(*oldSt.Code)
-			}
-
-			if code != "" {
-				// А) Переход в Финальный статус
-				if constants.IsFinalStatus(code) {
-					updated.CompletedAt = &now
-
-					// Расчет времени решения (Resolution Time)
-					diff := now.Sub(currentOrder.CreatedAt).Seconds()
-					// ЗАЩИТА: Время не может быть отрицательным
-					if diff < 0 {
-						diff = 0
-					}
-
-					val := uint64(diff)
-					updated.ResolutionTimeSeconds = &val
-
-					// Проверка FCR (Решено ли с первого раза)
-					// (Если время реакции совпадает со временем решения или оно пустое)
-					isFCR := false
-					if currentOrder.FirstResponseTimeSeconds != nil && *currentOrder.FirstResponseTimeSeconds >= val {
-						isFCR = true
-					}
-					updated.IsFirstContactResolution = &isFCR
-
-				} else {
-					// Б) Обычная смена статуса -> снимаем дату завершения
-					updated.CompletedAt = nil
-				}
-
-				// В) Реопен (Если была закрыта, а стала открыта) -> СБРАСЫВАЕМ метрики успеха
-				if constants.IsFinalStatus(oldCode) && !constants.IsFinalStatus(code) {
-					updated.CompletedAt = nil
-					updated.ResolutionTimeSeconds = nil // Сброс
-					updated.IsFirstContactResolution = nil
-				}
-			}
+		// === ЛОГИКА МЕТРИК И СТАТУСОВ (Центральная логика SLA) ===
+		// ВАЖНО: Вся математика времени перенесена внутрь calculateMetrics,
+		// которая была исправлена вами ранее (где Reopen и т.д.).
+		s.calculateMetrics(&updated, currentOrder, updateDTO, authCtx.Actor.ID, now)
+		
+		// Если метрики (SLA) обновили статус (например сбросили) или статус изменился вручную
+		if currentOrder.StatusID != updated.StatusID || currentOrder.CompletedAt != updated.CompletedAt {
 			fieldsChanged = true
 		}
 
-		// === 5. Расчет метрик (SLA / First Response) ===
-		s.calculateMetrics(&updated, currentOrder, updateDTO, authCtx.Actor.ID, now)
-
-		// === 6. Логирование (Order History) ===
+		// === ЛОГИРОВАНИЕ ИСТОРИИ ===
 		histChanged, err := s.detectAndLogChanges(ctx, tx, currentOrder, &updated, updateDTO, authCtx.Actor, txID, now)
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
 
-		// === 7. Файлы ===
+		// === ФАЙЛЫ ===
 		fileAttached := false
 		if file != nil {
 			if _, err := s.attachFileToOrderInTx(ctx, tx, orderID, authCtx.Actor.ID, file, &txID, &updated); err != nil {
@@ -515,19 +488,17 @@ status, _ := s.statusRepo.FindStatus(ctx, currentOrder.StatusID)
 			fileAttached = true
 		}
 
-		// === 8. Финал ===
+		// Финальная проверка: было ли реальное действие?
 		if !fieldsChanged && !histChanged && !fileAttached {
 			return apperrors.ErrNoChanges
 		}
 
 		return s.orderRepo.Update(ctx, tx, &updated)
 	})
-	if err != nil {
-		return nil, err
-	}
+
+	if err != nil { return nil, err }
 	return s.FindOrderByID(ctx, orderID)
 }
-
 // detectAndLogChanges - ЯДРО логирования
 func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, new *entities.Order, dto dto.UpdateOrderDTO, actor *entities.User, txID uuid.UUID, now time.Time) (bool, error) {
 	hasLoggable := false
@@ -999,6 +970,7 @@ func (s *OrderService) validateOrderRules(ctx context.Context, d dto.CreateOrder
 		return nil
 	}
 
+	// 1. Проверяем поля для оборудования
 	if rules, ok := OrderValidationRules[code]; ok {
 		for _, field := range rules {
 			if !s.checkFieldPresence(d, field) {
@@ -1006,6 +978,14 @@ func (s *OrderService) validateOrderRules(ctx context.Context, d dto.CreateOrder
 			}
 		}
 	}
+
+	
+	if code != "EQUIPMENT" {
+		if !s.checkFieldPresence(d, "comment") {
+			return apperrors.NewBadRequestError("Для данного типа заявки необходимо заполнить поле 'Комментарий'.")
+		}
+	}
+
 	return nil
 }
 
@@ -1020,7 +1000,7 @@ func (s *OrderService) checkFieldPresence(d dto.CreateOrderDTO, field string) bo
 	case "otdel_id":
 		return d.OtdelID != nil
 	case "comment":
-		return d.Comment != nil && *d.Comment != ""
+		return d.Comment != nil && strings.TrimSpace(*d.Comment) != ""
 	default:
 		return true
 	}

@@ -3,7 +3,7 @@ package repositories
 import (
 	"context"
 	"fmt"
-	"strings"
+	
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
@@ -12,6 +12,9 @@ import (
 	"go.uber.org/zap"
 
 	"request-system/internal/entities"
+
+	"request-system/internal/infrastructure/bd"
+	
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
 )
@@ -20,7 +23,7 @@ const (
 	orderTable = "orders"
 )
 
-var allowedOrderFilters = map[string]string{
+var orderMap = map[string]string{
 	"id":            "o.id",
 	"name":          "o.name",
 	"status_id":     "o.status_id",
@@ -35,6 +38,10 @@ var allowedOrderFilters = map[string]string{
 	"created_at":    "o.created_at",
 	"updated_at":    "o.updated_at",
 	"order_type_id": "o.order_type_id",
+	"address":       "o.address",
+	"duration":          "o.duration",
+	"equipment_id":      "o.equipment_id",
+	"equipment_type_id": "o.equipment_type_id",
 }
 
 type OrderRepositoryInterface interface {
@@ -59,12 +66,10 @@ func NewOrderRepository(storage *pgxpool.Pool, logger *zap.Logger) OrderReposito
 	return &OrderRepository{storage: storage, logger: logger}
 }
 
-// BeginTx - начало транзакции
 func (r *OrderRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 	return r.storage.Begin(ctx)
 }
 
-// buildOrderSelectQuery - базовый SELECT с JOIN для получения FIO
 func (r *OrderRepository) buildOrderSelectQuery() sq.SelectBuilder {
 	return sq.Select(
 		"o.id",
@@ -100,97 +105,100 @@ func (r *OrderRepository) buildOrderSelectQuery() sq.SelectBuilder {
 }
 
 func (r *OrderRepository) FindByID(ctx context.Context, orderID uint64) (*entities.Order, error) {
-	queryBuilder := r.buildOrderSelectQuery().
-		Where(sq.Eq{"o.id": orderID, "o.deleted_at": nil})
+	queryBuilder := r.buildOrderSelectQuery().Where(sq.Eq{"o.id": orderID, "o.deleted_at": nil})
 
 	sqlStr, args, err := queryBuilder.ToSql()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка сборки SQL для FindByID: %w", err)
-	}
+	if err != nil { return nil, fmt.Errorf("FindByID SQL error: %w", err) }
 
 	rows, err := r.storage.Query(ctx, sqlStr, args...)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	defer rows.Close()
 
 	order, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[entities.Order])
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, apperrors.ErrNotFound
-		}
-		r.logger.Error("Ошибка маппинга заявки", zap.Error(err))
+		if err == pgx.ErrNoRows { return nil, apperrors.ErrNotFound }
 		return nil, err
 	}
-
 	return &order, nil
 }
 
-// GetOrders - УНИВЕРСАЛЬНАЯ ФИЛЬТРАЦИЯ как у Users
+// -------------------------------------------------------------
+// GetOrders - МАКСИМАЛЬНАЯ ОПТИМИЗАЦИЯ
+// -------------------------------------------------------------
 func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, securityCondition sq.Sqlizer) ([]entities.Order, uint64, error) {
+	// 1. ХЕЛПЕРЫ ДЛЯ СЛОЖНЫХ УСЛОВИЙ
+	
+	// Поиск по тексту (ИЛИ по названию, ИЛИ по адресу)
+	applySearch := func(b sq.SelectBuilder) sq.SelectBuilder {
+		if filter.Search != "" {
+			match := "%" + filter.Search + "%"
+			return b.Where(sq.Or{
+				sq.ILike{"o.name": match},
+				sq.ILike{"o.address": match},
+			})
+		}
+		return b
+	}
+
+	// Специфические фильтры (даты, просрочки)
+	applySpecialFilters := func(b sq.SelectBuilder) sq.SelectBuilder {
+		// Даты дедлайна
+		if dFrom, ok := filter.Filter["duration_from"]; ok {
+			b = b.Where(sq.GtOrEq{"o.duration": dFrom})
+		}
+		if dTo, ok := filter.Filter["duration_to"]; ok {
+			b = b.Where(sq.LtOrEq{"o.duration": dTo})
+		}
+
+		// Просроченные заявки
+		if val, ok := filter.Filter["overdue"]; ok {
+			if valStr, _ := val.(string); valStr == "true" {
+				// ВАЖНО: Джойн уже есть в countBuilder/selectBuilder или его надо добавить
+				// Для надежности добавляем EXISTS (подзапрос), чтобы не дублировать джойны
+				// или предполагаем, что если мы джойним статусы - это безопасно.
+				// Тут лучше сделать явно.
+				b = b.Join("statuses s_ovr ON o.status_id = s_ovr.id").
+					Where("o.duration < NOW()").
+					Where("s_ovr.code NOT IN ('CLOSED', 'COMPLETED', 'REJECTED')")
+			}
+		}
+		
+		// Очистка спец. фильтров из map, чтобы Helper не пытался применить их как простые равенства
+		delete(filter.Filter, "duration_from")
+		delete(filter.Filter, "duration_to")
+		delete(filter.Filter, "overdue")
+
+		return b
+	}
+
+	// --------------------------------------------------------
+	// 2. ВЫПОЛНЕНИЕ COUNT (ОБЩЕЕ КОЛИЧЕСТВО)
+	// --------------------------------------------------------
 	countBuilder := sq.Select("count(o.id)").
 		From(orderTable + " o").
 		Where(sq.Eq{"o.deleted_at": nil}).
 		PlaceholderFormat(sq.Dollar)
 
-	// Security условия
+	// Security
 	if securityCondition != nil {
 		countBuilder = countBuilder.Where(securityCondition)
 	}
 
-	// ПОИСК (по name и address)
-	if filter.Search != "" {
-		match := "%" + filter.Search + "%"
-		countBuilder = countBuilder.Where(sq.Or{
-			sq.ILike{"o.name": match},
-			sq.ILike{"o.address": match},
-		})
-	}
+	// Search & Specials
+	countBuilder = applySearch(countBuilder)
+	countBuilder = applySpecialFilters(countBuilder) 
+	// ВАЖНО: После этого вызова filter.Filter УЖЕ ОЧИЩЕН от duration/overdue, 
+	// так что можно смело передавать его дальше в хелпер.
 
-	// ФИЛЬТРЫ (динамические)
-	// Специальные фильтры
-	if dFrom, ok := filter.Filter["duration_from"]; ok {
-		countBuilder = countBuilder.Where(sq.GtOrEq{"o.duration": dFrom})
-		delete(filter.Filter, "duration_from")
-	}
-	if dTo, ok := filter.Filter["duration_to"]; ok {
-		countBuilder = countBuilder.Where(sq.LtOrEq{"o.duration": dTo})
-		delete(filter.Filter, "duration_to")
-	}
+	// Helper (branch_id=1,2, priority_id=...)
+	countFilter := filter
+	countFilter.WithPagination = false
+	countFilter.Sort = nil
+	countBuilder = bd.ApplyListParams(countBuilder, countFilter, orderMap)
 
-	// Просроченные заявки
-	isOverdue := false
-	if val, ok := filter.Filter["overdue"]; ok {
-		if valStr, _ := val.(string); valStr == "true" {
-			isOverdue = true
-		}
-		delete(filter.Filter, "overdue")
-	}
-
-	// Универсальные фильтры через белый список
-	for jsonField, val := range filter.Filter {
-		if dbCol, ok := allowedOrderFilters[jsonField]; ok {
-			// Поддержка множественных значений через запятую
-			if s, ok := val.(string); ok && strings.Contains(s, ",") {
-				countBuilder = countBuilder.Where(sq.Eq{dbCol: strings.Split(s, ",")})
-			} else {
-				countBuilder = countBuilder.Where(sq.Eq{dbCol: val})
-			}
-		}
-	}
-
-	// JOIN для просроченных
-	if isOverdue {
-		countBuilder = countBuilder.Join("statuses s ON o.status_id = s.id").
-			Where("o.duration < NOW()").
-			Where("s.code NOT IN ('CLOSED', 'COMPLETED', 'REJECTED')")
-	}
-
-	// Выполняем COUNT
+	// Execute Count
 	countSql, countArgs, err := countBuilder.ToSql()
-	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка сборки SQL count: %w", err)
-	}
+	if err != nil { return nil, 0, err }
 
 	var totalCount uint64
 	if err := r.storage.QueryRow(ctx, countSql, countArgs...).Scan(&totalCount); err != nil {
@@ -200,94 +208,130 @@ func (r *OrderRepository) GetOrders(ctx context.Context, filter types.Filter, se
 		return []entities.Order{}, 0, nil
 	}
 
-	selectBuilder := r.buildOrderSelectQuery().
+	// --------------------------------------------------------
+	// 3. ВЫПОЛНЕНИЕ SELECT (СПИСОК)
+	// --------------------------------------------------------
+	selectBuilder := r.buildOrderSelectQuery(). // Внутри джойны users creator/executor
 		Where(sq.Eq{"o.deleted_at": nil})
 
-	// Применяем ТЕ ЖЕ условия что и в COUNT
+	// Security
 	if securityCondition != nil {
 		selectBuilder = selectBuilder.Where(securityCondition)
 	}
+	
+	// Search
+	selectBuilder = applySearch(selectBuilder)
+	
+	return r.getOrdersRefactored(ctx, filter, securityCondition)
+}
 
-	if filter.Search != "" {
-		match := "%" + filter.Search + "%"
-		selectBuilder = selectBuilder.Where(sq.Or{
-			sq.ILike{"o.name": match},
-			sq.ILike{"o.address": match},
-		})
-	}
+func (r *OrderRepository) getOrdersRefactored(ctx context.Context, filter types.Filter, securityCondition sq.Sqlizer) ([]entities.Order, uint64, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
-	// Восстанавливаем фильтры (они были удалены из map)
-	if dFrom, ok := filter.Filter["duration_from"]; ok {
-		selectBuilder = selectBuilder.Where(sq.GtOrEq{"o.duration": dFrom})
-	}
-	if dTo, ok := filter.Filter["duration_to"]; ok {
-		selectBuilder = selectBuilder.Where(sq.LtOrEq{"o.duration": dTo})
-	}
+	// 🔥 ИЗВЛЕКАЕМ ВСЕ СПЕЦИАЛЬНЫЕ ФИЛЬТРЫ
+	durationFrom, _ := filter.Filter["duration_from"]
+	durationTo, _ := filter.Filter["duration_to"]
+	createdFrom, _ := filter.Filter["created_from"]   // 🔥 ДОБАВЛЕНО
+	createdTo, _ := filter.Filter["created_to"]       // 🔥 ДОБАВЛЕНО
+	overdueVal, _ := filter.Filter["overdue"]
+	
+	// 🔥 УДАЛЯЕМ ИХ ИЗ MAP
+	delete(filter.Filter, "duration_from")
+	delete(filter.Filter, "duration_to")
+	delete(filter.Filter, "created_from")   // 🔥 ДОБАВЛЕНО
+	delete(filter.Filter, "created_to")     // 🔥 ДОБАВЛЕНО
+	delete(filter.Filter, "overdue")
 
-	for jsonField, val := range filter.Filter {
-		if dbCol, ok := allowedOrderFilters[jsonField]; ok {
-			if s, ok := val.(string); ok && strings.Contains(s, ",") {
-				selectBuilder = selectBuilder.Where(sq.Eq{dbCol: strings.Split(s, ",")})
-			} else {
-				selectBuilder = selectBuilder.Where(sq.Eq{dbCol: val})
+	// 🔥 ФУНКЦИЯ ПРИМЕНЕНИЯ СПЕЦИАЛЬНЫХ ФИЛЬТРОВ
+	applySpecials := func(b sq.SelectBuilder) sq.SelectBuilder {
+		// Duration фильтры (срок выполнения)
+		if durationFrom != nil {
+			b = b.Where(sq.GtOrEq{"o.duration": durationFrom})
+		}
+		if durationTo != nil {
+			b = b.Where(sq.LtOrEq{"o.duration": durationTo})
+		}
+		
+		// 🔥 НОВОЕ: Created фильтры (дата создания)
+		if createdFrom != nil {
+			b = b.Where(sq.GtOrEq{"o.created_at": createdFrom})
+		}
+		if createdTo != nil {
+			b = b.Where(sq.LtOrEq{"o.created_at": createdTo})
+		}
+		
+		// Просроченные
+		if overdueVal != nil {
+			if s, ok := overdueVal.(string); ok && s == "true" {
+				b = b.Join("statuses s_ovr ON o.status_id = s_ovr.id").
+					Where("o.duration < NOW()").
+					Where("s_ovr.code NOT IN ('CLOSED', 'COMPLETED', 'REJECTED')")
 			}
 		}
+		return b
 	}
 
-	if isOverdue {
-		selectBuilder = selectBuilder.Join("statuses s ON o.status_id = s.id").
-			Where("o.duration < NOW()").
-			Where("s.code NOT IN ('CLOSED', 'COMPLETED', 'REJECTED')")
-	}
-
-	// СОРТИРОВКА (динамическая через белый список)
-	if len(filter.Sort) > 0 {
-		for jsonField, dir := range filter.Sort {
-			if dbCol, ok := allowedOrderFilters[jsonField]; ok {
-				direction := "DESC"
-				if strings.ToLower(dir) == "asc" {
-					direction = "ASC"
-				}
-				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("%s %s", dbCol, direction))
-			}
+	applySearch := func(b sq.SelectBuilder) sq.SelectBuilder {
+		if filter.Search != "" {
+			match := "%" + filter.Search + "%"
+			return b.Where(sq.Or{
+				sq.ILike{"o.name": match},
+				sq.ILike{"o.address": match},
+			})
 		}
-	} else {
-		// Сортировка по умолчанию
+		return b
+	}
+
+	// COUNT
+	countBuilder := psql.Select("count(o.id)").From(orderTable + " o").Where(sq.Eq{"o.deleted_at": nil})
+	
+	if securityCondition != nil { countBuilder = countBuilder.Where(securityCondition) }
+	
+	countBuilder = applySearch(countBuilder)
+	countBuilder = applySpecials(countBuilder)
+	
+	countFilter := filter
+	countFilter.WithPagination = false
+	countFilter.Sort = nil
+
+	countBuilder = bd.ApplyListParams(countBuilder, countFilter, orderMap)
+	
+	var totalCount uint64
+	sqlCount, argsCount, _ := countBuilder.ToSql()
+	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&totalCount); err != nil {
+		return nil, 0, err
+	}
+	if totalCount == 0 {
+		return []entities.Order{}, 0, nil
+	}
+
+	// SELECT
+	selectBuilder := r.buildOrderSelectQuery().Where(sq.Eq{"o.deleted_at": nil})
+
+	if securityCondition != nil { selectBuilder = selectBuilder.Where(securityCondition) }
+
+	selectBuilder = applySearch(selectBuilder)
+	selectBuilder = applySpecials(selectBuilder)
+	
+	if len(filter.Sort) == 0 {
 		selectBuilder = selectBuilder.OrderBy("o.created_at DESC")
 	}
 
-	// ПАГИНАЦИЯ
-	if filter.WithPagination {
-		if filter.Limit > 0 {
-			selectBuilder = selectBuilder.Limit(uint64(filter.Limit))
-		}
-		if filter.Offset >= 0 {
-			selectBuilder = selectBuilder.Offset(uint64(filter.Offset))
-		}
-	}
+	selectBuilder = bd.ApplyListParams(selectBuilder, filter, orderMap)
 
-	// Выполняем SELECT
-	finalSql, finalArgs, err := selectBuilder.ToSql()
-	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка сборки SQL select: %w", err)
-	}
-	r.logger.Warn("DEBUGGING GetOrders SQL", zap.String("sql", finalSql), zap.Any("args", finalArgs))
-	rows, err := r.storage.Query(ctx, finalSql, finalArgs...)
-	if err != nil {
-		return nil, 0, err
-	}
+	sqlSelect, argsSelect, err := selectBuilder.ToSql()
+	if err != nil { return nil, 0, err }
+
+	rows, err := r.storage.Query(ctx, sqlSelect, argsSelect...)
+	if err != nil { return nil, 0, err }
 	defer rows.Close()
 
 	orders, err := pgx.CollectRows(rows, pgx.RowToStructByName[entities.Order])
-	if err != nil {
-		r.logger.Error("Ошибка сканирования списка заявок", zap.Error(err))
-		return nil, 0, err
-	}
-
+	if err != nil { return nil, 0, err }
+	
 	return orders, totalCount, nil
 }
 
-// Create - создание заявки
 func (r *OrderRepository) Create(ctx context.Context, tx pgx.Tx, order *entities.Order) (uint64, error) {
 	query := `INSERT INTO orders 
 		(name, address, department_id, otdel_id, branch_id, office_id, 
@@ -302,13 +346,11 @@ func (r *OrderRepository) Create(ctx context.Context, tx pgx.Tx, order *entities
 		order.OrderTypeID, order.StatusID, order.PriorityID, order.CreatorID,
 		order.ExecutorID, order.Duration,
 	).Scan(&order.ID)
-
 	return order.ID, err
 }
 
 func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities.Order) error {
-	b := sq.Update(orderTable).
-		PlaceholderFormat(sq.Dollar).
+	b := sq.Update(orderTable).PlaceholderFormat(sq.Dollar).
 		Set("updated_at", sq.Expr("NOW()")).
 		Set("name", order.Name).
 		Set("address", order.Address).
@@ -330,9 +372,7 @@ func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities
 		Where(sq.Eq{"id": order.ID, "deleted_at": nil})
 
 	sqlStr, args, err := b.ToSql()
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 
 	_, err = tx.Exec(ctx, sqlStr, args...)
 	return err
@@ -341,16 +381,11 @@ func (r *OrderRepository) Update(ctx context.Context, tx pgx.Tx, order *entities
 func (r *OrderRepository) DeleteOrder(ctx context.Context, orderID uint64) error {
 	query := `UPDATE orders SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
 	cmd, err := r.storage.Exec(ctx, query, orderID)
-	if err != nil {
-		return err
-	}
-	if cmd.RowsAffected() == 0 {
-		return apperrors.ErrNotFound
-	}
+	if err != nil { return err }
+	if cmd.RowsAffected() == 0 { return apperrors.ErrNotFound }
 	return nil
 }
 
-// GetUserOrderStats - аналитика
 func (r *OrderRepository) GetUserOrderStats(ctx context.Context, userID uint64, fromDate time.Time) (*types.UserOrderStats, error) {
 	query := `
 		SELECT 
@@ -365,7 +400,6 @@ func (r *OrderRepository) GetUserOrderStats(ctx context.Context, userID uint64, 
 		  AND o.deleted_at IS NULL
 		  AND o.created_at >= $2
 	`
-
 	var stats types.UserOrderStats
 	err := r.storage.QueryRow(ctx, query, userID, fromDate).Scan(
 		&stats.InProgressCount,
@@ -374,9 +408,7 @@ func (r *OrderRepository) GetUserOrderStats(ctx context.Context, userID uint64, 
 		&stats.OverdueCount,
 		&stats.AvgResolutionSeconds,
 	)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	stats.TotalCount = stats.InProgressCount + stats.CompletedCount + stats.ClosedCount + stats.OverdueCount
 	return &stats, nil
 }

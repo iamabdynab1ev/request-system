@@ -6,8 +6,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
+"request-system/internal/infrastructure/bd"
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,12 +23,23 @@ const otdelTable = "otdels"
 var (
 	otdelAllowedFilterFields = map[string]string{
 		"status_id":      "status_id",
-		"departments_id": "departments_id",
+		"department_id": "department_id",
 		"branch_id":      "branch_id",
 		"parent_id":      "parent_id",
 	}
 	otdelAllowedSortFields = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true}
 )
+var otdelMap = map[string]string{
+	"id":             "id",
+	"name":           "name",
+	"created_at":     "created_at",
+	"updated_at":     "updated_at",
+	"status_id":      "status_id",
+	"branch_id":      "branch_id",
+	"department_id":  "departments_id",
+	"departments_id": "departments_id",
+	"parent_id":      "parent_id",
+}
 
 // OtdelRepositoryInterface - полный и актуальный интерфейс.
 type OtdelRepositoryInterface interface {
@@ -38,6 +49,7 @@ type OtdelRepositoryInterface interface {
 	CreateOtdel(ctx context.Context, tx pgx.Tx, otdel entities.Otdel) (uint64, error)
 	UpdateOtdel(ctx context.Context, tx pgx.Tx, id uint64, otdel entities.Otdel) error
 	FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Otdel, error)
+	ValidateOtdelsInDepartment(ctx context.Context, deptID uint64, otdelIDs []uint64) (bool, error)
 }
 
 type OtdelRepository struct {
@@ -158,62 +170,53 @@ func (r *OtdelRepository) DeleteOtdel(ctx context.Context, id uint64) error {
 
 func (r *OtdelRepository) GetOtdels(ctx context.Context, filter types.Filter) ([]entities.Otdel, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	baseBuilder := psql.Select().From(otdelTable)
 
-	if len(filter.Filter) > 0 {
-		for key, value := range filter.Filter {
-			if dbColumn, ok := otdelAllowedFilterFields[key]; ok {
-				if items, ok := value.(string); ok && strings.Contains(items, ",") {
-					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: strings.Split(items, ",")})
-				} else {
-					baseBuilder = baseBuilder.Where(sq.Eq{dbColumn: value})
-				}
-			}
-		}
-	}
+	// --- 1. COUNT ---
+	countBuilder := psql.Select("COUNT(id)").From(otdelTable)
+
+	// Ручной поиск по тексту оставляем здесь (это не точное совпадение)
 	if filter.Search != "" {
-		baseBuilder = baseBuilder.Where(sq.ILike{"name": "%" + filter.Search + "%"})
+		countBuilder = countBuilder.Where(sq.ILike{"name": "%" + filter.Search + "%"})
 	}
 
-	countBuilder := baseBuilder.Columns("COUNT(id)")
-	countQuery, countArgs, err := countBuilder.ToSql()
-	if err != nil {
-		return nil, 0, err
-	}
+	// Копируем фильтр для Count (отключаем лишнее)
+	countFilter := filter
+	countFilter.WithPagination = false
+	countFilter.Sort = nil
+
+	// Используем BD Helper
+	countBuilder = bd.ApplyListParams(countBuilder, countFilter, otdelMap)
+
 	var total uint64
-	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	sqlCount, argsCount, _ := countBuilder.ToSql()
+	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	if total == 0 {
 		return []entities.Otdel{}, 0, nil
 	}
 
-	selectBuilder := baseBuilder.Columns("id, name, status_id, departments_id, branch_id, parent_id, created_at, updated_at, external_id, source_system")
+	// --- 2. SELECT ---
+	baseBuilder := psql.Select("id, name, status_id, departments_id, branch_id, parent_id, created_at, updated_at, external_id, source_system").From(otdelTable)
 
-	if len(filter.Sort) > 0 {
-		for field, direction := range filter.Sort {
-			if _, ok := otdelAllowedSortFields[field]; ok {
-				safeDirection := "ASC"
-				if strings.ToUpper(direction) == "DESC" {
-					safeDirection = "DESC"
-				}
-				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("%s %s", field, safeDirection))
-			}
-		}
-	} else {
-		selectBuilder = selectBuilder.OrderBy("id DESC")
+	if filter.Search != "" {
+		baseBuilder = baseBuilder.Where(sq.ILike{"name": "%" + filter.Search + "%"})
 	}
 
-	if filter.WithPagination {
-		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
+	// Сортировка по умолчанию
+	if len(filter.Sort) == 0 {
+		baseBuilder = baseBuilder.OrderBy("id DESC")
 	}
 
-	query, args, err := selectBuilder.ToSql()
+	// Используем BD Helper (здесь применится фильтр, сортировка и пагинация)
+	baseBuilder = bd.ApplyListParams(baseBuilder, filter, otdelMap)
+
+	sqlSelect, argsSelect, err := baseBuilder.ToSql()
 	if err != nil {
 		return nil, 0, err
 	}
 
-	rows, err := r.storage.Query(ctx, query, args...)
+	rows, err := r.storage.Query(ctx, sqlSelect, argsSelect...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -221,11 +224,31 @@ func (r *OtdelRepository) GetOtdels(ctx context.Context, filter types.Filter) ([
 
 	otdels := make([]entities.Otdel, 0)
 	for rows.Next() {
-		o, err := scanOtdel(rows)
+		o, err := scanOtdel(rows) // Эта функция у тебя ниже в файле
 		if err != nil {
 			return nil, 0, err
 		}
 		otdels = append(otdels, *o)
 	}
-	return otdels, total, rows.Err()
+	return otdels, total, nil
+}
+
+func (r *OtdelRepository) ValidateOtdelsInDepartment(ctx context.Context, deptID uint64, otdelIDs []uint64) (bool, error) {
+	if len(otdelIDs) == 0 {
+		return true, nil
+	}
+	query := `SELECT COUNT(DISTINCT id) FROM otdels WHERE departments_id = $1 AND id = ANY($2)`
+	
+	var count int
+	err := r.storage.QueryRow(ctx, query, deptID, otdelIDs).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+
+	uniqueInput := make(map[uint64]bool)
+	for _, id := range otdelIDs {
+		if id > 0 { uniqueInput[id] = true }
+	}
+
+	return count == len(uniqueInput), nil
 }

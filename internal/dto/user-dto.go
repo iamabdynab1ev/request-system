@@ -10,7 +10,7 @@ type CreateUserDTO struct {
 	StatusID    *uint64 `json:"status_id" validate:"omitempty"`
 
 	RoleIDs []uint64 `json:"role_ids" validate:"required,dive,gte=1"`
-
+ 	OtdelIDs []uint64  `json:"otdel_ids"`
 	BranchID     *uint64 `json:"branch_id" validate:"omitempty"`
 	DepartmentID *uint64 `json:"department_id" validate:"omitempty"`
 	OfficeID     *uint64 `json:"office_id" validate:"omitempty"`
@@ -33,7 +33,7 @@ type UpdateUserDTO struct {
 	StatusID   *uint64 `json:"status_id" validate:"omitempty"`
 
 	RoleIDs *[]uint64 `json:"role_ids" validate:"omitempty,dive,gte=1"`
-
+	    OtdelIDs *[]uint64 `json:"otdel_ids,omitempty"` 
 	BranchID     *uint64 `json:"branch_id" validate:"omitempty"`
 	DepartmentID *uint64 `json:"department_id" validate:"omitempty"`
 	OfficeID     *uint64 `json:"office_id" validate:"omitempty"`
@@ -70,7 +70,7 @@ type UserDTO struct {
 	OfficeName     *string  `json:"office_name,omitempty"`
 	RoleIDs        []uint64 `json:"role_ids"`
 	PositionIDs []uint64 `json:"position_ids"`
-
+	OtdelIDs []uint64  `json:"otdel_ids"`
 	PhotoURL           *string `json:"photo_url,omitempty"`
 	MustChangePassword bool    `json:"must_change_password"`
 	IsHead             bool    `json:"is_head"`

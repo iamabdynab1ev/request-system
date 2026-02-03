@@ -4,8 +4,8 @@ type CreateEquipmentDTO struct {
 	Name    string `json:"name" validate:"required"`
 	Address string `json:"address" validate:"required"`
 
-	BranchID        uint64 `json:"branch_id" validate:"required"`
-	OfficeID        uint64 `json:"office_id" validate:"required"`
+	BranchID        *uint64 `json:"branch_id" validate:"omitempty"`
+	OfficeID        *uint64 `json:"office_id" validate:"omitempty"`
 	StatusID        uint64 `json:"status_id" validate:"required"`
 	EquipmentTypeID uint64 `json:"equipment_type_id" validate:"required"`
 }
@@ -34,8 +34,8 @@ type EquipmentListResponseDTO struct {
 	ID              uint64 `json:"id"`
 	Name            string `json:"name"`
 	Address         string `json:"address"`
-	BranchID        uint64 `json:"branch_id"`
-	OfficeID        uint64 `json:"office_id"`
+    BranchID        *uint64 `json:"branch_id"`
+	OfficeID        *uint64 `json:"office_id"`
 	EquipmentTypeID uint64 `json:"equipment_type_id"`
 	StatusID        uint64 `json:"status_id"`
 	CreatedAt       string `json:"created_at"`

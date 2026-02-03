@@ -3,9 +3,9 @@ package telegram
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
+	"crypto/tls"
 	"io"
 	"net/http"
 	"strings"
@@ -16,32 +16,33 @@ import (
 	"go.uber.org/zap"
 
 	"request-system/internal/dto"
-	"request-system/internal/entities"  // Добавлено: импорт для entities
+	"request-system/internal/entities"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
 	"request-system/pkg/config"
 	"request-system/pkg/contextkeys"
 	"request-system/pkg/telegram"
-	"request-system/pkg/utils"  // Добавлено: импорт для utils
+	"request-system/pkg/utils"
 )
 
 const (
 	telegramStateKey     = "tg_user_state:%d"
-	maxMessageAgeSeconds = 60
-	commandCooldown      = 2 * time.Second
-	callbackCooldown     = 1 * time.Second
-	menuCooldown         = 1500 * time.Millisecond
-	stateExpiration      = 15 * time.Minute
-	goroutineTimeout     = 30 * time.Second
+	maxMessageAgeSeconds = 120
+	commandCooldown      = 1000 * time.Millisecond // 1 сек между командами
+	callbackCooldown     = 500 * time.Millisecond  // 0.5 сек между кликами
+	menuCooldown         = 2000 * time.Millisecond // 🔥 УВЕЛИЧИЛ ДО 2 сек для статистики/меню
+	stateExpiration      = 30 * time.Minute
+	goroutineTimeout     = 45 * time.Second 
+	
 	maxCommentLength     = 500
 	maxSearchQueryLength = 100
 	maxDateInFutureDays  = 365
 	maxOrdersPerPage     = 10
-	maxHistoryItems      = 1
+	maxConcurrentRequests = 50 
 )
 
 type TelegramController struct {
-	repoMutex        sync.RWMutex // Защита операций с репозиторием
+	repoMutex        sync.RWMutex 
 	userService      services.UserServiceInterface
 	orderService     services.OrderServiceInterface
 	statusRepo       repositories.StatusRepositoryInterface
@@ -53,12 +54,15 @@ type TelegramController struct {
 	deduplicator     *RequestDeduplicator
 	botToken         string
 	logger           *zap.Logger
+	orderTypeRepo    repositories.OrderTypeRepositoryInterface
 	cfg              config.TelegramConfig
 	loc              *time.Location
-	// Кеш для часто используемых данных
+	
 	statusCache      map[uint64]*entities.Status
 	statusCacheMutex sync.RWMutex
 	statusCacheTime  time.Time
+	
+	sem chan struct{}
 }
 
 func NewTelegramController(
@@ -72,11 +76,11 @@ func NewTelegramController(
 	authPermissionService services.AuthPermissionServiceInterface,
 	botToken string,
 	logger *zap.Logger,
+	orderTypeRepo repositories.OrderTypeRepositoryInterface,
 	cfg config.TelegramConfig,
 ) *TelegramController {
 	loc, err := time.LoadLocation("Asia/Dushanbe")
 	if err != nil {
-		logger.Warn("Failed to load location, using UTC", zap.Error(err))
 		loc = time.UTC
 	}
 	return &TelegramController{
@@ -91,83 +95,109 @@ func NewTelegramController(
 		deduplicator:          NewRequestDeduplicator(),
 		botToken:              botToken,
 		logger:                logger,
+		orderTypeRepo:         orderTypeRepo,
 		cfg:                   cfg,
 		loc:                   loc,
 		statusCache:           make(map[uint64]*entities.Status),
+		sem:                   make(chan struct{}, maxConcurrentRequests),
 	}
 }
 
-// ==================== ОСНОВНОЙ ОБРАБОТЧИК WEBHOOK ====================
 func (c *TelegramController) HandleTelegramWebhook(ctx echo.Context) error {
 	var update TelegramUpdate
 	if err := ctx.Bind(&update); err != nil {
-		c.logger.Error("Ошибка парсинга Telegram update", zap.Error(err))
 		return ctx.NoContent(http.StatusOK)
 	}
-	// Защита от лавины старых сообщений (если сервер был выключен)
+
 	if !c.isMessageRecent(&update) {
-		c.logger.Warn("Пропущено старое сообщение",
-			zap.Int("update_id", update.UpdateID))
 		return ctx.NoContent(http.StatusOK)
 	}
-	// Обработка callback кнопок
+
 	if update.CallbackQuery != nil {
-		if !c.cfg.AdvancedMode {
-			return ctx.NoContent(http.StatusOK)
-		}
+		if !c.cfg.AdvancedMode { return ctx.NoContent(http.StatusOK) }
+		
+		// 1. АНТИ-СПАМ ПРОВЕРКА (Сразу)
 		chatID := update.CallbackQuery.Message.Chat.ID
 		if !c.deduplicator.TryAcquire(chatID, "cb", callbackCooldown) {
+			// Гасим "часики", но логику не запускаем
 			go c.tgService.AnswerCallbackQuery(context.Background(), update.CallbackQuery.ID, "")
 			return ctx.NoContent(http.StatusOK)
 		}
+		
 		go c.handleCallbackQueryAsync(update.CallbackQuery)
 	}
-	// Обработка текстовых сообщений
+
 	if update.Message != nil {
 		go c.handleMessageAsync(update.Message)
 	}
 	return ctx.NoContent(http.StatusOK)
 }
-
 // ==================== АСИНХРОННАЯ ОБРАБОТКА ====================
 func (c *TelegramController) handleCallbackQueryAsync(query *TelegramCallbackQuery) {
+	// 🔥 СЕМАФОР ТЕПЕРЬ ТУТ (Защита базы данных)
+	c.sem <- struct{}{}
+	defer func() { <-c.sem }()
+
 	defer c.recoverPanic("handleCallbackQueryAsync")
 	bgCtx, cancel := context.WithTimeout(context.Background(), goroutineTimeout)
 	defer cancel()
+
 	_ = c.tgService.AnswerCallbackQuery(bgCtx, query.ID, "")
 	if err := c.handleCallbackQuery(bgCtx, query); err != nil {
-		c.logger.Error("Ошибка обработки callback",
-			zap.Error(err),
-			zap.Int64("chat_id", query.Message.Chat.ID))
+		c.logger.Error("Callback error", zap.Error(err))
 	}
 }
 
 func (c *TelegramController) handleMessageAsync(msg *TelegramMessage) {
 	defer c.recoverPanic("handleMessageAsync")
-	bgCtx, cancel := context.WithTimeout(context.Background(), goroutineTimeout)
-	defer cancel()
+	
 	chatID := msg.Chat.ID
+	msgID := msg.MessageID
 	text := strings.TrimSpace(msg.Text)
-	// Обработка команд
-	if strings.HasPrefix(text, "/") {
+
+
+	// Это критически важно для "Статистики" и кнопок меню, чтобы не плодить 100 запросов.
+	isCommand := strings.HasPrefix(text, "/")
+	isMenu := c.isMenuButton(text)
+
+	if isCommand {
 		if !c.deduplicator.TryAcquire(chatID, "cmd", commandCooldown) {
+			// Игнорируем дубль команды
+			// Можно удалить сообщение юзера, чтобы не мусорил
+			go c.tgService.DeleteMessage(context.Background(), chatID, msgID)
 			return
 		}
+	} else if c.cfg.AdvancedMode && isMenu {
+		if !c.deduplicator.TryAcquire(chatID, "menu", menuCooldown) {
+			// Игнорируем дубль нажатия меню
+			go c.tgService.DeleteMessage(context.Background(), chatID, msgID)
+			return
+		}
+	}
+
+
+	// Запускаем удаление сообщения юзера в отдельной горутине
+	go func() {
+		time.Sleep(500 * time.Millisecond) // Эстетическая задержка
+		_ = c.tgService.DeleteMessage(context.Background(), chatID, msgID)
+	}()
+
+	// 🔥 3. ТЕПЕРЬ МОЖНО ЗАГРУЖАТЬ СИСТЕМУ (Вход в семафор)
+	c.sem <- struct{}{}
+	defer func() { <-c.sem }()
+
+	bgCtx, cancel := context.WithTimeout(context.Background(), goroutineTimeout)
+	defer cancel()
+
+	if isCommand {
 		c.handleCommand(bgCtx, chatID, text)
 		return
 	}
-	// Обработка текста
+
 	if c.cfg.AdvancedMode {
-		// Антиспам для кнопок меню
-		if c.isMenuButton(text) {
-			if !c.deduplicator.TryAcquire(chatID, "menu", menuCooldown) {
-				return
-			}
-		}
+		// Обработка текста и кнопок меню
 		if err := c.handleTextMessage(bgCtx, chatID, text); err != nil {
-			c.logger.Error("Ошибка обработки текста",
-				zap.Error(err),
-				zap.Int64("chat_id", chatID))
+			c.logger.Error("Text error", zap.Error(err))
 		}
 	}
 }
@@ -218,7 +248,13 @@ func (c *TelegramController) isMessageRecent(update *TelegramUpdate) bool {
 	return true
 }
 func (c *TelegramController) isMenuButton(text string) bool {
-	menuButtons := []string{"📋 Мои Заявки", "⏰ На сегодня", "🔴 Просроченные"}
+	menuButtons := []string{
+		"📋 Мои Заявки", 
+		"⏰ На сегодня", 
+		"🔴 Просроченные",
+		"📊 Статистика",  
+		"🔍 Поиск",       
+	}
 	for _, btn := range menuButtons {
 		if text == btn {
 			return true

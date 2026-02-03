@@ -31,22 +31,30 @@ type AuthResponseDTO struct {
 }
 
 type UserProfileDTO struct {
-	ID       uint64  `json:"id"`
-	Email    string  `json:"email"`
-	Phone    string  `json:"phone_number,omitempty"`
-	FIO      string  `json:"fio"`
-	PhotoURL *string `json:"photo_url,omitempty"`
+	ID          uint64  `json:"id"`
+	Email       string  `json:"email"`
+	Phone       string  `json:"phone_number,omitempty"`
+	FIO         string  `json:"fio"`
+	Username    *string `json:"username"` 
+	IsHead      bool    `json:"is_head"`  
+	PhotoURL    *string `json:"photo_url,omitempty"`
+	
+	DepartmentID *uint64 `json:"department_id"` 
+	OtdelID      *uint64 `json:"otdel_id"`
+	BranchID     *uint64 `json:"branch_id"`
+	OfficeID     *uint64 `json:"office_id"`
+	PositionID   *uint64 `json:"position_id"`
+	StatusID     uint64  `json:"status_id"` 
 
-	DepartmentID   uint64 `json:"department_id"`
-	DepartmentName string `json:"department_name"`
+	DepartmentName string  `json:"department_name"`
+	OtdelName      *string `json:"otdel_name,omitempty"`
+	PositionName   string  `json:"position_name"`
+	BranchName     string  `json:"branch_name"`
+	OfficeName     *string `json:"office_name,omitempty"`
 
-	OtdelName *string `json:"otdel_name,omitempty"`
-
-	PositionName string `json:"position_name"`
-
-	BranchName string `json:"branch_name"`
-
-	OfficeName *string `json:"office_name,omitempty"`
+	RoleIDs     []uint64 `json:"role_ids"`
+	PositionIDs []uint64 `json:"position_ids"`
+	OtdelIDs    []uint64 `json:"otdel_ids"`
 }
 type ChangePasswordRequiredDTO struct {
 	ResetToken string `json:"reset_token"`

@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
-	"strconv"
+
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,89 +30,133 @@ func (s *EquipImportService) masterImport(filePath string, targetType string) er
 	defer f.Close()
 
 	var finalRows [][]string
-	var bIdx, nIdx, oIdx, aIdx, kIdx = -1, -1, -1, -1, -1
+	// Инициализируем индексы как -1
+	var bIdx, nIdx, oIdx, aIdx = -1, -1, -1, -1 
 	var headerFoundRow = -1
 
-	// Поиск данных в листах
+	fmt.Printf("\n🚀 НАЧИНАЮ ПОИСК ЗАГОЛОВКОВ В ФАЙЛЕ: %s\n", filePath)
+
 	for _, sheet := range f.GetSheetList() {
 		rows, _ := f.GetRows(sheet)
 		for rIdx, row := range rows {
 			rowStr := strings.ToLower(strings.Join(row, "|"))
-			if strings.Contains(rowStr, "филиал") && (strings.Contains(rowStr, "номер") || strings.Contains(rowStr, "банкомат")) {
-				finalRows = rows
-				headerFoundRow = rIdx
+
+			// Ищем строку, где есть (Филиал ИЛИ Адрес) И (Номер ИЛИ №)
+			hasPlace := strings.Contains(rowStr, "филиал") || strings.Contains(rowStr, "адрес")
+			hasNum := strings.Contains(rowStr, "номер") || strings.Contains(rowStr, "№")
+
+			if hasPlace && hasNum {
 				for cIdx, colName := range row {
 					cLower := strings.ToLower(strings.TrimSpace(colName))
+					
 					if strings.Contains(cLower, "филиал") { bIdx = cIdx }
-					if strings.Contains(cLower, "номер") { nIdx = cIdx }
-					if strings.Contains(cLower, "цбо") || strings.Contains(cLower, "офис") || strings.Contains(cLower, "территор") { oIdx = cIdx }
-					if strings.Contains(cLower, "адрес") { aIdx = cIdx }
-					if strings.Contains(cLower, "вид") { kIdx = cIdx }
+					
+					// Поддержка "Номер" и "№"
+					if strings.Contains(cLower, "номер") || strings.Contains(cLower, "№") { nIdx = cIdx }
+					
+					// ЦБО / Офис / Территория / УЧР
+					if strings.Contains(cLower, "цбо") || strings.Contains(cLower, "учр") || 
+					   strings.Contains(cLower, "территория") || strings.Contains(cLower, "офис") { oIdx = cIdx }
+					
+					if strings.Contains(cLower, "адрес") || strings.Contains(cLower, "место") { aIdx = cIdx }
 				}
-				break
+
+				if nIdx != -1 && (bIdx != -1 || aIdx != -1) {
+					finalRows = rows
+					headerFoundRow = rIdx
+					fmt.Printf("✅ Заголовки найдены на строке %d (Лист: %s)\n", rIdx+1, sheet)
+					break
+				}
 			}
 		}
 		if headerFoundRow != -1 { break }
 	}
 
-	if headerFoundRow == -1 { return fmt.Errorf("в файле не найдена таблица (заголовки Филиал/Номер)") }
+	if headerFoundRow == -1 {
+		return fmt.Errorf("НЕ НАЙДЕНА ШАПКА ТАБЛИЦЫ. Проверьте, что в файле есть строки с '№/Номер' и 'Филиал/Адрес'")
+	}
 
 	ctx := context.Background()
 	branchData := s.getRawEntities(ctx, "branches")
 	officeData := s.getRawEntities(ctx, "offices")
+	
 	statusID := s.getOrCreate(ctx, "statuses", "ACTIVE", "code")
+	typeID := s.getOrCreate(ctx, "equipment_types", targetType, "name")
 
-	notFoundBranches := make(map[string]bool)
-	notFoundOffices := make(map[string]bool)
-	countSuccess := 0
-
+	success, errors, updated := 0, 0, 0
+	
+	// --- ЦИКЛ ИМПОРТА ---
 	for i := headerFoundRow + 1; i < len(finalRows); i++ {
 		row := finalRows[i]
-		rawName   := s.safeGet(row, nIdx)
-		rawBranch := s.safeGet(row, bIdx)
-		rawOffice := s.safeGet(row, oIdx)
-		address   := s.safeGet(row, aIdx)
+		if len(row) < 2 { continue }
 
-		if rawName == "" || s.isTrash(rawBranch) { continue }
+		lineNum := i + 1
 
-		bID := s.fuzzyFind(rawBranch, branchData)
-		oID := s.fuzzyFind(rawOffice, officeData)
-
-		if bID == 0 && rawBranch != "" { notFoundBranches[rawBranch] = true }
-		if oID == 0 && rawOffice != "" { notFoundOffices[rawOffice] = true }
-
-		if bID == 0 || oID == 0 { continue }
-
-		realType := targetType
-		if kIdx != -1 && targetType == "TERMINAL_LOGIC" {
-			if strings.Contains(strings.ToLower(s.safeGet(row, kIdx)), "внеш") { realType = "Внешний терминал" } else { realType = "Внутренний терминал" }
-		}
-		typeID := s.getOrCreate(ctx, "equipment_types", realType, "name")
-
-		query := `INSERT INTO equipments (name, address, branch_id, office_id, status_id, equipment_type_id, updated_at)
-			      VALUES ($1, $2, $3, $4, $5, $6, NOW())
-			      ON CONFLICT (name) DO UPDATE SET address = EXCLUDED.address, branch_id = EXCLUDED.branch_id, office_id = EXCLUDED.office_id, updated_at = NOW()`
+		name := s.safeGet(row, nIdx)
 		
-		_, err = s.db.Exec(ctx, query, rawName, address, bID, oID, statusID, typeID)
-		if err == nil { countSuccess++ }
+		// Если это мусор или пустота - пропускаем
+		if name == "" { continue }
+		if s.isTrash(name) { 
+			// fmt.Printf("ℹ️  Стр %d: Пропущено (мусор/нумерация): '%s'\n", lineNum, name)
+			continue 
+		}
+
+		branchName := s.safeGet(row, bIdx)
+		officeName := s.safeGet(row, oIdx)
+		address    := s.safeGet(row, aIdx)
+
+		// Если адрес пуст, пробуем заполнить его данными офиса/филиала
+		// Это важно, чтобы SQL не падал, если address NOT NULL (в вашей миграции он остался NOT NULL)
+		if address == "" {
+			if officeName != "" { address = officeName } else if branchName != "" { address = branchName } else { address = "-" }
+		}
+
+		// Ищем в БД
+		bID := s.fuzzyFind(branchName, branchData)
+		oID := s.fuzzyFind(officeName, officeData)
+
+		// Логируем только если название было, но мы его не нашли
+		if bID == 0 && branchName != "" {
+			fmt.Printf("⚠️  Стр %d [%s]: Филиал '%s' не найден в базе (привязка будет пропущена)\n", lineNum, name, branchName)
+		}
+		
+		// Подготовка значений (nil превращается в NULL)
+		var dbBID interface{} = nil
+		if bID > 0 { dbBID = bID }
+
+		var dbOID interface{} = nil
+		if oID > 0 { dbOID = oID }
+
+		query := `
+            INSERT INTO equipments (name, address, branch_id, office_id, status_id, equipment_type_id, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            ON CONFLICT (name) 
+            DO UPDATE SET 
+                address = COALESCE(NULLIF(EXCLUDED.address, '-'), equipments.address), 
+                branch_id = COALESCE(EXCLUDED.branch_id, equipments.branch_id), 
+                office_id = COALESCE(EXCLUDED.office_id, equipments.office_id), 
+                updated_at = NOW()
+            RETURNING (xmax = 0) AS is_insert`
+		
+		var isInsert bool
+		err = s.db.QueryRow(ctx, query, name, address, dbBID, dbOID, statusID, typeID).Scan(&isInsert)
+
+		if err != nil {
+			fmt.Printf("❌ Стр %d [%s]: ОШИБКА SQL: %v\n", lineNum, name, err)
+			errors++
+		} else {
+			if isInsert { success++ } else { updated++ }
+		}
 	}
 
-	fmt.Println("\n=========================================================")
-	fmt.Printf("🏁 ИТОГ ИМПОРТА ДЛЯ: %s\n", filePath)
-	fmt.Printf("✅ Успешно загружено/обновлено: %d ед.\n", countSuccess)
-	if len(notFoundBranches) > 0 {
-		fmt.Println("\n❌ НЕ НАЙДЕНЫ ФИЛИАЛЫ (исправьте в Excel):")
-		for name := range notFoundBranches { fmt.Printf("   - %s\n", name) }
-	}
-	if len(notFoundOffices) > 0 {
-		fmt.Println("\n❌ НЕ НАЙДЕНЫ ОФИСЫ (исправьте в Excel):")
-		for name := range notFoundOffices { fmt.Printf("   - %s\n", name) }
-	}
-	fmt.Println("=========================================================\n")
-
+	fmt.Printf("---------------------------------------------------------\n")
+	fmt.Printf("🏁 РЕЗУЛЬТАТ ИМПОРТА %s (%s):\n", targetType, filePath)
+	fmt.Printf("   ✅ Новых записей:    %d\n", success)
+	fmt.Printf("   🔄 Обновлено записей: %d\n", updated)
+	fmt.Printf("   ❌ Ошибок:            %d\n", errors)
+	fmt.Printf("---------------------------------------------------------\n")
 	return nil
 }
-
 func (s *EquipImportService) fuzzyFind(excelName string, dbItems []dbEnt) uint64 {
 	excelName = strings.ToLower(strings.TrimSpace(excelName))
 	if excelName == "" { return 0 }
@@ -147,8 +191,11 @@ func cleanString(in string) string {
 
 func (s *EquipImportService) isTrash(val string) bool {
 	v := strings.ToLower(strings.TrimSpace(val))
-	if v == "" || strings.Contains(v, "итого") || strings.Contains(v, "всего") { return true }
-	if _, err := strconv.ParseFloat(v, 64); err == nil { return true }
+	
+	if v == "" { return true }
+	
+	if strings.Contains(v, "итого") || strings.Contains(v, "всего") { return true }
+	
 	return false
 }
 

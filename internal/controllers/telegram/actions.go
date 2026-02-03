@@ -257,27 +257,29 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 	}
 
 	addedCount := 0
-	if !showSearch {
-		for _, u := range users {
-			if u.ID == user.ID {
-				continue // Самого себя не предлагать
-			}
-			if order.ExecutorID != nil && u.ID == *order.ExecutorID {
-				continue // Текущего исполнителя не предлагать
-			}
-
-			if addedCount >= 10 {
-				showSearch = true
-				break
-			}
-
-			cb := fmt.Sprintf(`{"action":"set_executor","user_id":%d}`, u.ID)
-			keyboard = append(keyboard, []telegram.InlineKeyboardButton{
-				{Text: u.Fio, CallbackData: cb},
-			})
-			addedCount++
+if !showSearch {
+	maxButtons := 8
+	
+	for _, u := range users {
+		if u.ID == user.ID {
+			continue // Самого себя не предлагать
 		}
+		if order.ExecutorID != nil && u.ID == *order.ExecutorID {
+			continue // Текущего исполнителя не предлагать
+		}
+
+		if addedCount >= maxButtons {  
+			showSearch = true
+			break
+		}
+
+		cb := fmt.Sprintf(`{"action":"set_executor","user_id":%d}`, u.ID)
+		keyboard = append(keyboard, []telegram.InlineKeyboardButton{
+			{Text: u.Fio, CallbackData: cb},
+		})
+		addedCount++
 	}
+}
 
 	if addedCount == 0 {
 		text = "В вашем подразделении больше никого нет\\.\n\n" +
@@ -409,11 +411,13 @@ func (c *TelegramController) handleSetSomething(ctx context.Context, chatID int6
 	return c.sendEditMenu(ctx, chatID, state.MessageID, order)
 }
 
-// --- handleSaveChanges с ИСПРАВЛЕНИЕМ 404 ошибки ---
 func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64, messageID int) error {
-	// ✅ 1. Важное исправление: Получаем UserContext с правами
-	_, userCtx, err := c.prepareUserContext(ctx, chatID)
+	// ✅ ИСПРАВЛЕНИЕ 1: Сохраняем user (был "_")
+	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
+		c.logger.Error("Ошибка получения контекста пользователя при сохранении",
+			zap.Error(err),
+			zap.Int64("chat_id", chatID))
 		return c.sendInternalError(ctx, chatID)
 	}
 
@@ -421,17 +425,39 @@ func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64
 	if err != nil {
 		return c.sendStaleStateError(ctx, chatID, messageID)
 	}
+	
+	// ✅ ЗАЩИТА: Проверяем валидность state
+	if state.OrderID == 0 {
+		c.logger.Error("State с пустым OrderID",
+			zap.Int64("chat_id", chatID),
+			zap.Uint64("user_id", user.ID))
+		return c.sendStaleStateError(ctx, chatID, messageID)
+	}
+	
 	if !state.HasChanges() {
 		_ = c.tgService.AnswerCallbackQuery(ctx, "", "Нет изменений для сохранения")
 		return nil
 	}
 
-	// Загружаем текущее состояние заявки, чтобы сравнить
-	currentOrder, err := c.orderService.FindOrderByIDForTelegram(userCtx, 0, state.OrderID)
+	// ✅ ИСПРАВЛЕНИЕ 2: Передаем user.ID вместо 0
+	currentOrder, err := c.orderService.FindOrderByIDForTelegram(userCtx, user.ID, state.OrderID)
 	if err != nil {
-		c.logger.Error("Не удалось получить заявку для сохранения", zap.Error(err))
+		c.logger.Error("Не удалось получить заявку для сохранения",
+			zap.Error(err),
+			zap.Uint64("order_id", state.OrderID),
+			zap.Uint64("user_id", user.ID))
 		return c.tgService.EditMessageText(ctx, chatID, messageID,
-			"❌ Ошибка при получении данных заявки\\.")
+			"❌ Ошибка при получении данных заявки\\.", telegram.WithMarkdownV2())
+	}
+
+	// 🔥 ПРОВЕРКА ОБЯЗАТЕЛЬНОГО КОММЕНТАРИЯ ДЛЯ ТЕЛЕГРАМА
+	orderTypeCode, _ := c.orderTypeRepo.FindCodeByID(ctx, *currentOrder.OrderTypeID)
+	if orderTypeCode != "EQUIPMENT" {
+		comment, exists := state.GetComment()
+		if !exists || strings.TrimSpace(comment) == "" {
+			_ = c.tgService.AnswerCallbackQuery(ctx, "", "⚠️ Ошибка: Комментарий ОБЯЗАТЕЛЕН!")
+			return nil 
+		}
 	}
 
 	updateDTO := dto.UpdateOrderDTO{}
@@ -449,7 +475,7 @@ func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64
 		if eid == 0 {
 			// Сброс исполнителя (если это поддерживается)
 			changesMap["executor_id"] = nil
-			updateDTO.ExecutorID = nil // будет трактоваться как "не менять" в Go если это nil, но smartUpdate поймет map
+			updateDTO.ExecutorID = nil
 		} else if currentOrder.ExecutorID == nil || *currentOrder.ExecutorID != eid {
 			updateDTO.ExecutorID = &eid
 			changesMap["executor_id"] = eid
@@ -459,9 +485,8 @@ func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64
 	com, comExists := state.GetComment()
 	if comExists && strings.TrimSpace(com) != "" {
 		v := com
-		updateDTO.Comment = &v // Комментарий передаем всегда, если он есть
-		// changesMap для комментария не обязателен для smartUpdate entity, т.к. коммент идет отдельно в history
-		// Но для порядка можно оставить. Важно, что сервис читает dto.Comment
+		updateDTO.Comment = &v
+		// changesMap для комментария не обязателен, т.к. коммент идет отдельно в history
 	}
 
 	dur, _ := state.GetDuration()
@@ -474,29 +499,44 @@ func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64
 		// Если в state длительность явно nil (сброс), проверяем Changes map
 		if _, chExists := state.Changes["duration"]; chExists && currentOrder.Duration != nil {
 			changesMap["duration"] = nil
-			// DTO для сброса требует workaround, но Service SmartUpdate смотрит в MAP.
-			// DTO поле может оставаться nil.
 		}
 	}
 
-	// ✅ 2. Вызываем UpdateOrder с правильным userCtx!
-	// Сервис прочитает UserID из userCtx и AuthPermission из userCtx
+	// ✅ ИСПРАВЛЕНИЕ 3: Улучшенная обработка ошибок
 	_, err = c.orderService.UpdateOrder(userCtx, state.OrderID, updateDTO, nil, changesMap)
 	
 	if err != nil {
 		c.logger.Error("Ошибка сохранения через Телеграм",
 			zap.Error(err),
 			zap.Uint64("order_id", state.OrderID),
-			zap.Any("changes", changesMap))
-		return c.tgService.EditMessageText(ctx, chatID, messageID,
-			"❌ Ошибка при сохранении\\. Недостаточно прав или сбой\\.")
+			zap.Uint64("user_id", user.ID),
+			zap.Any("updateDTO", updateDTO),
+			zap.Any("changesMap", changesMap))
+		
+		// ✅ УЛУЧШЕНИЕ: Более информативные сообщения об ошибках
+		errorMsg := "❌ Ошибка при сохранении\\.\n\n"
+		errStr := err.Error()
+		
+		if strings.Contains(errStr, "Forbidden") || strings.Contains(errStr, "прав") {
+			errorMsg += "_Недостаточно прав для этой операции\\._"
+		} else if strings.Contains(errStr, "закрыта") || strings.Contains(errStr, "CLOSED") {
+			errorMsg += "_Заявка закрыта\\. Редактирование запрещено\\._"
+		} else if strings.Contains(errStr, "комментарий") {
+			errorMsg += "_Необходимо добавить комментарий с описанием\\._"
+		} else if strings.Contains(errStr, "no changes") || strings.Contains(errStr, "Нет изменений") {
+			errorMsg += "_Нет изменений для сохранения\\._"
+		} else {
+			errorMsg += "_Попробуйте позже или обратитесь в поддержку\\._"
+		}
+		
+		return c.tgService.EditMessageText(ctx, chatID, messageID, errorMsg, telegram.WithMarkdownV2())
 	}
 
+	// ✅ Очистка состояния и уведомление
 	_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 	_ = c.tgService.AnswerCallbackQuery(ctx, "", "💾 Сохранено!")
 	return c.handleMyTasksCommand(ctx, chatID, messageID)
 }
-
 func (c *TelegramController) handleCallbackQuery(ctx context.Context, query *TelegramCallbackQuery) error {
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(query.Data), &data); err != nil {
@@ -618,8 +658,8 @@ func (c *TelegramController) sendEditMenu(ctx context.Context, chatID int64, mes
 	// --- КНОПКИ (Строгая проверка привилегий) ---
 	var keyboard [][]telegram.InlineKeyboardButton
 	
-	isClosed := false
-	if status.Code != nil && (*status.Code == "CLOSED" || *status.Code == "REJECTED") {
+isClosed := false
+	if status.Code != nil && *status.Code == "CLOSED" { 
 		isClosed = true
 	}
 

@@ -32,32 +32,28 @@ func getAction(permission string) string {
 
 // canAccessOrder — логика для Заявок (СТРОГАЯ)
 func canAccessOrder(ctx Context, target *entities.Order) bool {
-	action := getAction(ctx.CurrentPermission)
+	action := getAction(ctx.CurrentPermission) // Например: "view", "update", "delete"
 	actor := ctx.Actor
 
-	// Просмотр заявки
+	// =========================== 1. ПРОСМОТР (VIEW) ===========================
 	if action == "view" {
-		// Глобальные права видят всё
+		// Админ или Аудитор
 		if ctx.HasPermission(ScopeAllView) || ctx.HasPermission(ScopeAll) {
 			return true
 		}
-		// Проверка по иерархии (совпадает ли департамент/отдел/филиал)
-		if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
-			return true
-		}
-		if ctx.HasPermission(ScopeBranch) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
-			return true
-		}
-		if ctx.HasPermission(ScopeOtdel) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID {
-			return true
-		}
-		if ctx.HasPermission(ScopeOffice) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID {
-			return true
-		}
-		// Собственные заявки (участие)
+
+		// Руководитель (Своего подразделения)
+		// Проверяем: (ЕстьПраво) И (IDНеПустой) И (IDСовпадают)
+		if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID { return true }
+		if ctx.HasPermission(ScopeBranch) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID { return true }
+		if ctx.HasPermission(ScopeOtdel) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID { return true }
+		if ctx.HasPermission(ScopeOffice) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID { return true }
+
+		// Личный доступ (Участник может смотреть)
 		if ctx.HasPermission(ScopeOwn) {
-			isCreator := target.CreatorID == actor.ID
-			isExecutor := target.ExecutorID != nil && *target.ExecutorID == actor.ID
+			isCreator := (target.CreatorID == actor.ID)
+			isExecutor := (target.ExecutorID != nil && *target.ExecutorID == actor.ID)
+			// Участник (Participant) может СМОТРЕТЬ заявку (но не менять)
 			if isCreator || isExecutor || ctx.IsParticipant {
 				return true
 			}
@@ -65,36 +61,32 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 		return false
 	}
 
-	// Редактирование (update/delete)
+	// ======================== 2. ИЗМЕНЕНИЕ (UPDATE, DELETE) ========================
 
-	// Админ может всё
+	// Глобальный Админ (Может всё)
 	if ctx.HasPermission(ScopeAll) {
 		return true
 	}
 
-	// Управленческий доступ (например, начальник департамента может править заявки в своем департаменте)
-	if ctx.HasPermission(OrdersUpdateInDepartmentScope) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
-		return true
-	}
-	if ctx.HasPermission(OrdersUpdateInBranchScope) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
-		return true
-	}
-	if ctx.HasPermission(OrdersUpdateInOtdelScope) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID {
-		return true
-	}
-	if ctx.HasPermission(OrdersUpdateInOfficeScope) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID {
-		return true
-	}
+	// Руководитель (Может менять внутри своего подразделения)
+	if ctx.HasPermission(OrdersUpdateInDepartmentScope) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID { return true }
+	if ctx.HasPermission(OrdersUpdateInBranchScope) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID { return true }
+	if ctx.HasPermission(OrdersUpdateInOtdelScope) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID { return true }
+	if ctx.HasPermission(OrdersUpdateInOfficeScope) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID { return true }
 
-	// Свои заявки (обычный пользователь может править, если он Создатель или Исполнитель)
+	// Личный доступ (Строгий: только создатель или текущий исполнитель)
 	if ctx.HasPermission(OrdersUpdate) {
-		isCreator := target.CreatorID == actor.ID
-		isExecutor := target.ExecutorID != nil && *target.ExecutorID == actor.ID
-		if isCreator || isExecutor || ctx.IsParticipant {
+		isCreator := (target.CreatorID == actor.ID)
+		isExecutor := (target.ExecutorID != nil && *target.ExecutorID == actor.ID)
+
+		// 🔥 ИСПРАВЛЕНИЕ: Мы убрали ctx.IsParticipant.
+		// Только текущие владельцы могут редактировать.
+		if isCreator || isExecutor {
 			return true
 		}
 	}
 
+	// Доступ запрещен
 	return false
 }
 

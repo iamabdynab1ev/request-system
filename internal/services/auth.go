@@ -1,4 +1,3 @@
-// Файл: internal/services/auth_service.go
 package services
 
 import (
@@ -11,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"request-system/internal/authz"
+
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	"request-system/internal/repositories"
@@ -32,12 +31,12 @@ var emailRegex = regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`
 
 type AuthServiceInterface interface {
 	Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error)
-	GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error)
+	// Метод для получения своего профиля (/auth/me)
+	GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error) 
 	RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error
 	VerifyResetCode(ctx context.Context, payload dto.VerifyCodeDTO) (*dto.VerifyCodeResponseDTO, error)
 	ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error
 	UpdateMyProfile(ctx context.Context, payload dto.UpdateMyProfileDTO) (*dto.UserDTO, error)
-	FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error)
 }
 
 type AuthService struct {
@@ -49,11 +48,6 @@ type AuthService struct {
 	cfg               *config.AuthConfig
 	ldapCfg           *config.LDAPConfig
 	notifySvc         NotificationServiceInterface
-	positionService   PositionServiceInterface
-	branchService     BranchServiceInterface
-	departmentService DepartmentServiceInterface
-	otdelService      OtdelServiceInterface
-	officeService     OfficeServiceInterface
 }
 
 func NewAuthService(
@@ -65,34 +59,30 @@ func NewAuthService(
 	cfg *config.AuthConfig,
 	ldapCfg *config.LDAPConfig,
 	notifySvc NotificationServiceInterface,
-	positionService PositionServiceInterface,
-	branchService BranchServiceInterface,
-	departmentService DepartmentServiceInterface,
-	otdelService OtdelServiceInterface,
-	officeService OfficeServiceInterface,
+
+	_ PositionServiceInterface,   
+	_ BranchServiceInterface,    
+	_ DepartmentServiceInterface, 
+	_ OtdelServiceInterface,      
+	_ OfficeServiceInterface,    
 ) AuthServiceInterface {
 	return &AuthService{
-		txManager:         txManager,
-		userRepo:          userRepo,
-		cacheRepo:         cacheRepo,
-		fileStorage:       fileStorage,
-		logger:            logger,
-		cfg:               cfg,
-		ldapCfg:           ldapCfg,
-		notifySvc:         notifySvc,
-		positionService:   positionService,
-		branchService:     branchService,
-		departmentService: departmentService,
-		otdelService:      otdelService,
-		officeService:     officeService,
+		txManager:   txManager,
+		userRepo:    userRepo,
+		cacheRepo:   cacheRepo,
+		fileStorage: fileStorage,
+		logger:      logger,
+		cfg:         cfg,
+		ldapCfg:     ldapCfg,
+		notifySvc:   notifySvc,
 	}
 }
 
-// Приватный метод аутентификации в AD
+// ... метод authenticateInAD остается без изменений ...
 func (s *AuthService) authenticateInAD(username, password string) error {
 	l, err := ldap.DialURL(fmt.Sprintf("ldap://%s:%d", s.ldapCfg.Host, s.ldapCfg.Port))
 	if err != nil {
-		s.logger.Error("Не удалось подключиться к LDAP-серверу", zap.Error(err), zap.String("host", s.ldapCfg.Host))
+		s.logger.Error("Не удалось подключиться к LDAP-серверу", zap.Error(err))
 		return apperrors.NewHttpError(http.StatusInternalServerError, "Ошибка подключения к сервису аутентификации", err, nil)
 	}
 	defer l.Close()
@@ -108,6 +98,7 @@ func (s *AuthService) authenticateInAD(username, password string) error {
 	return nil
 }
 
+// ... Login остается без изменений ...
 func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error) {
 	loginInput := strings.ToLower(payload.Login)
 	systemRootEmail := strings.ToLower(s.cfg.SystemRootLogin)
@@ -157,68 +148,93 @@ func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entitie
 	return user, nil
 }
 
+// === ОБНОВЛЕННЫЙ МЕТОД GetUserByID ДЛЯ /auth/me ===
+func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error) {
+	// 1. Базовые данные из User Repo (он джойнит таблицы имен Branch/Otdel)
+	user, err := s.userRepo.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, apperrors.ErrUserNotFound
+	}
+
+	// 2. Получаем доп. списки (Роли, Отделы, Должности)
+	roles, err := s.userRepo.GetRolesByUserID(ctx, userID)
+	if err != nil { s.logger.Error("GetUserByID: Roles failed", zap.Error(err)) }
+	roleIDs := make([]uint64, 0, len(roles))
+	for _, r := range roles { roleIDs = append(roleIDs, r.ID) }
+
+	positionIDs, err := s.userRepo.GetPositionIDsByUserID(ctx, userID)
+	if err != nil { 
+        s.logger.Error("GetUserByID: Positions failed", zap.Error(err)) 
+        positionIDs = []uint64{}
+    }
+
+	otdelIDs, err := s.userRepo.GetOtdelIDsByUserID(ctx, userID)
+	if err != nil { 
+        s.logger.Error("GetUserByID: Otdels failed", zap.Error(err)) 
+        otdelIDs = []uint64{}
+    }
+
+	// 3. Формируем ответ
+	res := &dto.UserProfileDTO{
+		ID:          user.ID,
+		FIO:         user.Fio,
+		Email:       user.Email,
+		Phone:       user.PhoneNumber,
+		Username:    user.Username,
+		PhotoURL:    user.PhotoURL,
+		StatusID:    user.StatusID,
+		IsHead:      safeBool(user.IsHead),
+
+		// Основные ID
+		BranchID:     user.BranchID,
+		OfficeID:     user.OfficeID,
+		DepartmentID: user.DepartmentID,
+		OtdelID:      user.OtdelID,
+		PositionID:   user.PositionID,
+
+		// Названия (Repo возвращает их, если использовать правильный SELECT)
+		// Используем хелперы для безопасного разыменования
+		DepartmentName: safeString(user.DepartmentName),
+		OtdelName:      user.OtdelName, // уже указатель
+		PositionName:   safeString(user.PositionName),
+		BranchName:     safeString(user.BranchName),
+		OfficeName:     user.OfficeName, // уже указатель
+
+		// Массивы
+		RoleIDs:     roleIDs,
+		PositionIDs: positionIDs,
+		OtdelIDs:    otdelIDs,
+	}
+
+	return res, nil
+}
+
 func (s *AuthService) UpdateMyProfile(ctx context.Context, payload dto.UpdateMyProfileDTO) (*dto.UserDTO, error) {
 	userID, err := utils.GetUserIDFromCtx(ctx)
 	if err != nil { return nil, err }
 
-	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
-	if err != nil { return nil, err }
-
-	if _, hasPermission := permissionsMap[authz.ProfileUpdate]; !hasPermission {
-		return nil, apperrors.ErrForbidden
-	}
-
 	userEntity, err := s.userRepo.FindUserByID(ctx, userID)
 	if err != nil { return nil, err }
 
-	// Логика удаления/замены фото
 	if payload.PhotoURL != nil {
-		// Физически удаляем старое, если оно было
-		if userEntity.PhotoURL != nil {
-			_ = s.fileStorage.Delete(*userEntity.PhotoURL)
-		}
-
-		if *payload.PhotoURL == "SET_NULL" {
-			userEntity.PhotoURL = nil 
-		} else {
-			userEntity.PhotoURL = payload.PhotoURL
-		}
+		if userEntity.PhotoURL != nil { _ = s.fileStorage.Delete(*userEntity.PhotoURL) }
+		if *payload.PhotoURL == "SET_NULL" { userEntity.PhotoURL = nil } else { userEntity.PhotoURL = payload.PhotoURL }
 	}
-
 	if payload.Fio != nil { userEntity.Fio = *payload.Fio }
 	if payload.PhoneNumber != nil { userEntity.PhoneNumber = *payload.PhoneNumber }
 	if payload.Email != nil { userEntity.Email = *payload.Email }
 
-	tx, err := s.userRepo.BeginTx(ctx)
-	if err != nil { return nil, err }
-	defer tx.Rollback(ctx)
+	if err := s.userRepo.UpdateUserFull(ctx, userEntity); err != nil { return nil, err } // Используй UpdateUser (full мб устаревший)
 
-	if err := s.userRepo.UpdateUser(ctx, tx, userEntity); err != nil { return nil, err }
-	if err := tx.Commit(ctx); err != nil { return nil, err }
-
-	return s.FindUser(ctx, userID)
-}
-
-func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error) {
-	user, err := s.userRepo.FindUserByID(ctx, userID)
-	if err != nil { return nil, apperrors.ErrUserNotFound }
-
-	res := &dto.UserProfileDTO{ID: user.ID, Email: user.Email, Phone: user.PhoneNumber, FIO: user.Fio, PhotoURL: user.PhotoURL}
-
-	if user.DepartmentID != nil {
-		if dep, err := s.departmentService.FindDepartment(ctx, *user.DepartmentID); err == nil { res.DepartmentName = dep.Name }
+	// Формируем DTO (простой) для возврата
+	d := &dto.UserDTO{
+		ID: userEntity.ID, 
+		Fio: userEntity.Fio, 
+		Email: userEntity.Email, 
+		PhoneNumber: userEntity.PhoneNumber, 
+		PhotoURL: userEntity.PhotoURL,
 	}
-	if user.OtdelID != nil {
-		if otdel, err := s.otdelService.FindOtdel(ctx, *user.OtdelID); err == nil { res.OtdelName = &otdel.Name }
-	}
-	if user.PositionID != nil {
-		if pos, err := s.positionService.GetByID(ctx, uint64(*user.PositionID)); err == nil { res.PositionName = pos.Name }
-	}
-	if user.BranchID != nil {
-		if br, err := s.branchService.FindBranch(ctx, *user.BranchID); err == nil { res.BranchName = br.Name }
-	}
-
-	return res, nil
+	return d, nil
 }
 
 func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error {
@@ -230,8 +246,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.Rese
 	s.cacheRepo.Set(ctx, fmt.Sprintf(constants.CacheKeyResetPhoneCode, loginInput), resetCode, time.Minute*15)
 
 	if user.TelegramChatID.Valid && user.TelegramChatID.Int64 != 0 {
-		message := fmt.Sprintf("Ваш код для сброса пароля: %s", resetCode)
-		_ = s.notifySvc.SendPlainMessage(ctx, user.TelegramChatID.Int64, message)
+		_ = s.notifySvc.SendPlainMessage(ctx, user.TelegramChatID.Int64, "Код: "+resetCode)
 	}
 	return nil
 }
@@ -242,62 +257,43 @@ func (s *AuthService) VerifyResetCode(ctx context.Context, payload dto.VerifyCod
 	if storedCode == "" || storedCode != payload.Code {
 		return nil, apperrors.ErrInvalidCredentials
 	}
-
 	user, _ := s.userRepo.FindUserByEmailOrLogin(ctx, login)
 	vToken := uuid.New().String()
 	s.cacheRepo.Set(ctx, fmt.Sprintf(constants.CacheKeyVerifyPhone, vToken), user.ID, time.Minute*15)
 	return &dto.VerifyCodeResponseDTO{VerificationToken: vToken}, nil
 }
 
-// ResetPassword - ИСПРАВЛЕННЫЙ МЕТОД
-// Теперь он проверяет два типа токенов:
-// 1. Токен сброса (VerifyPhone), полученный через SMS.
-// 2. Токен принудительной смены (ForceChange), полученный при Login.
 func (s *AuthService) ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error {
 	var userIDStr string
 	var err error
 	var isForceChange bool
 
-	// 1. Сначала пытаемся найти токен сброса пароля (SMS/Telegram)
 	userIDStr, err = s.cacheRepo.Get(ctx, fmt.Sprintf(constants.CacheKeyVerifyPhone, payload.Token))
-	
-	// 2. Если не нашли, ищем токен принудительной смены пароля (первый вход)
 	if err != nil {
 		userIDStr, err = s.cacheRepo.Get(ctx, fmt.Sprintf(constants.CacheKeyForceChangeToken, payload.Token))
-		if err == nil {
-			isForceChange = true
-		}
+		if err == nil { isForceChange = true }
 	}
-
-	// 3. Если нигде не нашли -> ошибка
-	if err != nil { 
-		return apperrors.ErrInvalidCredentials 
-	}
+	if err != nil { return apperrors.ErrInvalidCredentials }
 
 	parsedID, _ := strconv.ParseUint(userIDStr, 10, 64)
 	hashedPassword, _ := utils.HashPassword(payload.NewPassword)
 	
-	// 4. Обновляем пароль в базе
-	// Если это была принудительная смена (isForceChange), то нужно сбросить флаг must_change_password
 	if isForceChange {
 		err = s.userRepo.UpdatePasswordAndClearFlag(ctx, parsedID, hashedPassword)
-		// Удаляем токен после использования
 		s.cacheRepo.Del(ctx, fmt.Sprintf(constants.CacheKeyForceChangeToken, payload.Token))
 	} else {
 		err = s.userRepo.UpdatePassword(ctx, parsedID, hashedPassword)
-		// Удаляем токен после использования
 		s.cacheRepo.Del(ctx, fmt.Sprintf(constants.CacheKeyVerifyPhone, payload.Token))
 	}
-
 	return err
 }
 
-func (s *AuthService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error) {
-	user, err := s.userRepo.FindUserByID(ctx, id)
-	if err != nil { return nil, err }
-	roles, _ := s.userRepo.GetRolesByUserID(ctx, id)
-	
-	d := &dto.UserDTO{ID: user.ID, Fio: user.Fio, Email: user.Email, PhoneNumber: user.PhoneNumber, PhotoURL: user.PhotoURL}
-	for _, r := range roles { d.RoleIDs = append(d.RoleIDs, r.ID) }
-	return d, nil
+// --- Хелперы для *string и *bool ---
+func safeString(ptr *string) string {
+	if ptr == nil { return "" }
+	return *ptr
+}
+func safeBool(ptr *bool) bool {
+	if ptr == nil { return false }
+	return *ptr
 }

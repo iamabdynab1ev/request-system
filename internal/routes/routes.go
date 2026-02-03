@@ -80,7 +80,7 @@ func InitRouter(
 	rpService := services.NewRolePermissionService(rpRepo, userRepo, authPermissionService, loggers.Main)
 	orderTypeService := services.NewOrderTypeService(orderTypeRepo, userRepo, txManager, ruleEngineService, loggers.Main)
 	positionService := services.NewPositionService(positionRepo, userRepo, txManager, loggers.Main)
-	userService := services.NewUserService(txManager, userRepo, roleRepo, permissionRepo, statusRepo, cacheRepo, authPermissionService, loggers.User)
+	userService := services.NewUserService(txManager, userRepo, otdelRepo, roleRepo, permissionRepo, statusRepo, cacheRepo, authPermissionService, loggers.User)
 	departmentService := services.NewDepartmentService(txManager, departmentRepo, userRepo, loggers.Main)
 	otdelService := services.NewOtdelService(txManager, otdelRepo, userRepo, loggers.Main)
 	orderRuleService := services.NewOrderRoutingRuleService(ruleRepo, userRepo, positionRepo, txManager, loggers.Main, orderTypeRepo)
@@ -133,7 +133,7 @@ func InitRouter(
 
 	runBranchRouter(secureGroup, dbConn, loggers.Main, txManager, authMW)
 	runOfficeRouter(secureGroup, officeService, loggers.Main, authMW)
-	runTelegramRouter(e, userService, orderService, tgService, cacheRepo, statusRepo, userRepo, historyRepo, authPermissionService, authMW, cfg, loggers.Main, appCtx)
+	runTelegramRouter(e, userService, orderService, tgService, cacheRepo, statusRepo, userRepo, historyRepo, authPermissionService, orderTypeRepo, authMW, cfg, loggers.Main, appCtx)
 
 	// для интеграции
 	runSyncRouter(api, dbConn, cfg, loggers)

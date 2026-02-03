@@ -24,6 +24,7 @@ type ServiceInterface interface {
 
 	EditMessageText(ctx context.Context, chatID int64, messageID int, text string, options ...MessageOption) error
 	EditOrSendMessage(ctx context.Context, chatID int64, messageID int, text string, options ...MessageOption) error
+	DeleteMessage(ctx context.Context, chatID int64, messageID int) error
 }
 
 // --- СТРУКТУРА СЕРВИСА ---
@@ -244,4 +245,17 @@ func (s *Service) EditOrSendMessage(ctx context.Context, chatID int64, messageID
 		return s.SendMessageEx(ctx, chatID, text, options...)
 	}
 	return s.EditMessageText(ctx, chatID, messageID, text, options...)
+}
+func (s *Service) DeleteMessage(ctx context.Context, chatID int64, messageID int) error {
+	reqPayload := &deleteMessageRequest{
+		ChatID:    chatID,
+		MessageID: messageID,
+	}
+    // Мы намеренно игнорируем ошибку (если сообщение уже удалено, API вернет 400, это нормально)
+	_ = s.sendRequest(ctx, "deleteMessage", reqPayload)
+	return nil
+}
+type deleteMessageRequest struct {
+	ChatID    int64 `json:"chat_id"`
+	MessageID int   `json:"message_id"`
 }

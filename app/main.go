@@ -68,14 +68,29 @@ func main() {
         if *runAll || *runCore { seeders.SeedCoreDictionaries(dbPool) }
         if *runAll || *runRoles { seeders.SeedRolesAndAdmin(dbPool, cfg) }
 
-        // --- ЛОГИКА ИМПОРТА ИЗ EXCEL ---
+      // --- ЛОГИКА ИМПОРТА ИЗ EXCEL ---
         if *importAtms != "" || *importTerms != "" || *importPos != "" {
-            log.Println("📥 Импортируем оборудование...")
+            log.Println("📥 Запуск процесса импорта оборудования...")
             svc := services.NewEquipImportService(dbPool)
 
-            if *importAtms != ""  { _ = svc.ImportAtms(*importAtms) }
-            if *importTerms != "" { _ = svc.ImportTerminals(*importTerms) }
-            if *importPos != ""   { _ = svc.ImportPos(*importPos) }
+            if *importAtms != ""  { 
+                log.Printf("📄 Файл АТМ: %s", *importAtms)
+                if err := svc.ImportAtms(*importAtms); err != nil {
+                    log.Printf("❌ Ошибка при импорте АТМ: %v", err)
+                }
+            }
+            if *importTerms != "" { 
+                log.Printf("📄 Файл Терминалы: %s", *importTerms)
+                if err := svc.ImportTerminals(*importTerms); err != nil {
+                    log.Printf("❌ Ошибка при импорте терминалов: %v", err)
+                }
+            }
+            if *importPos != ""   { 
+                log.Printf("📄 Файл ПОС-терминалы: %s", *importPos)
+                if err := svc.ImportPos(*importPos); err != nil {
+                    log.Printf("❌ Ошибка при импорте ПОС-терминалов: %v", err)
+                }
+            }
         }
 
         log.Println("✅ Все операции выполнены успешно.")

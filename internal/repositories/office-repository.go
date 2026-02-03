@@ -1,13 +1,11 @@
-// Файл: internal/repositories/office-repository.go
 package repositories
 
 import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
+  
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
@@ -16,22 +14,28 @@ import (
 
 	"request-system/internal/dto"
 	"request-system/internal/entities"
+	// Подключаем наш новый билдер
+	"request-system/internal/infrastructure/bd"
+	
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
 )
 
 const officeTable = "offices"
 
-var (
-	officeAllowedFilterFields = map[string]string{
-		"status_id": "o.status_id",
-		"branch_id": "o.branch_id",
-		"parent_id": "o.parent_id",
-	}
-	officeAllowedSortFields = map[string]string{
-		"id": "o.id", "name": "o.name", "open_date": "o.open_date", "created_at": "o.created_at",
-	}
-)
+// ЕДИНАЯ КАРТА ПОЛЕЙ (Фильтрация + Сортировка)
+// Префикс "o." обязателен, так как используются JOIN-ы
+var officeMap = map[string]string{
+	"id":         "o.id",
+	"name":       "o.name",
+	"address":    "o.address",
+	"open_date":  "o.open_date",
+	"status_id":  "o.status_id",
+	"branch_id":  "o.branch_id",
+	"parent_id":  "o.parent_id",
+	"created_at": "o.created_at",
+	"updated_at": "o.updated_at",
+}
 
 type OfficeRepositoryInterface interface {
 	GetOffices(ctx context.Context, filter types.Filter) ([]entities.Office, uint64, error)
@@ -54,6 +58,11 @@ func NewOfficeRepository(storage *pgxpool.Pool, logger *zap.Logger) OfficeReposi
 	return &OfficeRepository{storage: storage, logger: logger}
 }
 
+// -------------------------------------------------------------
+// Сканирование (Scan)
+// -------------------------------------------------------------
+
+// scanOffice: Простой скан для одной таблицы (без join-ов)
 func (r *OfficeRepository) scanOffice(row pgx.Row) (*entities.Office, error) {
 	var o entities.Office
 	var externalID, sourceSystem sql.NullString
@@ -79,68 +88,7 @@ func (r *OfficeRepository) scanOffice(row pgx.Row) (*entities.Office, error) {
 	return &o, nil
 }
 
-func (r *OfficeRepository) CreateOffice(ctx context.Context, tx pgx.Tx, office entities.Office) (uint64, error) {
-	query := `INSERT INTO offices (name, address, open_date, branch_id, parent_id, status_id, external_id, source_system, created_at, updated_at) 
-			  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()) RETURNING id`
-	var newID uint64
-	err := tx.QueryRow(ctx, query,
-		office.Name, office.Address, office.OpenDate, office.BranchID, office.ParentID, office.StatusID, office.ExternalID, office.SourceSystem).Scan(&newID)
-	return newID, err
-}
-
-func (r *OfficeRepository) UpdateOffice(ctx context.Context, tx pgx.Tx, id uint64, office entities.Office) error {
-	query := `UPDATE offices SET name = $1, address = $2, open_date = $3, branch_id = $4, parent_id = $5, status_id = $6, updated_at = NOW() WHERE id = $7`
-	result, err := tx.Exec(ctx, query,
-		office.Name, office.Address, office.OpenDate, office.BranchID, office.ParentID, office.StatusID, id)
-	if err != nil {
-		return err
-	}
-	if result.RowsAffected() == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
-}
-
-func (r *OfficeRepository) findOneOffice(ctx context.Context, querier Querier, where sq.Eq) (*entities.Office, error) {
-	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	query, args, err := psql.Select("id, name, address, open_date, branch_id, parent_id, status_id, created_at, updated_at, external_id, source_system").
-		From(officeTable).Where(where).ToSql()
-	if err != nil {
-		return nil, err
-	}
-	return r.scanOffice(querier.QueryRow(ctx, query, args...))
-}
-
-func (r *OfficeRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Office, error) {
-	var querier Querier = r.storage
-	if tx != nil {
-		querier = tx
-	}
-	return r.findOneOffice(ctx, querier, sq.Eq{"external_id": externalID, "source_system": sourceSystem})
-}
-
-func (r *OfficeRepository) FindByName(ctx context.Context, tx pgx.Tx, name string) (*entities.Office, error) {
-	var querier Querier = r.storage
-	if tx != nil {
-		querier = tx
-	}
-	return r.findOneOffice(ctx, querier, sq.Eq{"name": name})
-}
-
-func (r *OfficeRepository) DeleteOffice(ctx context.Context, id uint64) error {
-	query := `DELETE FROM offices WHERE id = $1`
-	result, err := r.storage.Exec(ctx, query, id)
-	if err != nil {
-		return err
-	}
-	if result.RowsAffected() == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
-}
-
-// --- ХЕЛПЕРЫ И МЕТОДЫ, ПЕРЕПИСАННЫЕ НА SQUIRREL ---
-
+// scanOfficeWithRelations: Скан со связями (Branch, Status, Parent)
 func (r *OfficeRepository) scanOfficeWithRelations(row pgx.Row) (*entities.Office, error) {
 	var o entities.Office
 	var b entities.Branch
@@ -161,6 +109,8 @@ func (r *OfficeRepository) scanOfficeWithRelations(row pgx.Row) (*entities.Offic
 		r.logger.Error("Failed to scan office row with relations", zap.Error(err))
 		return nil, err
 	}
+
+	// Сборка вложенных структур
 	if o.BranchID != nil {
 		b.ID = *o.BranchID
 		o.Branch = &b
@@ -177,72 +127,70 @@ func (r *OfficeRepository) scanOfficeWithRelations(row pgx.Row) (*entities.Offic
 	return &o, nil
 }
 
-func (r *OfficeRepository) applyFilters(builder sq.SelectBuilder, filter types.Filter) sq.SelectBuilder {
-	if filter.Search != "" {
-		builder = builder.Where(sq.Or{
-			sq.ILike{"o.name": "%" + filter.Search + "%"},
-			sq.ILike{"o.address": "%" + filter.Search + "%"},
-		})
-	}
-	for key, value := range filter.Filter {
-		if dbColumn, ok := officeAllowedFilterFields[key]; ok {
-			if items, ok := value.(string); ok && strings.Contains(items, ",") {
-				builder = builder.Where(sq.Eq{dbColumn: strings.Split(items, ",")})
-			} else {
-				builder = builder.Where(sq.Eq{dbColumn: value})
-			}
-		}
-	}
-	return builder
-}
+// -------------------------------------------------------------
+// Основные методы (Get, Find, CRUD)
+// -------------------------------------------------------------
 
 func (r *OfficeRepository) GetOffices(ctx context.Context, filter types.Filter) ([]entities.Office, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	baseBuilder := psql.Select().From(officeTable + " AS o")
-
-	baseBuilder = r.applyFilters(baseBuilder, filter)
-
-	countBuilder := baseBuilder.Columns("COUNT(o.id)")
-	countQuery, countArgs, err := countBuilder.ToSql()
-	if err != nil {
-		return nil, 0, err
+	
+	// Ручной поиск по тексту (OR ILIKE)
+	applySearch := func(b sq.SelectBuilder) sq.SelectBuilder {
+		if filter.Search != "" {
+			pat := "%" + filter.Search + "%"
+			return b.Where(sq.Or{
+				sq.ILike{"o.name": pat},
+				sq.ILike{"o.address": pat},
+			})
+		}
+		return b
 	}
+
+	// 1. COUNT
+	countBuilder := psql.Select("COUNT(o.id)").From(officeTable + " AS o")
+	
+	countBuilder = applySearch(countBuilder)
+	
+	// Готовим фильтр для count (без сортировки и пагинации)
+	countFilter := filter
+	countFilter.WithPagination = false
+	countFilter.Sort = nil
+
+	// Используем BD helper
+	countBuilder = bd.ApplyListParams(countBuilder, countFilter, officeMap)
+
 	var total uint64
-	if err := r.storage.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	sqlCount, argsCount, _ := countBuilder.ToSql() // Игнорируем ошибку сборки SQL
+	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	if total == 0 {
 		return []entities.Office{}, 0, nil
 	}
 
-	selectBuilder := baseBuilder.Columns(
+	// 2. SELECT
+	baseBuilder := psql.Select(
 		"o.id", "o.name", "o.address", "o.open_date", "o.created_at", "o.updated_at",
 		"o.branch_id", "COALESCE(b.name, '')", "COALESCE(b.short_name, '')",
 		"o.status_id", "COALESCE(s.name, '')",
 		"o.parent_id", "COALESCE(p_o.name, '') AS parent_name",
 	).
+		From(officeTable + " AS o").
 		LeftJoin("branches b ON o.branch_id = b.id").
 		LeftJoin("statuses s ON o.status_id = s.id").
 		LeftJoin(officeTable + " p_o ON o.parent_id = p_o.id")
-	if len(filter.Sort) > 0 {
-		for field, direction := range filter.Sort {
-			if dbColumn, ok := officeAllowedSortFields[field]; ok {
-				order := "ASC"
-				if strings.ToUpper(direction) == "DESC" {
-					order = "DESC"
-				}
-				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("%s %s", dbColumn, order))
-			}
-		}
-	} else {
-		selectBuilder = selectBuilder.OrderBy("o.id DESC")
+
+	baseBuilder = applySearch(baseBuilder)
+	
+	// Дефолтная сортировка
+	if len(filter.Sort) == 0 {
+		baseBuilder = baseBuilder.OrderBy("o.id DESC")
 	}
 
-	if filter.WithPagination {
-		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
-	}
+	// Используем BD helper
+	baseBuilder = bd.ApplyListParams(baseBuilder, filter, officeMap)
 
-	query, args, err := selectBuilder.ToSql()
+	query, args, err := baseBuilder.ToSql()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -283,6 +231,28 @@ func (r *OfficeRepository) FindOffice(ctx context.Context, id uint64) (*entities
 	}
 
 	return r.scanOfficeWithRelations(r.storage.QueryRow(ctx, query, args...))
+}
+
+func (r *OfficeRepository) CreateOffice(ctx context.Context, tx pgx.Tx, office entities.Office) (uint64, error) {
+	query := `INSERT INTO offices (name, address, open_date, branch_id, parent_id, status_id, external_id, source_system, created_at, updated_at) 
+			  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()) RETURNING id`
+	var newID uint64
+	err := tx.QueryRow(ctx, query,
+		office.Name, office.Address, office.OpenDate, office.BranchID, office.ParentID, office.StatusID, office.ExternalID, office.SourceSystem).Scan(&newID)
+	return newID, err
+}
+
+func (r *OfficeRepository) UpdateOffice(ctx context.Context, tx pgx.Tx, id uint64, office entities.Office) error {
+	query := `UPDATE offices SET name = $1, address = $2, open_date = $3, branch_id = $4, parent_id = $5, status_id = $6, updated_at = NOW() WHERE id = $7`
+	result, err := tx.Exec(ctx, query,
+		office.Name, office.Address, office.OpenDate, office.BranchID, office.ParentID, office.StatusID, id)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }
 
 func (r *OfficeRepository) UpdateOfficeWithDTO(ctx context.Context, id uint64, dto dto.UpdateOfficeDTO) error {
@@ -337,4 +307,43 @@ func (r *OfficeRepository) UpdateOfficeWithDTO(ctx context.Context, id uint64, d
 	}
 
 	return nil
+}
+
+func (r *OfficeRepository) DeleteOffice(ctx context.Context, id uint64) error {
+	query := `DELETE FROM offices WHERE id = $1`
+	result, err := r.storage.Exec(ctx, query, id)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+
+func (r *OfficeRepository) findOneOffice(ctx context.Context, querier Querier, where sq.Eq) (*entities.Office, error) {
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+	query, args, err := psql.Select("id, name, address, open_date, branch_id, parent_id, status_id, created_at, updated_at, external_id, source_system").
+		From(officeTable).Where(where).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	return r.scanOffice(querier.QueryRow(ctx, query, args...))
+}
+
+func (r *OfficeRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, externalID string, sourceSystem string) (*entities.Office, error) {
+	var querier Querier = r.storage
+	if tx != nil {
+		querier = tx
+	}
+	return r.findOneOffice(ctx, querier, sq.Eq{"external_id": externalID, "source_system": sourceSystem})
+}
+
+func (r *OfficeRepository) FindByName(ctx context.Context, tx pgx.Tx, name string) (*entities.Office, error) {
+	var querier Querier = r.storage
+	if tx != nil {
+		querier = tx
+	}
+	return r.findOneOffice(ctx, querier, sq.Eq{"name": name})
 }

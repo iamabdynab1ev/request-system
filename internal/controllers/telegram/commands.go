@@ -139,15 +139,18 @@ func (c *TelegramController) handleMenuButton(ctx context.Context, chatID int64,
 
 // ==================== КОМАНДЫ СПИСКА ЗАЯВОК ====================
 func (c *TelegramController) handleMyTasksCommand(ctx context.Context, chatID int64, messageID ...int) error {
-	_, userCtx, err := c.prepareUserContext(ctx, chatID)
+	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
 		return err
 	}
 	
-	// ✅ ИЗМЕНЕНИЕ: Жестко ставим лимит 10, чтобы избежать ошибки "reply markup is too long"
-	// (Telegram не переваривает более ~20 кнопок с callback_data в одном сообщении)
-	filter := types.Filter{Limit: 10, Page: 1}
-	
+	filter := types.Filter{
+		Limit: 10, 
+		Page: 1,
+		Filter: map[string]interface{}{
+			"user_id": user.ID, 
+		},
+	}
 	resp, err := c.orderService.GetOrders(userCtx, filter, true)
 	if err != nil {
 		c.logger.Error("GetOrders failed", zap.Error(err), zap.Int64("chat_id", chatID))
@@ -217,14 +220,16 @@ func (c *TelegramController) handleTodayTasksCommand(ctx context.Context, chatID
 	now := time.Now().In(c.loc)
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, c.loc)
 	endOfDay := startOfDay.Add(24 * time.Hour)
+	
 	filter := types.Filter{
 		Limit: maxOrdersPerPage,
 		Page:  1,
 		Filter: map[string]interface{}{
-			"duration_from": startOfDay,
-			"duration_to":   endOfDay,
+			"created_from": startOfDay,  
+			"created_to":   endOfDay,
 		},
 	}
+
 	resp, err := c.orderService.GetOrders(userCtx, filter, true)
 	if err != nil {
 		c.logger.Error("GetOrders failed", zap.Error(err))
@@ -233,7 +238,6 @@ func (c *TelegramController) handleTodayTasksCommand(ctx context.Context, chatID
 	return c.renderOrderList(ctx, chatID, resp.List, "⏰ *Заявки на сегодня*",
 		"✅ *Заявок на сегодня нет\\!*\n\n_Можете отдохнуть_ 😊", messageID...)
 }
-
 func (c *TelegramController) handleOverdueTasksCommand(ctx context.Context, chatID int64, messageID ...int) error {
 	_, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {

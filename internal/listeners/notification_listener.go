@@ -397,11 +397,9 @@ func (l *NotificationListener) formatWebSocketPayload(ctx context.Context, event
 		mainMessage = fmt.Sprintf("<strong>%s</strong> создал(а) новую заявку <strong>%s №%d</strong>", actor.Fio, order.Name, order.ID)
 	}
 
-	// Собираем детали изменений
 	var changes []websocket.ChangeInfo
 	var attachmentLink *string
 
-	// --- НАЧАЛО ГЛАВНЫХ ИЗМЕНЕНИЙ ---
 	for _, e := range events {
 		item := e.HistoryItem
 		switch item.EventType {

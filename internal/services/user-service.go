@@ -44,6 +44,7 @@ type UserServiceInterface interface {
 type UserService struct {
 	txManager             repositories.TxManagerInterface
 	userRepository        repositories.UserRepositoryInterface
+	otdelRepository       repositories.OtdelRepositoryInterface
 	roleRepository        repositories.RoleRepositoryInterface
 	permissionRepository  repositories.PermissionRepositoryInterface
 	statusRepository      repositories.StatusRepositoryInterface
@@ -55,6 +56,7 @@ type UserService struct {
 func NewUserService(
 	txManager repositories.TxManagerInterface,
 	userRepository repositories.UserRepositoryInterface,
+	otdelRepo repositories.OtdelRepositoryInterface,
 	roleRepository repositories.RoleRepositoryInterface,
 	permissionRepository repositories.PermissionRepositoryInterface,
 	statusRepository repositories.StatusRepositoryInterface,
@@ -65,6 +67,7 @@ func NewUserService(
 	return &UserService{
 		txManager:             txManager,
 		userRepository:        userRepository,
+		otdelRepository:       otdelRepo,
 		roleRepository:        roleRepository,
 		permissionRepository:  permissionRepository,
 		statusRepository:      statusRepository,
@@ -74,15 +77,13 @@ func NewUserService(
 	}
 }
 
-// ---------------- READING ----------------
-
 func (s *UserService) GetUsers(ctx context.Context, filter types.Filter) ([]dto.UserDTO, uint64, error) {
-	
+	// 1. Проверка прав
 	if _, err := s.checkAccess(ctx, authz.UsersView, nil); err != nil {
 		return nil, 0, err
 	}
 
-	// 1. Получаем список пользователей (как и раньше)
+	// 2. Получение списка
 	users, total, err := s.userRepository.GetUsers(ctx, filter)
 	if err != nil {
 		return nil, 0, err
@@ -91,40 +92,47 @@ func (s *UserService) GetUsers(ctx context.Context, filter types.Filter) ([]dto.
 		return []dto.UserDTO{}, 0, nil
 	}
 
-	// 2. Собираем ID пользователей в массив
+	// 3. Сбор ID для batch-загрузки
 	uids := make([]uint64, len(users))
 	for i, u := range users {
 		uids[i] = u.ID
 	}
 
-	
+	// 4. Загрузка связей
 	rolesMap, _ := s.userRepository.GetRolesByUserIDs(ctx, uids)
-	positionsMap, _ := s.userRepository.GetPositionIDsByUserIDs(ctx, uids) 
+	positionsMap, _ := s.userRepository.GetPositionIDsByUserIDs(ctx, uids)
 
+	otdelsMap, _ := s.userRepository.GetOtdelIDsByUserIDs(ctx, uids) 
+
+	// 5. Сборка DTO
 	dtos := make([]dto.UserDTO, len(users))
 	for i, u := range users {
 		d := userEntityToUserDTO(&u)
 		
-	
+		// Роли
 		if roles, ok := rolesMap[u.ID]; ok {
 			for _, r := range roles {
 				d.RoleIDs = append(d.RoleIDs, r.ID)
 			}
 		}
 		
-		
+		// Должности
 		if posIDs, ok := positionsMap[u.ID]; ok {
 			d.PositionIDs = posIDs
 		} else {
-           
             d.PositionIDs = []uint64{}
         }
+
+		if list, ok := otdelsMap[u.ID]; ok {
+			d.OtdelIDs = list
+		} else {
+			d.OtdelIDs = []uint64{}
+		}
 
 		dtos[i] = *d
 	}
 	return dtos, total, nil
 }
-
 func (s *UserService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error) {
 	u, err := s.userRepository.FindUserByID(ctx, id)
 	if err != nil {
@@ -140,10 +148,10 @@ func (s *UserService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, er
 	if err == nil {
 		u.PositionIDs = pids 
 	}
-
+    otdIDs, _ := s.userRepository.GetOtdelIDsByUserID(ctx, u.ID)
+	if err == nil { u.OtdelIDs = otdIDs }
 
 	d := userEntityToUserDTO(u)
-	
 
 	roles, _ := s.userRepository.GetRolesByUserID(ctx, id)
 	for _, r := range roles {
@@ -164,8 +172,14 @@ func (s *UserService) CreateUser(ctx context.Context, p dto.CreateUserDTO) (*dto
 	if _, err := s.checkAccess(ctx, authz.UsersCreate, nil); err != nil {
 		return nil, err
 	}
-	if len(p.PositionIDs) > 3 {
-        return nil, apperrors.NewBadRequestError("Превышен лимит должностей. Максимум можно назначить 3 должности.")
+	if len(p.PositionIDs) > 2 {
+        return nil, apperrors.NewBadRequestError("Превышен лимит должностей. Максимум можно назначить 2 должности.")
+    }
+	if len(p.OtdelIDs) > 2 {
+        return nil, apperrors.NewBadRequestError("Превышен лимит отделов. Сотрудник может быть привязан максимум к 2 отделам.")
+    }
+ if err := s.validateHierarchy(ctx, p.DepartmentID, p.OtdelID, p.OtdelIDs); err != nil {
+        return nil, err
     }
 	stID, err := s.statusRepository.FindIDByCode(ctx, constants.UserStatusActiveCode)
 	if err != nil {
@@ -206,6 +220,7 @@ func (s *UserService) CreateUser(ctx context.Context, p dto.CreateUserDTO) (*dto
 // Файл: internal/services/user_service.go
 
 func (s *UserService) UpdateUser(ctx context.Context, p dto.UpdateUserDTO, explicitFields map[string]interface{}) (*dto.UserDTO, error) {
+	// 1. Ищем цель (кого редактируем)
 	target, err := s.userRepository.FindUserByID(ctx, p.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -214,80 +229,140 @@ func (s *UserService) UpdateUser(ctx context.Context, p dto.UpdateUserDTO, expli
 		return nil, err
 	}
 
-	if _, err := s.checkAccess(ctx, authz.UsersUpdate, target); err != nil {
+	// 2. Проверяем права доступа
+	actorID, _ := utils.GetUserIDFromCtx(ctx)
+	permissions, _ := utils.GetPermissionsMapFromCtx(ctx)
+
+	isSelf := (actorID == target.ID)
+
+	if isSelf {
+
+		canProfile := permissions[authz.ProfileUpdate] 
+		canUser    := permissions[authz.UsersUpdate]   
+		
+		if !canProfile && !canUser {
+			s.logger.Warn("Нет прав на редактирование своего профиля", zap.Uint64("userID", actorID))
+			return nil, apperrors.ErrForbidden
+		}
+	} else {
+		// Если я редактирую другого, мне СТРОГО нужно user:update
+		if !permissions[authz.UsersUpdate] {
+			s.logger.Warn("Попытка редактировать чужой профиль без user:update", 
+				zap.Uint64("actorID", actorID), 
+				zap.Uint64("targetID", target.ID))
+			return nil, apperrors.ErrForbidden
+		}
+	}
+	// ======================================================================
+
+	// Валидация лимитов (Админам можно разрешить больше, но пока оставляем как есть)
+	if p.PositionIDs != nil && len(*p.PositionIDs) > 2 {
+		return nil, apperrors.NewBadRequestError("Превышен лимит должностей. Максимум 2.")
+	}
+	if p.OtdelIDs != nil && len(*p.OtdelIDs) > 2 {
+		return nil, apperrors.NewBadRequestError("Превышен лимит отделов. Максимум 2.")
+	}
+
+	// ... [ВЕСЬ ОСТАЛЬНОЙ ВАШ КОД БЕЗ ИЗМЕНЕНИЙ НИЖЕ] ...
+
+	// Логика определения иерархии для валидации
+	finalDept := target.DepartmentID
+	if p.DepartmentID != nil { finalDept = p.DepartmentID }
+
+	var finalExtras []uint64
+	if p.OtdelIDs != nil {
+		finalExtras = *p.OtdelIDs
+	} else {
+		existingOtdels, _ := s.userRepository.GetOtdelIDsByUserID(ctx, target.ID)
+		finalExtras = existingOtdels
+	}
+
+	finalMainOtdel := target.OtdelID
+	if p.OtdelID != nil { 
+		finalMainOtdel = p.OtdelID 
+	} else if p.OtdelIDs != nil && len(*p.OtdelIDs) > 0 {
+		first := (*p.OtdelIDs)[0]
+		finalMainOtdel = &first
+	} else if p.OtdelIDs != nil && len(*p.OtdelIDs) == 0 {
+		finalMainOtdel = nil
+	}
+
+	if err := s.validateHierarchy(ctx, finalDept, finalMainOtdel, finalExtras); err != nil {
 		return nil, err
 	}
-	if p.PositionIDs != nil {
-        if len(*p.PositionIDs) > 3 {
-            return nil, apperrors.NewBadRequestError("Превышен лимит должностей. Максимум можно назначить 3 должности.")
-        }
-    }
-	// Проверка прав AD
+
+	// Проверка прав AD (Оставляем как есть, это важно)
 	if _, fieldExists := explicitFields["username"]; fieldExists {
-		permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
-		if err != nil { return nil, err }
-		if _, hasPermission := permissionsMap[authz.UserManageADLink]; !hasPermission {
+		// Если меняем AD, право manage_ad все равно нужно, даже для себя
+		if !permissions[authz.UserManageADLink] {
 			return nil, apperrors.NewHttpError(http.StatusForbidden, "У вас нет прав на привязку логина AD", nil, nil)
 		}
 	}
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		updatedEntity := *target
-
 		utils.SmartUpdate(&updatedEntity, explicitFields)
 
-		// 🔥 ВОТ ЭТОГО БЛОКА НЕ БЫЛО У ВАС. ОН ОБЯЗАТЕЛЕН:
-		// SmartUpdate не работает с массивами ID, переносим их вручную из DTO
+		// Должности
 		if p.PositionIDs != nil {
-			updatedEntity.PositionIDs = *p.PositionIDs // Копируем список должностей [314, 313]
-			
-			// Автоматически обновляем главную должность (для списка юзеров)
+			updatedEntity.PositionIDs = *p.PositionIDs 
 			if len(updatedEntity.PositionIDs) > 0 {
 				first := updatedEntity.PositionIDs[0]
 				updatedEntity.PositionID = &first
 			} else {
-				// Если очистили список должностей
-				zero := uint64(0)
-				updatedEntity.PositionID = &zero 
+				updatedEntity.PositionID = nil 
 			}
 		}
 
-		// Остальной код (Пароли, фото)
-		if p.Password != nil && len(*p.Password) >= 6 {
-			hash, err := utils.HashPassword(*p.Password)
-			if err != nil { return err }
-			updatedEntity.Password = hash
+		// Отделы
+		if p.OtdelIDs != nil {
+			updatedEntity.OtdelIDs = *p.OtdelIDs
+			if len(updatedEntity.OtdelIDs) > 0 {
+				first := updatedEntity.OtdelIDs[0]
+				updatedEntity.OtdelID = &first 
+			} else {
+				updatedEntity.OtdelID = nil 
+			}
 		}
 
+		// Пароль, Фото, Username
+		if p.Password != nil && len(*p.Password) >= 6 {
+			hash, _ := utils.HashPassword(*p.Password)
+			updatedEntity.Password = hash
+			
+
+			if isSelf {
+				updatedEntity.MustChangePassword = false
+			}
+		}
+		
 		if p.PhotoURL != nil {
 			updatedEntity.PhotoURL = p.PhotoURL
 		}
-
 		if val, exists := explicitFields["username"]; exists && val == nil {
 			updatedEntity.Username = nil
 		}
 
-		// Вызов репозитория (внутри UpdateUser должен быть вызов SyncUserPositions!)
 		if err := s.userRepository.UpdateUser(ctx, tx, &updatedEntity); err != nil {
 			return err
 		}
 
 		if p.RoleIDs != nil {
-			if err := s.userRepository.SyncUserRoles(ctx, tx, p.ID, *p.RoleIDs); err != nil {
-				return err
+	
+			if !permissions[authz.UsersUpdate] && isSelf {
+		
+			} else {
+				if err := s.userRepository.SyncUserRoles(ctx, tx, p.ID, *p.RoleIDs); err != nil {
+					return err
+				}
 			}
 		}
 
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
 
-	if p.RoleIDs != nil {
-		s.authPermissionService.InvalidateUserPermissionsCache(ctx, p.ID)
-	}
-
+	if err != nil { return nil, err }
+	s.authPermissionService.InvalidateUserPermissionsCache(ctx, p.ID)
 	return s.FindUser(ctx, p.ID)
 }
 
@@ -395,9 +470,9 @@ func userEntityToUserDTO(e *entities.User) *dto.UserDTO {
 		StatusID: e.StatusID, StatusCode: e.StatusCode,
 		BranchID: e.BranchID, DepartmentID: e.DepartmentID,
 		PositionID: e.PositionID, 
-    
+       
         PositionIDs: e.PositionIDs, 
-
+ 		OtdelIDs: e.OtdelIDs,
         OfficeID: e.OfficeID, OtdelID: e.OtdelID,
 		PhotoURL: e.PhotoURL, MustChangePassword: e.MustChangePassword,
 		PositionName:   e.PositionName,
@@ -416,4 +491,40 @@ func userEntityToUserDTO(e *entities.User) *dto.UserDTO {
 		d.UpdatedAt = e.UpdatedAt.Format(time.RFC3339)
 	}
 	return d
+}
+func (s *UserService) validateHierarchy(ctx context.Context, deptID *uint64, mainOtdelID *uint64, extraOtdelIDs []uint64) error {
+	if deptID == nil || *deptID == 0 {
+		return nil
+	}
+
+	// Собираем все ID и очищаем от дублей
+	checkMap := make(map[uint64]bool)
+	if mainOtdelID != nil && *mainOtdelID > 0 {
+		checkMap[*mainOtdelID] = true
+	}
+	for _, id := range extraOtdelIDs {
+		if id > 0 { checkMap[id] = true }
+	}
+
+	if len(checkMap) == 0 {
+		return nil
+	}
+
+	// Превращаем обратно в чистый слайс без повторов
+	cleanList := make([]uint64, 0, len(checkMap))
+	for id := range checkMap {
+		cleanList = append(cleanList, id)
+	}
+
+	isValid, err := s.otdelRepository.ValidateOtdelsInDepartment(ctx, *deptID, cleanList)
+	if err != nil {
+		return apperrors.ErrInternalServer
+	}
+
+	if !isValid {
+	
+		s.logger.Warn("Hierarchy validation failed", zap.Uint64("deptID", *deptID), zap.Uint64s("checkedIDs", cleanList))
+		return apperrors.NewBadRequestError("Отдел(ы) не принадлежат выбранному департаменту.")
+	}
+	return nil
 }

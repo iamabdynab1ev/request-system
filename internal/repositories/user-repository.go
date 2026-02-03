@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-
+"request-system/internal/infrastructure/bd"
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -33,6 +33,25 @@ var allowedUserFilters = map[string]string{
 	"status_id":     "u.status_id",
 	"created_at":    "u.created_at",
 	"fio":           "u.fio",
+}
+var userMap = map[string]string{
+	"id":            "u.id",
+	"fio":           "u.fio",
+	"email":         "u.email",
+	"username":      "u.username",
+	"phone_number":  "u.phone_number",
+	"status_id":     "u.status_id",
+	"position_id":   "u.position_id",
+	
+
+	"department_id": "u.department_id",
+	"departments_id": "u.department_id", 
+	"otdel_id":      "u.otdel_id",
+	"branch_id":     "u.branch_id",
+	"office_id":     "u.office_id",
+	
+	"created_at":    "u.created_at",
+	"is_head":       "u.is_head",
 }
 
 type UserRepositoryInterface interface {
@@ -74,6 +93,9 @@ type UserRepositoryInterface interface {
 	FindPositionIDByStructureAndType(ctx context.Context, tx pgx.Tx, branchID, officeID, deptID, otdelID *uint64, posType string) (uint64, error)
 	GetPositionIDsByUserID(ctx context.Context, userID uint64) ([]uint64, error)
 	GetPositionIDsByUserIDs(ctx context.Context, userIDs []uint64) (map[uint64][]uint64, error)
+	SyncUserOtdels(ctx context.Context, tx pgx.Tx, userID uint64, otdelIDs []uint64) error
+	GetOtdelIDsByUserID(ctx context.Context, userID uint64) ([]uint64, error)
+	GetOtdelIDsByUserIDs(ctx context.Context, userIDs []uint64) (map[uint64][]uint64, error)
 }
 
 type UserRepository struct {
@@ -123,8 +145,16 @@ func (r *UserRepository) FindPositionIDByStructureAndType(ctx context.Context, t
 		FROM users u
 		JOIN positions p ON u.position_id = p.id
 		WHERE u.deleted_at IS NULL
-		  AND p.type = $1
 	`
+
+	// [FIX START] >>> Изменяем логику типа должности
+	// Если мы ищем руководителя (любого уровня), разрешаем также тип "MANAGER"
+	if isLeadershipPosition(posType) {
+		query += " AND (p.type = $1 OR p.type = 'MANAGER')"
+	} else {
+		query += " AND p.type = $1"
+	}
+	// [FIX END] <<<
 
 	args := []interface{}{posType}
 	idx := 2
@@ -150,7 +180,7 @@ func (r *UserRepository) FindPositionIDByStructureAndType(ctx context.Context, t
 		idx++
 	}
 
-	query += " LIMIT 1"
+	query += ` ORDER BY CASE WHEN p.type = $1 THEN 0 ELSE 1 END LIMIT 1`
 
 	var posID uint64
 	var row pgx.Row
@@ -173,112 +203,113 @@ func (r *UserRepository) FindPositionIDByStructureAndType(ctx context.Context, t
 }
 
 func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter) ([]entities.User, uint64, error) {
-	// --- ЗАПРОС №1: COUNT (только WHERE) ---
-	countBuilder := sq.Select("count(*)").From("users u").
+	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+
+	// Вспомогательная функция для текстового поиска (ILIKE)
+	// Ее нельзя засунуть в bd.ApplyListParams, т.к. тут сложная логика OR
+	applySearch := func(b sq.SelectBuilder) sq.SelectBuilder {
+		if filter.Search != "" {
+			pat := "%" + filter.Search + "%"
+			return b.Where(sq.Or{
+				sq.ILike{"u.fio": pat},
+				sq.ILike{"u.email": pat},
+				sq.ILike{"u.username": pat},
+			})
+		}
+		return b
+	}
+
+	// --- 1. COUNT (Считаем кол-во) ---
+	countBuilder := psql.Select("count(*)").From("users u").
 		LeftJoin("statuses s ON u.status_id = s.id").
 		LeftJoin("positions p ON u.position_id = p.id").
-		Where(sq.Eq{"u.deleted_at": nil}).
-		PlaceholderFormat(sq.Dollar)
+		Where(sq.Eq{"u.deleted_at": nil}) // Исключаем удаленных
 
-	if filter.Search != "" {
-		pat := "%" + filter.Search + "%"
-		countBuilder = countBuilder.Where(sq.Or{
-			sq.ILike{"u.fio": pat}, sq.ILike{"u.email": pat},
-		})
-	}
+	// Применяем поиск по тексту
+	countBuilder = applySearch(countBuilder)
 
-	for k, v := range filter.Filter {
-		if col, ok := allowedUserFilters[k]; ok {
-			countBuilder = countBuilder.Where(sq.Eq{col: v})
-		}
-	}
+	// Готовим фильтр для Count (отключаем сортировку и пагинацию)
+	countFilter := filter
+	countFilter.WithPagination = false
+	countFilter.Sort = nil
 
-	countSql, countArgs, err := countBuilder.ToSql()
-	if err != nil {
-		return nil, 0, err
-	}
+	// >>> ИСПОЛЬЗУЕМ HELPER BD <<<
+	countBuilder = bd.ApplyListParams(countBuilder, countFilter, userMap)
 
 	var totalCount uint64
-	if err := r.storage.QueryRow(ctx, countSql, countArgs...).Scan(&totalCount); err != nil {
+	sqlCount, argsCount, _ := countBuilder.ToSql()
+	
+	// Выполняем запрос
+	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&totalCount); err != nil {
 		return nil, 0, err
 	}
 	if totalCount == 0 {
 		return []entities.User{}, 0, nil
 	}
 
-	// --- ЗАПРОС №2: SELECT (WHERE + Sort + Pagination) ---
-	selectBuilder := r.buildBaseSelect().
+	// --- 2. SELECT (Получаем данные) ---
+	// buildBaseSelect - это твой метод, который уже был в репозитории (с JOIN-ами)
+	selectBuilder := r.buildBaseSelect(). 
 		Where(sq.Eq{"u.deleted_at": nil}).
 		PlaceholderFormat(sq.Dollar)
 
-	if filter.Search != "" {
-		pat := "%" + filter.Search + "%"
-		selectBuilder = selectBuilder.Where(sq.Or{
-			sq.ILike{"u.fio": pat}, sq.ILike{"u.email": pat},
-		})
-	}
-	for k, v := range filter.Filter {
-		if col, ok := allowedUserFilters[k]; ok {
-			selectBuilder = selectBuilder.Where(sq.Eq{col: v})
-		}
-	}
+	// Применяем поиск по тексту
+	selectBuilder = applySearch(selectBuilder)
 
-	if len(filter.Sort) > 0 {
-		for field, dir := range filter.Sort {
-			if dbCol, ok := allowedUserFilters[field]; ok {
-				d := "ASC"
-				if strings.ToLower(dir) == "desc" {
-					d = "DESC"
-				}
-				selectBuilder = selectBuilder.OrderBy(fmt.Sprintf("%s %s", dbCol, d))
-			}
-		}
-	} else {
+	// Дефолтная сортировка, если фронт не прислал
+	if len(filter.Sort) == 0 {
 		selectBuilder = selectBuilder.OrderBy("u.created_at DESC")
 	}
 
-	if filter.WithPagination {
-		selectBuilder = selectBuilder.Limit(uint64(filter.Limit)).Offset(uint64(filter.Offset))
-	}
+	// >>> ИСПОЛЬЗУЕМ HELPER BD (Сортировка, фильтры и пагинация) <<<
+	selectBuilder = bd.ApplyListParams(selectBuilder, filter, userMap)
 
-	selectSql, selectArgs, err := selectBuilder.ToSql()
+	sqlSelect, argsSelect, err := selectBuilder.ToSql()
 	if err != nil {
 		return nil, 0, err
 	}
 
-	rows, err := r.storage.Query(ctx, selectSql, selectArgs...)
+	rows, err := r.storage.Query(ctx, sqlSelect, argsSelect...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 
+	// Используем CollectRows (у тебя он был раньше), он сам смапит поля
 	users, err := pgx.CollectRows(rows, pgx.RowToStructByName[entities.User])
 	return users, totalCount, err
 }
 
 func (r *UserRepository) CreateUser(ctx context.Context, tx pgx.Tx, u *entities.User) (uint64, error) {
-
+	// --- (1) Обработка Основных Полей (Legacy Sync) ---
+	// Если прислали список должностей, ставим первую главной
 	if len(u.PositionIDs) > 0 && (u.PositionID == nil || *u.PositionID == 0) {
 		first := u.PositionIDs[0]
 		u.PositionID = &first
 	}
+	// Если прислали список отделов, ставим первый главным (для отображения)
+	if len(u.OtdelIDs) > 0 && (u.OtdelID == nil || *u.OtdelID == 0) {
+		first := u.OtdelIDs[0]
+		u.OtdelID = &first
+	}
 
-	// Ваш старый SQL (PositionID тоже сохраняем в таблицу users как и раньше)
+	// --- (2) Вставка самого Юзера ---
 	q := `INSERT INTO users (fio, email, phone_number, password, position_id, status_id, branch_id, 
 		department_id, office_id, otdel_id, photo_url, must_change_password, is_head, username, created_at, updated_at) 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW()) RETURNING id`
 
 	var id uint64
 	err := tx.QueryRow(ctx, q,
-		u.Fio, u.Email, u.PhoneNumber, u.Password, u.PositionID, // Вот тут используется основная должность
+		u.Fio, u.Email, u.PhoneNumber, u.Password, u.PositionID,
 		u.StatusID, u.BranchID, u.DepartmentID, u.OfficeID,
-		u.OtdelID, u.PhotoURL, u.MustChangePassword, u.IsHead, u.Username,
+		u.OtdelID, 
+		u.PhotoURL, u.MustChangePassword, u.IsHead, u.Username,
 	).Scan(&id)
 	
 	if err != nil {
 		return 0, r.handlePgError(err)
 	}
-
+	
 	if len(u.PositionIDs) > 0 {
 		if err := r.SyncUserPositions(ctx, tx, id, u.PositionIDs); err != nil {
 			return 0, err
@@ -286,6 +317,14 @@ func (r *UserRepository) CreateUser(ctx context.Context, tx pgx.Tx, u *entities.
 	} else if u.PositionID != nil {
 	
 		r.SyncUserPositions(ctx, tx, id, []uint64{*u.PositionID})
+	}
+
+	if len(u.OtdelIDs) > 0 {
+		if err := r.SyncUserOtdels(ctx, tx, id, u.OtdelIDs); err != nil {
+			return 0, err
+		}
+	} else if u.OtdelID != nil {
+		r.SyncUserOtdels(ctx, tx, id, []uint64{*u.OtdelID})
 	}
 
 	return id, nil
@@ -296,7 +335,7 @@ func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, u *entities.
 		PlaceholderFormat(sq.Dollar).
 		Set("updated_at", sq.Expr("NOW()")).
 		Where(sq.Eq{"id": u.ID, "deleted_at": nil}).
-		// Fields
+		// Основные поля
 		Set("fio", u.Fio).
 		Set("email", u.Email).
 		Set("phone_number", u.PhoneNumber).
@@ -305,7 +344,7 @@ func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, u *entities.
 		Set("branch_id", u.BranchID).
 		Set("department_id", u.DepartmentID).
 		Set("office_id", u.OfficeID).
-		Set("otdel_id", u.OtdelID).
+		Set("otdel_id", u.OtdelID). // Обновляем основной
 		Set("photo_url", u.PhotoURL).
 		Set("is_head", u.IsHead).
 		Set("username", u.Username)
@@ -315,23 +354,29 @@ func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, u *entities.
 	}
 
 	sqlStr, args, err := b.ToSql()
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 
 	if _, err := tx.Exec(ctx, sqlStr, args...); err != nil {
 		return r.handlePgError(err)
 	}
+
+	// --- Сохранение списков ---
+
+	// Должности
 	if u.PositionIDs != nil { 
-	
 		if err := r.SyncUserPositions(ctx, tx, u.ID, u.PositionIDs); err != nil {
+			return err
+		}
+	}
+
+	if u.OtdelIDs != nil { 
+		if err := r.SyncUserOtdels(ctx, tx, u.ID, u.OtdelIDs); err != nil {
 			return err
 		}
 	}
 
 	return nil
 }
-
 func (r *UserRepository) handlePgError(err error) error {
 	if pgErr, ok := err.(*pgconn.PgError); ok {
 		switch pgErr.Code {
@@ -513,16 +558,27 @@ func (r *UserRepository) FindUsersByIDs(ctx context.Context, userIDs []uint64) (
 	if len(userIDs) == 0 {
 		return map[uint64]entities.User{}, nil
 	}
-	q := sq.Select("u.*", "s.code as status_code").From("users u").
-		Join("statuses s ON u.status_id = s.id").Where(sq.Eq{"u.id": userIDs, "u.deleted_at": nil}).PlaceholderFormat(sq.Dollar)
-	sqlStr, args, _ := q.ToSql()
+	q := r.buildBaseSelect().
+        Where(sq.Eq{"u.id": userIDs, "u.deleted_at": nil}).
+        PlaceholderFormat(sq.Dollar)
+
+	sqlStr, args, err := q.ToSql()
+    if err != nil {
+        return nil, err
+    }
+
 	rows, err := r.storage.Query(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
+	users, err := pgx.CollectRows(rows, pgx.RowToStructByName[entities.User])
+    if err != nil {
+        return nil, err
+    }
+
 	m := make(map[uint64]entities.User)
-	users, _ := pgx.CollectRows(rows, pgx.RowToStructByName[entities.User])
 	for _, u := range users {
 		m[u.ID] = u
 	}
@@ -612,17 +668,22 @@ func (r *UserRepository) FindBossByOrgAndType(ctx context.Context, tx pgx.Tx,
 		JOIN statuses s ON u.status_id = s.id
 		WHERE s.code = 'ACTIVE'
 		  AND u.deleted_at IS NULL
-		  AND p.type = $1
 	`
 
-    // Аргументы и фильтры по department/branch/otdel ОСТАЮТСЯ ТЕМИ ЖЕ
-	args := []interface{}{string(targetType)}
+	// [FIX START] >>> Добавляем условие OR
+	posTypeStr := string(targetType)
+	// Если мы ищем босса, то Менеджер тоже подходит (согласно логике 1С)
+	query += " AND (p.type = $1 OR p.type = 'MANAGER')"
+	// [FIX END] <<<
+
+	args := []interface{}{posTypeStr}
 	argIdx := 2
 
 	if deptID > 0 {
 		query += ` AND u.department_id = $` + strconv.Itoa(argIdx)
 		args = append(args, deptID)
 		argIdx++
+		// Если ищем конкретный отдел, добавляем фильтр
 		if otdelID != nil {
 			query += ` AND u.otdel_id = $` + strconv.Itoa(argIdx)
 			args = append(args, *otdelID)
@@ -641,7 +702,7 @@ func (r *UserRepository) FindBossByOrgAndType(ctx context.Context, tx pgx.Tx,
 		}
 	}
 
-	query += ` LIMIT 1`
+	query += ` ORDER BY CASE WHEN p.type = $1 THEN 0 ELSE 1 END, u.created_at ASC LIMIT 1`
 
 	var row pgx.Row
 	if tx != nil {
@@ -657,7 +718,8 @@ func (r *UserRepository) FindBossByOrgAndType(ctx context.Context, tx pgx.Tx,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil 
+			// Логируем или возвращаем ошибку более понятно
+			return nil, nil // Не найден
 		}
 		return nil, err
 	}
@@ -679,8 +741,16 @@ func (r *UserRepository) UserExistsByOrgAndType(ctx context.Context, tx pgx.Tx,
             JOIN positions p ON u.position_id = p.id
             WHERE s.code = 'ACTIVE'
               AND u.deleted_at IS NULL
-              AND p.type = $1
     `
+	
+	// [FIX START] >>>
+	if isLeadershipPosition(posTypeName) {
+		query += " AND (p.type = $1 OR p.type = 'MANAGER')"
+	} else {
+		query += " AND p.type = $1"
+	}
+	// [FIX END] <<<
+
 	args := []interface{}{posTypeName}
 	argIdx := 2
 
@@ -709,7 +779,6 @@ func (r *UserRepository) UserExistsByOrgAndType(ctx context.Context, tx pgx.Tx,
 	query += `)`
 
 	var row pgx.Row
-	// ВОТ ИСПРАВЛЕНИЕ: Используем пул коннектов, если транзакции нет
 	if tx != nil {
 		row = tx.QueryRow(ctx, query, args...)
 	} else {
@@ -798,4 +867,66 @@ func (r *UserRepository) GetPositionIDsByUserIDs(ctx context.Context, userIDs []
 		}
 	}
 	return result, nil
+}
+func (r *UserRepository) SyncUserOtdels(ctx context.Context, tx pgx.Tx, userID uint64, otdelIDs []uint64) error {
+	// 1. Очистка старых (для надежности при update)
+	if _, err := tx.Exec(ctx, "DELETE FROM user_otdels WHERE user_id=$1", userID); err != nil { return err }
+	if len(otdelIDs) == 0 { return nil }
+
+	// 2. Дедупликация (убираем повторы)
+	uniq := make(map[uint64]bool); list := []uint64{}
+	for _, id := range otdelIDs {
+		if !uniq[id] { uniq[id] = true; list = append(list, id) }
+	}
+
+	// 3. Запись
+	rows := make([][]interface{}, len(list))
+	for i, id := range list { rows[i] = []interface{}{userID, id} }
+	
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"user_otdels"}, []string{"user_id", "otdel_id"}, pgx.CopyFromRows(rows))
+	return err
+}
+func (r *UserRepository) GetOtdelIDsByUserID(ctx context.Context, userID uint64) ([]uint64, error) {
+	rows, err := r.storage.Query(ctx, "SELECT otdel_id FROM user_otdels WHERE user_id=$1", userID)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var ids []uint64
+	for rows.Next() {
+		var id uint64
+		if err := rows.Scan(&id); err == nil { ids = append(ids, id) }
+	}
+	return ids, nil
+}
+func (r *UserRepository) GetOtdelIDsByUserIDs(ctx context.Context, userIDs []uint64) (map[uint64][]uint64, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+
+	query := `SELECT user_id, otdel_id FROM user_otdels WHERE user_id = ANY($1)`
+	rows, err := r.storage.Query(ctx, query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[uint64][]uint64)
+	for rows.Next() {
+		var uid, oid uint64
+		if err := rows.Scan(&uid, &oid); err == nil {
+			result[uid] = append(result[uid], oid)
+		}
+	}
+	return result, nil
+}
+func isLeadershipPosition(posType string) bool {
+	switch constants.PositionType(posType) {
+	case constants.PositionTypeHeadOfOtdel,
+		 constants.PositionTypeHeadOfDepartment,
+		 constants.PositionTypeDeputyHeadOfDepartment, 
+		 constants.PositionTypeBranchDirector,
+		 constants.PositionTypeHeadOfOffice:
+		return true
+	default:
+		return false
+	}
 }

@@ -23,7 +23,9 @@ func runTelegramRouter(
 	statusRepo repositories.StatusRepositoryInterface,
 	userRepo repositories.UserRepositoryInterface,
 	historyRepo repositories.OrderHistoryRepositoryInterface,
+	
 	authPermissionService services.AuthPermissionServiceInterface,
+	orderTypeRepo repositories.OrderTypeRepositoryInterface,
 	authMW *middleware.AuthMiddleware,
 	cfg *config.Config,
 	logger *zap.Logger,
@@ -40,6 +42,7 @@ func runTelegramRouter(
 		authPermissionService,
 		cfg.Telegram.BotToken,
 		logger,
+		orderTypeRepo,
 		cfg.Telegram,
 	)
 
