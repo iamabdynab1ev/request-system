@@ -165,11 +165,7 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyP
 
 	// 4. Флаг "Только мое участие" — показываем только создателя и текущего исполнителя
 	if onlyParticipant {
-		participantCondition := sq.Or{
-			sq.Eq{"o.user_id": actor.ID},
-			//sq.Eq{"o.executor_id": actor.ID},
-		}
-		securityBuilder = append(securityBuilder, participantCondition)
+		securityBuilder = append(securityBuilder, sq.Eq{"o.user_id": actor.ID})
 	}
 
 	// 5. Запрос в БД
@@ -423,7 +419,7 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 		}
 	}
 	
-	// Базовая защита: если нет файла и пустой JSON
+	// Базовая защита
 	if len(explicitFields) == 0 && file == nil {
 		return nil, apperrors.NewBadRequestError("Нет данных для обновления")
 	}
@@ -431,18 +427,19 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		txID := uuid.New()
 		
-		// Синхронизация времени с зоной создания (чтобы часы не скакали)
-		loc := currentOrder.CreatedAt.Location()
-		if loc == nil { loc = time.Local }
-		now := time.Now().In(loc)
+		// Синхронизация времени
+loc, _ := time.LoadLocation("Asia/Tashkent")
+if loc == nil {
+    loc = time.Local
+}
+now := time.Now().In(loc)
 
-		updated := *currentOrder
-		
-		// === ОБНОВЛЕНИЕ ПОЛЕЙ ===
-		fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
-		updated.UpdatedAt = now
+updated := *currentOrder
 
-		// === ЛОГИКА РЕРОУТИНГА (Смена ответственного при смене структуры) ===
+// === ОБНОВЛЕНИЕ ПОЛЕЙ ===
+fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
+    updated.UpdatedAt = now
+		// === ЛОГИКА РЕРОУТИНГА ===
 		structureChanged := utils.DiffPtr(currentOrder.DepartmentID, updated.DepartmentID) ||
 			utils.DiffPtr(currentOrder.OtdelID, updated.OtdelID) ||
 			utils.DiffPtr(currentOrder.BranchID, updated.BranchID) ||
@@ -465,40 +462,102 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 			fieldsChanged = true
 		}
 
-		// === ЛОГИКА МЕТРИК И СТАТУСОВ (Центральная логика SLA) ===
-		// ВАЖНО: Вся математика времени перенесена внутрь calculateMetrics,
-		// которая была исправлена вами ранее (где Reopen и т.д.).
+		// === ЛОГИКА МЕТРИК (SLA) ===
 		s.calculateMetrics(&updated, currentOrder, updateDTO, authCtx.Actor.ID, now)
 		
-		// Если метрики (SLA) обновили статус (например сбросили) или статус изменился вручную
-		if currentOrder.StatusID != updated.StatusID || currentOrder.CompletedAt != updated.CompletedAt {
+		// ✅ УЛУЧШЕННАЯ ПРОВЕРКА МЕТРИК - форсируем сохранение
+		metricsChanged := false
+
+		// Проверка FirstResponseTimeSeconds
+		if updated.FirstResponseTimeSeconds != nil {
+			if currentOrder.FirstResponseTimeSeconds == nil {
+				metricsChanged = true
+				s.logger.Info("🆕 Новая метрика: first_response_time_seconds", 
+					zap.Uint64("order_id", orderID),
+					zap.Uint64("value", *updated.FirstResponseTimeSeconds))
+			} else if *updated.FirstResponseTimeSeconds != *currentOrder.FirstResponseTimeSeconds {
+				metricsChanged = true
+				s.logger.Info("🔄 Обновлена метрика: first_response_time_seconds",
+					zap.Uint64("order_id", orderID),
+					zap.Uint64("old", *currentOrder.FirstResponseTimeSeconds),
+					zap.Uint64("new", *updated.FirstResponseTimeSeconds))
+			}
+		}
+
+		// Проверка ResolutionTimeSeconds
+		if updated.ResolutionTimeSeconds != nil {
+			if currentOrder.ResolutionTimeSeconds == nil {
+				metricsChanged = true
+				s.logger.Info("🆕 Новая метрика: resolution_time_seconds",
+					zap.Uint64("order_id", orderID),
+					zap.Uint64("value", *updated.ResolutionTimeSeconds))
+			} else if *updated.ResolutionTimeSeconds != *currentOrder.ResolutionTimeSeconds {
+				metricsChanged = true
+				s.logger.Info("🔄 Обновлена метрика: resolution_time_seconds",
+					zap.Uint64("order_id", orderID),
+					zap.Uint64("old", *currentOrder.ResolutionTimeSeconds),
+					zap.Uint64("new", *updated.ResolutionTimeSeconds))
+			}
+		}
+
+		// Проверка IsFirstContactResolution
+		if updated.IsFirstContactResolution != nil {
+			if currentOrder.IsFirstContactResolution == nil {
+				metricsChanged = true
+				s.logger.Info("🆕 Новая метрика: is_first_contact_resolution",
+					zap.Uint64("order_id", orderID),
+					zap.Bool("value", *updated.IsFirstContactResolution))
+			} else if *updated.IsFirstContactResolution != *currentOrder.IsFirstContactResolution {
+				metricsChanged = true
+				s.logger.Info("🔄 Обновлена метрика: is_first_contact_resolution",
+					zap.Uint64("order_id", orderID),
+					zap.Bool("old", *currentOrder.IsFirstContactResolution),
+					zap.Bool("new", *updated.IsFirstContactResolution))
+			}
+		}
+
+		// Проверка CompletedAt
+		if !timePointersEqual(currentOrder.CompletedAt, updated.CompletedAt) {
+			metricsChanged = true
+			s.logger.Info("🔄 Обновлена дата завершения",
+				zap.Uint64("order_id", orderID),
+				zap.Any("old", currentOrder.CompletedAt),
+				zap.Any("new", updated.CompletedAt))
+		}
+
+		if metricsChanged {
 			fieldsChanged = true
+			s.logger.Info("✅ Обнаружены изменения метрик - форсируем сохранение",
+				zap.Uint64("order_id", orderID))
 		}
 
 		// === ЛОГИРОВАНИЕ ИСТОРИИ ===
 		histChanged, err := s.detectAndLogChanges(ctx, tx, currentOrder, &updated, updateDTO, authCtx.Actor, txID, now)
 		if err != nil { return err }
 
-		// === ФАЙЛЫ ===
-		fileAttached := false
+		// Если есть файл
 		if file != nil {
 			if _, err := s.attachFileToOrderInTx(ctx, tx, orderID, authCtx.Actor.ID, file, &txID, &updated); err != nil {
 				return err
 			}
-			fileAttached = true
+			fieldsChanged = true
 		}
 
-		// Финальная проверка: было ли реальное действие?
-		if !fieldsChanged && !histChanged && !fileAttached {
+		// Если ничего не изменилось - выходим
+		if !fieldsChanged && !histChanged {
 			return apperrors.ErrNoChanges
 		}
 
 		return s.orderRepo.Update(ctx, tx, &updated)
 	})
 
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
+	// Финальный возврат обновленных данных
 	return s.FindOrderByID(ctx, orderID)
 }
+
 // detectAndLogChanges - ЯДРО логирования
 func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, new *entities.Order, dto dto.UpdateOrderDTO, actor *entities.User, txID uuid.UUID, now time.Time) (bool, error) {
 	hasLoggable := false
@@ -813,86 +872,129 @@ func (s *OrderService) buildAuthzContextWithTarget(ctx context.Context, t *entit
 }
 
 // calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
+// calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
+// calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
 func (s *OrderService) calculateMetrics(newOrder, oldOrder *entities.Order, dto dto.UpdateOrderDTO, actorID uint64, now time.Time) {
 	newStatus, _ := s.statusRepo.FindStatus(context.Background(), newOrder.StatusID)
 	newCode := ""
 	if newStatus != nil && newStatus.Code != nil { newCode = *newStatus.Code }
-
 	oldStatus, _ := s.statusRepo.FindStatus(context.Background(), oldOrder.StatusID)
 	oldCode := ""
 	if oldStatus != nil && oldStatus.Code != nil { oldCode = *oldStatus.Code }
 
-	// === 1. ВРЕМЯ ПЕРВОГО ОТКЛИКА ===
-	if oldOrder.FirstResponseTimeSeconds == nil {
-		actorIsCreator := (actorID == oldOrder.CreatorID)
-		if !actorIsCreator {
-			statusChanged := (newOrder.StatusID != oldOrder.StatusID)
-			executorChanged := utils.DiffPtr(oldOrder.ExecutorID, newOrder.ExecutorID) && newOrder.ExecutorID != nil 
-			
-			// Если исполнитель "Отклонил" или взял "В работу" - это реакция.
-			// Таймер реакции фиксируем.
-			if statusChanged || executorChanged {
-				diff := now.Sub(oldOrder.CreatedAt).Seconds()
-				if diff < 0 { diff = 0 }
-				val := uint64(diff)
-				newOrder.FirstResponseTimeSeconds = &val
-			}
+	// === ФИКС ВРЕМЕННЫХ ЗОН: Используем локальное время базы (Asia/Tashkent) ===
+loc, _ := time.LoadLocation("Asia/Tashkent")
+if loc == nil {
+	loc = time.Local // fallback на системную зону
+}
+
+// ✅ ИСПРАВЛЕНО: Конвертируем оба времени в Asia/Tashkent
+createdInTashkent := oldOrder.CreatedAt.In(loc)
+nowInTashkent := now.In(loc)
+
+// Вычисляем разницу в секундах
+diff := int64(nowInTashkent.Sub(createdInTashkent).Seconds())
+if diff < 0 { 
+	s.logger.Warn("⚠️ Отрицательная разница времени", 
+		zap.Time("created", createdInTashkent), 
+		zap.Time("now", nowInTashkent),
+		zap.Int64("diff", diff))
+	diff = 0 
+}
+val := uint64(diff)
+
+	s.logger.Info("📊 Расчёт метрик времени",
+		zap.Uint64("order_id", newOrder.ID),
+		zap.Time("created_at", createdInTashkent),
+		zap.Time("now", nowInTashkent),
+		zap.Uint64("diff_seconds", val),
+		zap.Uint64("actor_id", actorID),
+		zap.Uint64("creator_id", oldOrder.CreatorID),
+		zap.String("old_status", oldCode),
+		zap.String("new_status", newCode))
+
+	// --- 1. ВРЕМЯ ПЕРВОГО ОТКЛИКА (Reaction Time) ---
+	// ✅ ИСПРАВЛЕНО: Учитываем ТОЛЬКО действия исполнителя, а не создателя
+	if oldOrder.FirstResponseTimeSeconds == nil || *oldOrder.FirstResponseTimeSeconds == 0 {
+		// Проверяем, является ли актор исполнителем
+		isExecutorAction := false
+		
+		// Случай 1: Исполнитель уже назначен и он делает действие
+		if oldOrder.ExecutorID != nil && *oldOrder.ExecutorID == actorID {
+			isExecutorAction = true
+		}
+		
+		// Случай 2: Исполнитель только что назначен (делегация)
+		if newOrder.ExecutorID != nil && *newOrder.ExecutorID == actorID {
+			isExecutorAction = true
+		}
+		
+		hasComment := dto.Comment != nil && strings.TrimSpace(*dto.Comment) != ""
+		statusChanged := (newOrder.StatusID != oldOrder.StatusID)
+		executorChanged := (oldOrder.ExecutorID == nil && newOrder.ExecutorID != nil) || 
+						   (oldOrder.ExecutorID != nil && newOrder.ExecutorID != nil && *oldOrder.ExecutorID != *newOrder.ExecutorID)
+		
+		// ✅ Отклик = ЛЮБОЕ изменение от исполнителя
+		if isExecutorAction && (statusChanged || executorChanged || hasComment) {
+			newOrder.FirstResponseTimeSeconds = &val
+			s.logger.Info("✅ Записан первый отклик",
+				zap.Uint64("order_id", newOrder.ID),
+				zap.Uint64("seconds", val),
+				zap.Bool("status_changed", statusChanged),
+				zap.Bool("executor_changed", executorChanged),
+				zap.Bool("has_comment", hasComment))
+		} else {
+			s.logger.Info("⏭️ Первый отклик не записан",
+				zap.Uint64("order_id", newOrder.ID),
+				zap.Bool("is_executor", isExecutorAction),
+				zap.Bool("status_changed", statusChanged),
+				zap.Bool("executor_changed", executorChanged),
+				zap.Bool("has_comment", hasComment))
 		}
 	}
 
-	// === 2. ВРЕМЯ РЕШЕНИЯ (RESOLUTION TIME) ===
-	// Часы останавливаем ТОЛЬКО на Успехе (COMPLETED) или Закрытии (CLOSED).
-	// REJECTED - таймер НЕ останавливает, т.к. задача еще не решена, ее просто отфутболили.
-	isSolvedEvent := (newCode == "COMPLETED" || newCode == "CLOSED")
-	wasSolved := (oldCode == "COMPLETED" || oldCode == "CLOSED")
-
-	if isSolvedEvent {
-		// Если время решения еще не зафиксировано, или мы перешли из "Рабочего" (включая REJECTED) в "Готово"
-		// ИЛИ если переходим из COMPLETED -> CLOSED (время не меняем, оставляем как было при COMPLETED)
-		
-		shouldCalculate := false
-		if oldOrder.ResolutionTimeSeconds == nil {
-			shouldCalculate = true
-		} else {
-			// Если перешли из "В работе" сразу в "Закрыто" -> Считаем.
-			// Если из "Выполнено" в "Закрыто" -> НЕ считаем (время уже зафиксировано).
-			if oldCode != "COMPLETED" && oldCode != "CLOSED" {
-				shouldCalculate = true
-			}
-		}
-
-		if shouldCalculate {
+	// --- 2. ВРЕМЯ РЕШЕНИЯ (Resolution Time) ---
+	if newCode == "CLOSED" {
+		if oldOrder.ResolutionTimeSeconds == nil || *oldOrder.ResolutionTimeSeconds == 0 {
 			newOrder.CompletedAt = &now
-			diff := now.Sub(newOrder.CreatedAt).Seconds()
-			if diff < 0 { diff = 0 }
-			val := uint64(diff)
 			newOrder.ResolutionTimeSeconds = &val
-
-			// FCR Check
-			if newOrder.FirstResponseTimeSeconds != nil {
-				resp := *newOrder.FirstResponseTimeSeconds
-				if val >= resp && (val - resp) < 600 {
-					t := true; newOrder.IsFirstContactResolution = &t
-				} else {
-					f := false; newOrder.IsFirstContactResolution = &f
-				}
+			
+			// SLA FCR: Решено за 10 минут (600 секунд)
+			if val <= 600 { 
+				t := true
+				newOrder.IsFirstContactResolution = &t 
 			} else {
-				t := true; newOrder.IsFirstContactResolution = &t
-				newOrder.FirstResponseTimeSeconds = &val
+				f := false
+				newOrder.IsFirstContactResolution = &f
 			}
+			
+			// Если закрыли сразу без отклика, то отклик = решению
+			if newOrder.FirstResponseTimeSeconds == nil || *newOrder.FirstResponseTimeSeconds == 0 {
+				newOrder.FirstResponseTimeSeconds = &val
+				s.logger.Info("📝 Первый отклик установлен равным времени решения",
+					zap.Uint64("order_id", newOrder.ID),
+					zap.Uint64("seconds", val))
+			}
+			
+			s.logger.Info("✅ Заявка закрыта - записано время решения",
+				zap.Uint64("order_id", newOrder.ID),
+				zap.Uint64("resolution_seconds", val),
+				zap.Bool("is_fcr", val <= 600))
 		}
 	} 
-	
-	// Если вернули обратно в работу (REOPEN)
-	// Например: CLOSED -> IN_PROGRESS
-	// Или COMPLETED -> REJECTED (Отклонили решение, сказали "Переделай" или "Передай другому")
-	if wasSolved && !isSolvedEvent {
+
+	// --- 3. ПЕРЕОТКРЫТИЕ (Reopen) ---
+	if oldCode == "CLOSED" && newCode != "CLOSED" {
+		s.logger.Info("🔄 Переоткрытие заявки - сброс метрик",
+			zap.Uint64("order_id", newOrder.ID),
+			zap.String("old_status", oldCode),
+			zap.String("new_status", newCode))
+		
 		newOrder.CompletedAt = nil
-		newOrder.ResolutionTimeSeconds = nil // Сбрасываем время, часы снова тикают
+		newOrder.ResolutionTimeSeconds = nil 
 		newOrder.IsFirstContactResolution = nil
 	}
 }
-
 // --- Utils wrappers ---
 func (s *OrderService) addHistoryAndPublish(ctx context.Context, tx pgx.Tx, item *repositories.OrderHistoryItem, o entities.Order, a *entities.User) error {
 	if err := s.historyRepo.CreateInTx(ctx, tx, item); err != nil {

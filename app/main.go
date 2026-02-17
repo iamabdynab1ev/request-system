@@ -36,18 +36,23 @@ import (
 )
 
 func main() {
-	// 1. ИНИЦИАЛИЗАЦИЯ
-	
+ loc, err := time.LoadLocation("Asia/Tashkent")
+if err != nil {
+    log.Printf("⚠️ Не удалось загрузить Asia/Tashkent: %v", err)
+    loc = time.Local
+}
+time.Local = loc
+log.Printf("✅ Временная зона установлена: %s", time.Local.String())
 
 	os.Setenv("HTTP_PROXY", "http://192.168.10.42:3128")
 	os.Setenv("HTTPS_PROXY", "http://192.168.10.42:3128")
 
 	os.Setenv("NO_PROXY", "localhost,127.0.0.1,192.168.10.79,arvand.local,192.168.10.42,192.168.10.15,192.168.10.14")
-	// Флаги для сидеров
+	
 	runCore := flag.Bool("core", false, "Наполнение базовых справочников")
 	runRoles := flag.Bool("roles", false, "Создание ролей и Рут-Админа")
 	runAll := flag.Bool("all", false, "Запустить все сидеры сразу")
-	// Флаи для импорта оборудования из файлов
+
 	importAtms := flag.String("import-atms", "", "Путь к файлу банкоматов .xlsx")
     importTerms := flag.String("import-terms", "", "Путь к файлу терминалов .xlsx")
     importPos := flag.String("import-pos", "", "Путь к файлу ПОС-терминалов .xlsx")
@@ -94,10 +99,10 @@ func main() {
         }
 
         log.Println("✅ Все операции выполнены успешно.")
-        return // После сидирования сервер НЕ запускается
+        return
     }
 
-	// 3. ОБЫЧНЫЙ ЗАПУСК СЕРВЕРА
+	
 	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel == "" { logLevel = "info" }
 	
@@ -175,18 +180,15 @@ func main() {
 
 	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, adService, appCtx)
 
-	// ==========================================================
-	// 4. ЗАПУСК СЕРВЕРА С ПРАВИЛЬНЫМ TLS
-	// ==========================================================
+
 	serverAddress := ":" + cfg.Server.Port
 	certPath := cfg.Server.CertFile
 	keyPath := cfg.Server.KeyFile
 
-	// Настройка для совместимости со старым софтом и браузерами
+
 	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12, // Если 1С совсем старая, поставьте tls.VersionTLS10
-		// CurvePreferences: []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256}, // Улучшает совместимость
-		// CipherSuites - можно добавить старые, если 1С не цепляется
+		MinVersion: tls.VersionTLS12,
+		
 	}
 
 	s := &http.Server{

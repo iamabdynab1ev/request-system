@@ -3,7 +3,6 @@ package config
 import (
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -11,42 +10,17 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type SeederConfig struct {
-	AdminEmail    string
-	AdminPassword string
-}
-type FrontendConfig struct {
-	BaseURL string
-}
-type OnlineBankConfig struct {
-	BaseURL  string
-	Username string
-	Password string
-}
-
-type ProviderConfigs struct {
-	OnlineBank OnlineBankConfig
-}
-
-type IntegrationsConfig struct {
-	ActiveProvider         string
-	Providers              ProviderConfigs
-	OneCApiKey             string
-	DefaultRolesFor1CUsers []string
-}
-type AuthConfig struct {
-	ResetTokenTTL       time.Duration
-	VerificationCodeTTL time.Duration
-	MaxResetAttempts    int
-	MaxLoginAttempts    int
-	LockoutDuration     time.Duration
-	SystemRootLogin     string
-}
-
-type JWTConfig struct {
-	SecretKey       string
-	AccessTokenTTL  time.Duration
-	RefreshTokenTTL time.Duration
+type Config struct {
+	Server       ServerConfig
+	Postgres     PostgresConfig
+	Redis        RedisConfig
+	JWT          JWTConfig
+	Auth         AuthConfig
+	Integrations IntegrationsConfig
+	Telegram     TelegramConfig
+	Frontend     FrontendConfig
+	LDAP         LDAPConfig
+	Seeder       SeederConfig
 }
 
 type ServerConfig struct {
@@ -65,14 +39,42 @@ type RedisConfig struct {
 	Address  string
 	Password string
 }
+
+type JWTConfig struct {
+	SecretKey       string
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+}
+
+type AuthConfig struct {
+	ResetTokenTTL       time.Duration
+	VerificationCodeTTL time.Duration
+	MaxResetAttempts    int
+	MaxLoginAttempts    int
+	LockoutDuration     time.Duration
+	SystemRootLogin     string
+}
+
+type IntegrationsConfig struct {
+	ActiveProvider         string
+	OneCApiKey             string
+	DefaultRolesFor1CUsers []string
+	OnlineBank             OnlineBankConfig
+}
+
+type OnlineBankConfig struct {
+	BaseURL  string
+	Username string
+	Password string
+}
+
 type TelegramConfig struct {
 	BotToken     string
 	AdvancedMode bool
 }
-type NotificationConfig struct {
-	Enabled              bool
-	OverdueCheckInterval int
-	ReminderThreshold    int
+
+type FrontendConfig struct {
+	BaseURL string
 }
 
 type LDAPConfig struct {
@@ -81,7 +83,9 @@ type LDAPConfig struct {
 	Port    int
 	Domain  string
 
-	SearchEnabled       bool
+	// Исправлено: Возвращаем пропущенное поле
+	SearchEnabled bool
+
 	BindDN              string
 	BindPassword        string
 	SearchBaseDN        string
@@ -90,115 +94,87 @@ type LDAPConfig struct {
 	UsernameAttribute   string
 	FIOAttribute        string
 }
-type Config struct {
-	Server       ServerConfig
-	Postgres     PostgresConfig
-	Redis        RedisConfig
-	JWT          JWTConfig
-	Auth         AuthConfig
-	Integrations IntegrationsConfig
-	Telegram     TelegramConfig
-	Frontend     FrontendConfig
-	LDAP         LDAPConfig
-	Seeder       SeederConfig
+
+type SeederConfig struct {
+	AdminEmail    string
+	AdminPassword string
 }
 
+// New инициализирует конфигурацию, считывая .env
 func New() *Config {
-	// 1. Получаем абсолютный путь к папке, где запущен терминал
-	pwd, _ := os.Getwd()
-	envPath := filepath.Join(pwd, ".env")
-
-	log.Printf("🔍 Проверка файла настроек по пути: %s", envPath)
-
-	// 2. Проверяем физическое наличие файла средствами ОС
-	if _, err := os.Stat(envPath); os.IsNotExist(err) {
-		log.Printf("❌ ФАЙЛ НЕ НАЙДЕН ПО ПУТИ: %s", envPath)
+	// Если мы не в продакшене, пробуем загрузить .env, но не паникуем, если его нет
+	if err := godotenv.Load(); err != nil {
+		log.Println("⚠️  Файл .env не найден или не может быть загружен. Используются системные переменные окружения.")
 	} else {
-		// 3. Пытаемся загрузить найденный файл
-		err := godotenv.Load(envPath)
-		if err != nil {
-			log.Printf("⚠️  Файл найден, но ошибка чтения (проверьте кодировку UTF-8): %v", err)
-		} else {
-			log.Println("✅ Файл .env успешно загружен!")
-		}
+		log.Println("✅ Файл .env загружен.")
 	}
-	seedEmail := getEnv("SEED_ADMIN_EMAIL", "")
-	seedPass := getEnv("SEED_ADMIN_PASSWORD", "")
-	ldapPort, err := strconv.Atoi(getEnv("LDAP_PORT", "389"))
-	if err != nil {
-		log.Printf("Предупреждение: неверный формат LDAP_PORT, используется значение по умолчанию 389. Ошибка: %v", err)
-		ldapPort = 389
-	}
-	telegramAdvancedMode := strings.ToLower(getEnv("TELEGRAM_ADVANCED_MODE_ENABLED", "false")) == "true"
-	ldapEnabled := strings.ToLower(getEnv("LDAP_ENABLED", "false")) == "true"
-	ldapSearchEnabled := strings.ToLower(getEnv("LDAP_SEARCH_ENABLED", "false")) == "true"
-	return &Config{
+
+	cfg := &Config{
 		Server: ServerConfig{
 			Port:           getEnv("SERVER_PORT", "8091"),
-			BaseURL:        getEnv("SERVER_BASE_URL", ""),
-			AllowedOrigins: strings.Split(getEnv("ALLOWED_ORIGINS", "https://localhost:4040"), ","),
-			CertFile:       getEnv("SSL_CERT_PATH", "server.crt"),
-			KeyFile:        getEnv("SSL_KEY_PATH", "server.key"),
+			BaseURL:        getEnv("SERVER_BASE_URL", "https://localhost:8091"),
+			AllowedOrigins: strings.Split(getEnv("ALLOWED_ORIGINS", "*"), ","),
+			CertFile:       getEnv("SSL_CERT_PATH", "./certs/server.crt"),
+			KeyFile:        getEnv("SSL_KEY_PATH", "./certs/server.key"),
 		},
 		Postgres: PostgresConfig{
-			DSN: getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/request-system?sslmode=disable"),
+			DSN: getRequiredEnv("DATABASE_URL"),
 		},
 		Redis: RedisConfig{
 			Address:  getEnv("REDIS_ADDRESS", "localhost:6379"),
 			Password: getEnv("REDIS_PASSWORD", ""),
 		},
 		JWT: JWTConfig{
-			SecretKey:       getEnv("JWT_SECRET_KEY", "9A4D2AD385B2BAA8DC78F558B548F"),
+			SecretKey:       getRequiredEnv("JWT_SECRET_KEY"),
 			AccessTokenTTL:  time.Hour * 24,
 			RefreshTokenTTL: time.Hour * 24 * 30,
 		},
 		Auth: AuthConfig{
 			MaxResetAttempts:    5,
 			MaxLoginAttempts:    5,
-			LockoutDuration:     time.Minute * 15,
-			ResetTokenTTL:       time.Minute * 15,
-			VerificationCodeTTL: time.Minute * 15,
-			SystemRootLogin:     strings.ToLower(seedEmail),
+			LockoutDuration:     15 * time.Minute,
+			ResetTokenTTL:       15 * time.Minute,
+			VerificationCodeTTL: 15 * time.Minute,
+			SystemRootLogin:     strings.ToLower(getEnv("SEED_ADMIN_EMAIL", "admin@local")),
 		},
 		Seeder: SeederConfig{
-			AdminEmail:    seedEmail,
-			AdminPassword: seedPass,
+			AdminEmail:    getEnv("SEED_ADMIN_EMAIL", ""),
+			AdminPassword: getEnv("SEED_ADMIN_PASSWORD", ""),
 		},
 		Integrations: IntegrationsConfig{
 			ActiveProvider:         getEnv("INTEGRATION_ACTIVE_PROVIDER", "mock"),
 			OneCApiKey:             getEnv("ONE_C_API_KEY", ""),
-			DefaultRolesFor1CUsers: strings.Split(getEnv("DEFAULT_ROLES_FOR_1C_USERS", ""), ","),
-			Providers: ProviderConfigs{
-				OnlineBank: OnlineBankConfig{
-					BaseURL:  getEnv("ONLINEBANK_BASE_URL", ""),
-					Username: getEnv("ONLINEBANK_USERNAME", ""),
-					Password: getEnv("ONLINEBANK_PASSWORD", ""),
-				},
+			DefaultRolesFor1CUsers: parseList(getEnv("DEFAULT_ROLES_FOR_1C_USERS", "USER")),
+			OnlineBank: OnlineBankConfig{
+				BaseURL:  getEnv("ONLINEBANK_BASE_URL", ""),
+				Username: getEnv("ONLINEBANK_USERNAME", ""),
+				Password: getEnv("ONLINEBANK_PASSWORD", ""),
 			},
 		},
 		Telegram: TelegramConfig{
 			BotToken:     getEnv("TELEGRAM_BOT_TOKEN", ""),
-			AdvancedMode: telegramAdvancedMode,
+			AdvancedMode: getEnvAsBool("TELEGRAM_ADVANCED_MODE_ENABLED", false),
 		},
 		Frontend: FrontendConfig{
-			BaseURL: getEnv("FRONTEND_BASE_URL", ""),
+			BaseURL: getEnv("FRONTEND_BASE_URL", "http://localhost:3000"),
 		},
 		LDAP: LDAPConfig{
-			Enabled: ldapEnabled,
-			Host:    getEnv("LDAP_HOST", "arvand.local"),
-			Port:    ldapPort,
-			Domain:  getEnv("LDAP_DOMAIN", "arvand"),
-
-			SearchEnabled:       ldapSearchEnabled,
-			BindDN:              getEnv("LDAP_BIND_DN", ""),
-			BindPassword:        getEnv("LDAP_BIND_PASSWORD", ""),
-			SearchBaseDN:        getEnv("LDAP_SEARCH_BASE_DN", "DC=arvand,DC=local"),
-			SearchFilterPattern: getEnv("LDAP_SEARCH_FILTER_PATTERN", "(&(objectClass=person)(|(sAMAccountName=*%s*)(displayName=*%s*)))"),
-			SearchAttributes:    strings.Split(getEnv("LDAP_SEARCH_ATTRIBUTES", "sAMAccountName,displayName"), ","),
+			Enabled:       getEnvAsBool("LDAP_ENABLED", false),
+			SearchEnabled: getEnvAsBool("LDAP_SEARCH_ENABLED", false), // <-- Вернули чтение переменной
+			Host:          getEnv("LDAP_HOST", "ldap.local"),
+			Port:          getEnvAsInt("LDAP_PORT", 389),
+			Domain:        getEnv("LDAP_DOMAIN", ""),
+			BindDN:        getEnv("LDAP_BIND_DN", ""),
+			BindPassword:  getEnv("LDAP_BIND_PASSWORD", ""),
+			SearchBaseDN:  getEnv("LDAP_SEARCH_BASE_DN", ""),
+			SearchFilterPattern: getEnv("LDAP_SEARCH_FILTER_PATTERN", "(&(objectClass=person)(sAMAccountName=%s))"),
+			SearchAttributes:    parseList(getEnv("LDAP_SEARCH_ATTRIBUTES", "sAMAccountName,displayName,mail")),
 			UsernameAttribute:   getEnv("LDAP_SEARCH_ATTR_USERNAME", "sAMAccountName"),
 			FIOAttribute:        getEnv("LDAP_SEARCH_ATTR_FIO", "displayName"),
 		},
 	}
+
+	return cfg
 }
 
 func getEnv(key, fallback string) string {
@@ -206,4 +182,49 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// getRequiredEnv падает, если переменной нет (Fail Fast)
+func getRequiredEnv(key string) string {
+	value, exists := os.LookupEnv(key)
+	if !exists || value == "" {
+		log.Fatalf("❌ Критическая ошибка конфигурации: переменная окружения '%s' обязательна, но не установлена.", key)
+	}
+	return value
+}
+
+func getEnvAsBool(key string, fallback bool) bool {
+	valStr := getEnv(key, "")
+	if valStr == "" {
+		return fallback
+	}
+	// true, TRUE, True, 1 -> true
+	val, err := strconv.ParseBool(valStr)
+	if err != nil {
+		return fallback
+	}
+	return val
+}
+
+func getEnvAsInt(key string, fallback int) int {
+	valStr := getEnv(key, "")
+	if valStr == "" {
+		return fallback
+	}
+	val, err := strconv.Atoi(valStr)
+	if err != nil {
+		return fallback
+	}
+	return val
+}
+
+func parseList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }

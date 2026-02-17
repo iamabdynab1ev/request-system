@@ -61,75 +61,58 @@ func NewRuleEngineService(
 
 // ResolveExecutor - Точка входа для поиска исполнителя
 func (s *RuleEngineService) ResolveExecutor(ctx context.Context, tx pgx.Tx, orderCtx OrderContext, explicitExecutorID *uint64) (*RoutingResult, error) {
-	// 1. Явный исполнитель (если выбрали вручную при создании)
+	// 1. Если исполнитель выбран вручную — берем его (тут без изменений)
 	if explicitExecutorID != nil {
 		user, err := s.userRepo.FindUserByIDInTx(ctx, tx, *explicitExecutorID)
-		if err != nil {
-			return nil, apperrors.NewHttpError(http.StatusBadRequest, "Указанный исполнитель не найден", err, nil)
-		}
-		return &RoutingResult{
-			Executor:  *user,
-			StatusID:  0,
-			RuleFound: false,
-		}, nil
+		if err != nil { return nil, apperrors.NewHttpError(http.StatusBadRequest, "Исполнитель не найден", err, nil) }
+		return &RoutingResult{Executor: *user, StatusID: 0, RuleFound: false}, nil
 	}
 
-	// 2. Попытка найти ПРАВИЛО в таблице order_routing_rules (Специальные маршруты)
+	// 2. Ищем ПРАВИЛО в БД
 	query := `
-		SELECT assign_to_position_id, status_id
+		SELECT assign_to_position_id, status_id, department_id, otdel_id, branch_id, office_id
 		FROM order_routing_rules
-		WHERE 
-			(order_type_id IS NULL OR order_type_id = $1)
+		WHERE (order_type_id IS NULL OR order_type_id = $1)
 			AND (department_id IS NULL OR department_id = $2)
 			AND (otdel_id IS NULL OR otdel_id = $3)
 			AND (branch_id IS NULL OR branch_id = $4)
 			AND (office_id IS NULL OR office_id = $5)
-		ORDER BY 
-			order_type_id NULLS LAST, 
-			otdel_id NULLS LAST,
-			office_id NULLS LAST,
-			department_id NULLS LAST, 
-			branch_id NULLS LAST
+		ORDER BY order_type_id NULLS LAST, otdel_id NULLS LAST, office_id NULLS LAST, department_id NULLS LAST, branch_id NULLS LAST
 		LIMIT 1
 	`
-
 	var targetPositionID *int
 	var targetStatusID int
+	var ruleDept, ruleOtdel, ruleBranch, ruleOffice *uint64
 
-	err := tx.QueryRow(ctx, query,
-		orderCtx.OrderTypeID,
-		orderCtx.DepartmentID,
-		orderCtx.OtdelID,
-		orderCtx.BranchID,
-		orderCtx.OfficeID,
-	).Scan(&targetPositionID, &targetStatusID)
+	err := tx.QueryRow(ctx, query, orderCtx.OrderTypeID, orderCtx.DepartmentID, orderCtx.OtdelID, orderCtx.BranchID, orderCtx.OfficeID).
+		Scan(&targetPositionID, &targetStatusID, &ruleDept, &ruleOtdel, &ruleBranch, &ruleOffice)
 
-	
+	// 3. Если правила НЕТ вообще — идем в стандартный Waterfall
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			s.logger.Info("Правило не найдено. Запуск поиска по иерархии (Priority Waterfall)", zap.Uint64("type", orderCtx.OrderTypeID))
-
-			// Если правило не найдено — ищем начальника автоматически по жесткой иерархии
 			return s.resolveByHierarchy(ctx, tx, orderCtx)
 		}
-		return nil, fmt.Errorf("ошибка SQL: %w", err)
+		return nil, fmt.Errorf("ошибка SQL правил: %w", err)
 	}
 
-	if targetPositionID == nil {
-		return nil, apperrors.NewHttpError(http.StatusInternalServerError, "В правиле маршрутизации не указана должность", nil, nil)
-	}
-
-	// 3. Если правило найдено — ищем человека с этой должностью
+	// 4. ПРАВИЛО ЕСТЬ — пробуем найти по нему конкретного человека
 	foundUser, err := s.findUserByPositionAndStructure(ctx, tx, *targetPositionID, orderCtx)
-	if err != nil {
-		return nil, err
+	
+	if err == nil {
+		return &RoutingResult{Executor: *foundUser, StatusID: targetStatusID, RuleFound: true}, nil
 	}
 
-	return &RoutingResult{
-		Executor:  *foundUser,
-		StatusID:  targetStatusID,
-		RuleFound: true,
-	}, nil
+	// 5. 🔥 САМОЕ ВАЖНОЕ: Если по правилу человека НЕ НАШЛИ (позиция пуста),
+	// мы НЕ выдаем ошибку, а отдаем заявку в Waterfall, но с учетом структуры из правила!
+	s.logger.Info("Человек по должности из правила не найден, использую запасной поиск (Hierarchy Fallback)")
+	
+	// Подменяем контекст данными из правила, если они там указаны
+	if ruleDept != nil { orderCtx.DepartmentID = *ruleDept }
+	if ruleOtdel != nil { orderCtx.OtdelID = ruleOtdel }
+	if ruleBranch != nil { orderCtx.BranchID = ruleBranch }
+	if ruleOffice != nil { orderCtx.OfficeID = ruleOffice }
+
+	return s.resolveByHierarchy(ctx, tx, orderCtx)
 }
 
 func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d OrderContext) (*RoutingResult, error) {
@@ -242,9 +225,7 @@ func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d
 }
 func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, tx pgx.Tx, posID int, ctxData OrderContext) (*entities.User, error) {
 	positionID := uint64(posID)
-
 	shouldIgnoreBranch := (ctxData.DepartmentID != 0 || ctxData.OtdelID != nil)
-
 
 	query := `
 		SELECT DISTINCT u.id, u.fio, u.email, u.position_id, u.department_id, u.branch_id 
@@ -257,38 +238,26 @@ func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, 
 	`
 	args := []interface{}{positionID}
 	argIdx := 2
-
-
+	
 	if ctxData.DepartmentID != 0 {
 		query += fmt.Sprintf(" AND (u.department_id = $%d OR u.department_id IS NULL)", argIdx)
-		args = append(args, ctxData.DepartmentID)
-		argIdx++
+		args = append(args, ctxData.DepartmentID); argIdx++
 	}
-
 	if ctxData.OtdelID != nil {
 		query += fmt.Sprintf(" AND (u.otdel_id = $%d OR u.otdel_id IS NULL)", argIdx)
-		args = append(args, *ctxData.OtdelID)
-		argIdx++
+		args = append(args, *ctxData.OtdelID); argIdx++
 	}
-
 	if !shouldIgnoreBranch && ctxData.BranchID != nil {
 		query += fmt.Sprintf(" AND (u.branch_id = $%d OR u.branch_id IS NULL)", argIdx)
-		args = append(args, *ctxData.BranchID)
-		argIdx++
+		args = append(args, *ctxData.BranchID); argIdx++
 	}
-
 
 	query += " ORDER BY u.id ASC LIMIT 1"
 
 	var u entities.User
 	err := tx.QueryRow(ctx, query, args...).Scan(&u.ID, &u.Fio, &u.Email, &u.PositionID, &u.DepartmentID, &u.BranchID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-	
-			return nil, apperrors.NewHttpError(http.StatusBadRequest,
-				"Правило найдено (должность определена), но активный сотрудник не найден. Проверьте штатную структуру.", nil, nil)
-		}
-		return nil, err
+		return nil, err // Если не нашли — ResolveExecutor поймает ошибку и запустит Hierarchy Search
 	}
 	return &u, nil
 }
@@ -304,4 +273,18 @@ func (s *RuleEngineService) GetPredefinedRoute(ctx context.Context, tx pgx.Tx, o
 		return nil, err
 	}
 	return &res, nil
+}
+func (s *RuleEngineService) getDeputyType(mainType constants.PositionType) constants.PositionType {
+	switch mainType {
+	case constants.PositionTypeHeadOfDepartment:
+		return constants.PositionTypeDeputyHeadOfDepartment
+	case constants.PositionTypeHeadOfOtdel:
+		return constants.PositionTypeDeputyHeadOfOtdel
+	case constants.PositionTypeBranchDirector:
+		return constants.PositionTypeDeputyBranchDirector
+	case constants.PositionTypeHeadOfOffice:
+		return constants.PositionTypeDeputyHeadOfOffice
+	default:
+		return ""
+	}
 }

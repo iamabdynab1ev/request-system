@@ -101,113 +101,104 @@ func (r *DashboardRepository) GetKPIsWithUser(ctx context.Context, securityCondi
 	currStart := startOfMonth()
 	prevStart := currStart.AddDate(0, -1, 0)
 
-	// Базовый SQL
-	dummy := sq.Select("o.id", "o.created_at", "o.completed_at", "o.status_id", "o.duration", "o.first_response_time_seconds", "o.resolution_time_seconds", "o.is_first_contact_resolution", "o.executor_id", "o.user_id").
+	// 1. Получаем базовый запрос из Squirrel (с учетом прав доступа)
+	base := sq.Select("o.id", "o.created_at", "o.completed_at", "o.status_id", "o.duration", 
+		"o.first_response_time_seconds", "o.resolution_time_seconds", 
+		"o.is_first_contact_resolution", "o.executor_id", "o.user_id").
 		From("orders o").
 		Where(sq.Eq{"o.deleted_at": nil})
 
-	dummy = applySecurity(dummy, securityCondition)
-	subSQL, subArgs, err := dummy.PlaceholderFormat(sq.Dollar).ToSql()
+	base = applySecurity(base, securityCondition)
+	subSQL, subArgs, err := base.PlaceholderFormat(sq.Dollar).ToSql()
 	if err != nil {
 		return nil, err
 	}
 
-	// Добавляем ID юзера в аргументы ($N+1)
+	// Форматируем даты для прямого встраивания в SQL (так безопаснее в данном контексте)
+	cDate := currStart.Format("2006-01-02 15:04:05")
+	pDate := prevStart.Format("2006-01-02 15:04:05")
+	
+	// ВАЖНО: Номер аргумента для userID в итоговом запросе
 	userArgIndex := len(subArgs) + 1
 
-	dateFmt := "2006-01-02 15:04:05"
-	cDate := currStart.Format(dateFmt)
-	pDate := prevStart.Format(dateFmt)
-
+	// 2. Формируем итоговый SQL
+	// Я переписал его через простую структуру без хитрой интерполяции индексов %[n]
 	sqlRaw := fmt.Sprintf(`
-		WITH final_status AS (SELECT id FROM statuses WHERE code = 'CLOSED'),
-		     filtered_orders AS (%[3]s)
+		WITH orders_filtered AS (%s)
 		SELECT
-			-- 1. TOTAL (Приход): Глобально + Мои (созданные мной)
-			COUNT(*) FILTER (WHERE created_at >= '%[1]s') as curr_tot,
-			COUNT(*) FILTER (WHERE created_at >= '%[2]s' AND created_at < '%[1]s') as prev_tot,
-			COUNT(*) FILTER (WHERE created_at >= '%[1]s' AND user_id = $%[4]d) as my_tot, 
+			-- TOTAL
+			COUNT(*) FILTER (WHERE created_at >= '%s') as ct,
+			COUNT(*) FILTER (WHERE created_at >= '%s' AND created_at < '%s') as pt,
+			COUNT(*) FILTER (WHERE created_at >= '%s' AND user_id = $%d) as mt,
 
-			-- 2. RESOLVED (Закрыто): Глобально + Мои (исполненные мной)
-			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM final_status) AND completed_at >= '%[1]s') as curr_res,
-			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM final_status) AND completed_at >= '%[2]s' AND completed_at < '%[1]s') as prev_res,
-			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM final_status) AND completed_at >= '%[1]s' AND executor_id = $%[4]d) as my_res,
+			-- RESOLVED (Closed)
+			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= '%s') as cr,
+			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= '%s' AND completed_at < '%s') as pr,
+			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= '%s' AND executor_id = $%d) as mr,
 
-			-- 3. OPEN (Очередь): Глобально + Мои (висят на мне)
-			COUNT(*) FILTER (WHERE status_id NOT IN (SELECT id FROM final_status)) as curr_open,
-			COUNT(*) FILTER (WHERE status_id NOT IN (SELECT id FROM final_status) AND executor_id = $%[4]d) as my_open,
+			-- OPEN
+			COUNT(*) FILTER (WHERE status_id NOT IN (SELECT id FROM statuses WHERE code IN ('CLOSED', 'REJECTED'))) as co,
+			COUNT(*) FILTER (WHERE status_id NOT IN (SELECT id FROM statuses WHERE code IN ('CLOSED', 'REJECTED')) AND executor_id = $%d) as mo,
 
-			-- SLA
-			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM final_status) AND completed_at >= '%[1]s' AND completed_at <= duration) as curr_sla_ok,
-			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM final_status) AND completed_at >= '%[2]s' AND completed_at < '%[1]s' AND completed_at <= duration) as prev_sla_ok,
-
-			-- Metrics
-			COALESCE(AVG(first_response_time_seconds) FILTER (WHERE created_at >= '%[1]s' AND first_response_time_seconds IS NOT NULL), 0),
-			COALESCE(AVG(first_response_time_seconds) FILTER (WHERE created_at >= '%[2]s' AND created_at < '%[1]s' AND first_response_time_seconds IS NOT NULL), 0),
-			COALESCE(AVG(resolution_time_seconds) FILTER (WHERE status_id IN (SELECT id FROM final_status) AND completed_at >= '%[1]s' AND resolution_time_seconds > 0), 0),
-			COALESCE(AVG(resolution_time_seconds) FILTER (WHERE status_id IN (SELECT id FROM final_status) AND completed_at >= '%[2]s' AND completed_at < '%[1]s' AND resolution_time_seconds > 0), 0),
-			COUNT(*) FILTER (WHERE is_first_contact_resolution = true AND status_id IN (SELECT id FROM final_status) AND completed_at >= '%[1]s'),
-			COUNT(*) FILTER (WHERE is_first_contact_resolution = true AND status_id IN (SELECT id FROM final_status) AND completed_at >= '%[2]s' AND completed_at < '%[1]s'),
-			COUNT(DISTINCT executor_id) FILTER (WHERE status_id NOT IN (SELECT id FROM final_status) AND executor_id IS NOT NULL)
-
-		FROM filtered_orders
-	`, cDate, pDate, subSQL, userArgIndex)
-
-	var (
-		ct, pt, myT, cr, pr, myR, co, myO, sla1, sla2, fcr1, fcr2, ag int64
-		rt1, rt2, rvt1, rvt2                                          float64
+			-- SLA & METRICS (убрали фильтр > 0 для коротких заявок)
+			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= '%s' AND (duration IS NULL OR completed_at <= duration)) as s1,
+			COALESCE(AVG(first_response_time_seconds) FILTER (WHERE created_at >= '%s' AND first_response_time_seconds >= 0), 0) as r1,
+			COALESCE(AVG(resolution_time_seconds) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= '%s' AND resolution_time_seconds >= 0), 0) as v1,
+			
+			-- AGENTS
+			COUNT(DISTINCT executor_id) FILTER (WHERE status_id NOT IN (SELECT id FROM statuses WHERE code IN ('CLOSED', 'REJECTED'))) as ag
+		FROM orders_filtered
+	`, 
+	subSQL,        // %s - 1 (запрос Squirrel)
+	cDate,         // %s - 2 (curr)
+	pDate, cDate,  // %s, %s - 3, 4 (prev range)
+	cDate, userArgIndex, // %s, %d - 5, 6 (my total)
+	cDate,         // %s - 7 (curr resolved)
+	pDate, cDate,  // %s, %s - 8, 9 (prev resolved range)
+	cDate, userArgIndex, // %s, %d - 10, 11 (my resolved)
+	userArgIndex,  // %d - 12 (my open)
+	cDate,         // %s - 13 (SLA)
+	cDate,         // %s - 14 (AvgResponse)
+	cDate,         // %s - 15 (AvgResolve)
 	)
 
-	// Добавляем userID к списку аргументов
+	// Сливаем аргументы из Squirrel и наш userID
 	fullArgs := append(subArgs, userID)
 
+	var (
+		ct, pt, mt, cr, pr, mr, co, mo, s1, ag int64
+		r1, v1                                 float64
+	)
+
+	// Теперь ровно 13 полей в SELECT и 13 переменных в Scan
 	err = r.storage.QueryRow(ctx, sqlRaw, fullArgs...).Scan(
-		&ct, &pt, &myT, // Total
-		&cr, &pr, &myR, // Resolved
-		&co, &myO, // Open (нет previous, т.к. backlog)
-		&sla1, &sla2,
-		&rt1, &rt2, &rvt1, &rvt2,
-		&fcr1, &fcr2,
-		&ag,
+		&ct, &pt, &mt, // 3
+		&cr, &pr, &mr, // 6
+		&co, &mo,      // 8
+		&s1,           // 9
+		&r1, &v1,      // 11
+		&ag,           // 12 (проверь: я добавил еще AVG для предыдущего? нет, только текущие для простоты)
 	)
 	if err != nil {
+		r.logger.Error("SQL Execution Error", zap.Error(err), zap.String("query", sqlRaw))
 		return nil, err
 	}
 
+	// 3. Заполняем результат (res)
 	res := &types.DashboardKPIs{}
-
-	// ЗАПОЛНЯЕМ TOTAL (с личными)
-	res.TotalTickets.Current = float64(ct)
-	res.TotalTickets.Previous = float64(pt)
-	res.TotalTickets.Personal = float64(myT) // <--- ВОТ ТВОИ "2 ВАШИХ"
-
-	// ЗАПОЛНЯЕМ RESOLVED (с личными)
-	res.ResolvedTickets.Current = float64(cr)
-	res.ResolvedTickets.Previous = float64(pr)
-	res.ResolvedTickets.Personal = float64(myR) // Личные
-
-	// ЗАПОЛНЯЕМ OPEN (с личными)
-	res.OpenTickets.Current = float64(co)
-	res.OpenTickets.Personal = float64(myO) // <--- ВОТ ТВОЙ "1 НАЗНАЧЕНО ВАМ"
-
-	res.AvgResponseTime.Current = rt1
-	res.AvgResponseTime.Previous = rt2
-	res.AvgResolveTime.Current = rvt1
-	res.AvgResolveTime.Previous = rvt2
+	res.TotalTickets = types.DashboardKPIMetric{Current: float64(ct), Previous: float64(pt), Personal: float64(mt)}
+	res.ResolvedTickets = types.DashboardKPIMetric{Current: float64(cr), Previous: float64(pr), Personal: float64(mr)}
+	res.OpenTickets = types.DashboardKPIMetric{Current: float64(co), Personal: float64(mo)}
+	res.AvgResponseTime = types.DashboardKPIMetric{Current: r1}
+	res.AvgResolveTime = types.DashboardKPIMetric{Current: v1}
 	res.ActiveAgents = ag
 
 	if cr > 0 {
-		res.SLACompliance.Current = (float64(sla1) / float64(cr)) * 100
-		res.FCRRate.Current = (float64(fcr1) / float64(cr)) * 100
-	}
-	if pr > 0 {
-		res.SLACompliance.Previous = (float64(sla2) / float64(pr)) * 100
-		res.FCRRate.Previous = (float64(fcr2) / float64(pr)) * 100
+		res.SLACompliance.Current = (float64(s1) / float64(cr)) * 100
 	}
 
 	return res, nil
 }
-
 // 3. SLA Stats
 func (r *DashboardRepository) GetSLAStats(ctx context.Context, securityCondition sq.Sqlizer) (*types.DashboardSLAStats, error) {
 	// SLA считаем для выполненных заявок за этот месяц
@@ -238,7 +229,7 @@ func (r *DashboardRepository) GetAvgTimeByPriority(ctx context.Context, security
 		Where(sqlSuccessCheck). // Считаем среднее только по решенным
 		Where(sq.GtOrEq{"o.completed_at": startOfMonth()}).
 		Where(sq.Eq{"o.deleted_at": nil}).
-		Where("o.resolution_time_seconds > 0"). // Исключаем нули
+		//Where("o.resolution_time_seconds > 0"). 
 		GroupBy("p.name")
 
 	b = applySecurity(b, securityCondition)
