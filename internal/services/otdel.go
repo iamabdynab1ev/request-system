@@ -208,8 +208,14 @@ func (s *OtdelService) DeleteOtdel(ctx context.Context, id uint64) error {
 }
 
 func (s *OtdelService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
-	userID, _ := utils.GetUserIDFromCtx(ctx)
-	permissions, _ := utils.GetPermissionsMapFromCtx(ctx)
+	userID, err := utils.GetUserIDFromCtx(ctx)
+if err != nil {
+	return nil, apperrors.ErrUnauthorized
+}
+permissions, err := utils.GetPermissionsMapFromCtx(ctx)
+if err != nil {
+	return nil, apperrors.ErrUnauthorized
+}
 	actor, err := s.userRepository.FindUserByID(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound

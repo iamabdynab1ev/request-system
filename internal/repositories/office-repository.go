@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+	"fmt"
   
 
 	sq "github.com/Masterminds/squirrel"
@@ -14,7 +15,6 @@ import (
 
 	"request-system/internal/dto"
 	"request-system/internal/entities"
-	// Подключаем наш новый билдер
 	"request-system/internal/infrastructure/bd"
 	
 	apperrors "request-system/pkg/errors"
@@ -23,8 +23,6 @@ import (
 
 const officeTable = "offices"
 
-// ЕДИНАЯ КАРТА ПОЛЕЙ (Фильтрация + Сортировка)
-// Префикс "o." обязателен, так как используются JOIN-ы
 var officeMap = map[string]string{
 	"id":         "o.id",
 	"name":       "o.name",
@@ -58,11 +56,6 @@ func NewOfficeRepository(storage *pgxpool.Pool, logger *zap.Logger) OfficeReposi
 	return &OfficeRepository{storage: storage, logger: logger}
 }
 
-// -------------------------------------------------------------
-// Сканирование (Scan)
-// -------------------------------------------------------------
-
-// scanOffice: Простой скан для одной таблицы (без join-ов)
 func (r *OfficeRepository) scanOffice(row pgx.Row) (*entities.Office, error) {
 	var o entities.Office
 	var externalID, sourceSystem sql.NullString
@@ -127,14 +120,10 @@ func (r *OfficeRepository) scanOfficeWithRelations(row pgx.Row) (*entities.Offic
 	return &o, nil
 }
 
-// -------------------------------------------------------------
-// Основные методы (Get, Find, CRUD)
-// -------------------------------------------------------------
 
 func (r *OfficeRepository) GetOffices(ctx context.Context, filter types.Filter) ([]entities.Office, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 	
-	// Ручной поиск по тексту (OR ILIKE)
 	applySearch := func(b sq.SelectBuilder) sq.SelectBuilder {
 		if filter.Search != "" {
 			pat := "%" + filter.Search + "%"
@@ -150,8 +139,7 @@ func (r *OfficeRepository) GetOffices(ctx context.Context, filter types.Filter) 
 	countBuilder := psql.Select("COUNT(o.id)").From(officeTable + " AS o")
 	
 	countBuilder = applySearch(countBuilder)
-	
-	// Готовим фильтр для count (без сортировки и пагинации)
+
 	countFilter := filter
 	countFilter.WithPagination = false
 	countFilter.Sort = nil
@@ -160,7 +148,10 @@ func (r *OfficeRepository) GetOffices(ctx context.Context, filter types.Filter) 
 	countBuilder = bd.ApplyListParams(countBuilder, countFilter, officeMap)
 
 	var total uint64
-	sqlCount, argsCount, _ := countBuilder.ToSql() // Игнорируем ошибку сборки SQL
+	sqlCount, argsCount, err := countBuilder.ToSql()
+if err != nil {
+    return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
+}
 	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&total); err != nil {
 		return nil, 0, err
 	}

@@ -30,7 +30,6 @@ func NewAttachmentRepository(storage *pgxpool.Pool) AttachmentRepositoryInterfac
 	}
 }
 
-// <<<--- 2. ДОБАВЛЕНА РЕАЛИЗАЦИЯ НОВОГО МЕТОДА ---
 func (r *attachmentRepository) FindAttachmentsByOrderIDs(ctx context.Context, orderIDs []uint64) (map[uint64][]entities.Attachment, error) {
 	if len(orderIDs) == 0 {
 		return make(map[uint64][]entities.Attachment), nil

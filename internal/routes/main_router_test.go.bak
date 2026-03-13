@@ -34,15 +34,15 @@ import (
 	"go.uber.org/zap"
 )
 
-// <<<--- ВОТ СТРУКТУРА, КОТОРАЯ БЫЛА ПОТЕРЯНА ---
-// OrderTestSuite - это наш набор тестов
+
+
 type OrderTestSuite struct {
 	suite.Suite
 	Echo           *echo.Echo
 	DB             *pgxpool.Pool
 	Redis          *redis.Client
-	TestUserToken  string // Токен для пользователя с правами на создание заявок
-	CreatedOrderID uint64 // ID созданной заявки
+	TestUserToken  string 
+	CreatedOrderID uint64 
 }
 
 func (suite *OrderTestSuite) SetupSuite() {
@@ -63,7 +63,6 @@ func (suite *OrderTestSuite) SetupSuite() {
 	suite.DB = dbConn
 	suite.Redis = redisClient
 
-	// <<<--- НАЧАЛО ИСПРАВЛЕНИЙ ---
 
 	// 1. Создаем заглушку логгера (zap.NewNop() - идеален для тестов, он ничего не пишет в консоль)
 	nopLogger := zap.NewNop()

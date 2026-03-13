@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/tls" 
+	"crypto/tls"
 	"database/sql"
 	"flag"
 	"log"
@@ -36,27 +36,26 @@ import (
 )
 
 func main() {
- loc, err := time.LoadLocation("Asia/Tashkent")
-if err != nil {
-    log.Printf("⚠️ Не удалось загрузить Asia/Tashkent: %v", err)
-    loc = time.Local
-}
-time.Local = loc
-log.Printf("✅ Временная зона установлена: %s", time.Local.String())
-
-	os.Setenv("HTTP_PROXY", "http://192.168.10.42:3128")
-	os.Setenv("HTTPS_PROXY", "http://192.168.10.42:3128")
-
-	os.Setenv("NO_PROXY", "localhost,127.0.0.1,192.168.10.79,arvand.local,192.168.10.42,192.168.10.15,192.168.10.14")
-	
+	loc, err := time.LoadLocation("Asia/Dushanbe")
+	if err != nil {
+		log.Printf("⚠️ Не удалось загрузить Asia/Tashkent: %v", err)
+		loc = time.Local
+	}
+	time.Local = loc
+	if proxy := os.Getenv("HTTP_PROXY_URL"); proxy != "" {
+		os.Setenv("HTTP_PROXY", proxy)
+		os.Setenv("HTTPS_PROXY", proxy)
+	}
+	if noProxy := os.Getenv("NO_PROXY_LIST"); noProxy != "" {
+		os.Setenv("NO_PROXY", noProxy)
+	}
 	runCore := flag.Bool("core", false, "Наполнение базовых справочников")
 	runRoles := flag.Bool("roles", false, "Создание ролей и Рут-Админа")
 	runAll := flag.Bool("all", false, "Запустить все сидеры сразу")
 
 	importAtms := flag.String("import-atms", "", "Путь к файлу банкоматов .xlsx")
-    importTerms := flag.String("import-terms", "", "Путь к файлу терминалов .xlsx")
-    importPos := flag.String("import-pos", "", "Путь к файлу ПОС-терминалов .xlsx")
-
+	importTerms := flag.String("import-terms", "", "Путь к файлу терминалов .xlsx")
+	importPos := flag.String("import-pos", "", "Путь к файлу ПОС-терминалов .xlsx")
 
 	flag.Parse()
 
@@ -64,50 +63,71 @@ log.Printf("✅ Временная зона установлена: %s", time.Lo
 	cfg := config.New()
 
 	// 3. БЛОК СИДЕРОВ И ИМПОРТА (Работает как сидер, если есть хоть один флаг)
-    if *runCore || *runRoles || *runAll || *importAtms != "" || *importTerms != "" || *importPos != "" {
-        log.Println("🛠️ ЗАПУСК ОПЕРАЦИИ СИДИРОВАНИЯ/ИМПОРТА...")
-        dbPool := postgresql.ConnectDB(cfg.Postgres.DSN)
-        defer dbPool.Close()
+	if *runCore || *runRoles || *runAll || *importAtms != "" || *importTerms != "" || *importPos != "" {
+		log.Println("🛠️ ЗАПУСК ОПЕРАЦИИ СИДИРОВАНИЯ/ИМПОРТА...")
+		dbPool := postgresql.ConnectDB(cfg.Postgres.DSN)
+		defer dbPool.Close()
 
-        // Сидеры (Базовые данные)
-        if *runAll || *runCore { seeders.SeedCoreDictionaries(dbPool) }
-        if *runAll || *runRoles { seeders.SeedRolesAndAdmin(dbPool, cfg) }
+		// Сидеры (Базовые данные)
+		if *runAll || *runCore {
+			seeders.SeedCoreDictionaries(dbPool)
+		}
+		if *runAll || *runRoles {
+			seeders.SeedRolesAndAdmin(dbPool, cfg)
+		}
 
-      // --- ЛОГИКА ИМПОРТА ИЗ EXCEL ---
-        if *importAtms != "" || *importTerms != "" || *importPos != "" {
-            log.Println("📥 Запуск процесса импорта оборудования...")
-            svc := services.NewEquipImportService(dbPool)
+		svc := services.NewEquipImportService(dbPool)
 
-            if *importAtms != ""  { 
-                log.Printf("📄 Файл АТМ: %s", *importAtms)
-                if err := svc.ImportAtms(*importAtms); err != nil {
-                    log.Printf("❌ Ошибка при импорте АТМ: %v", err)
-                }
-            }
-            if *importTerms != "" { 
-                log.Printf("📄 Файл Терминалы: %s", *importTerms)
-                if err := svc.ImportTerminals(*importTerms); err != nil {
-                    log.Printf("❌ Ошибка при импорте терминалов: %v", err)
-                }
-            }
-            if *importPos != ""   { 
-                log.Printf("📄 Файл ПОС-терминалы: %s", *importPos)
-                if err := svc.ImportPos(*importPos); err != nil {
-                    log.Printf("❌ Ошибка при импорте ПОС-терминалов: %v", err)
-                }
-            }
-        }
+		if *importAtms != "" {
+			log.Printf("📄 Файл АТМ: %s", *importAtms)
+			f, err := os.Open(*importAtms)
+			if err != nil {
+				log.Printf("❌ Ошибка открытия файла АТМ: %v", err)
+			} else {
+				defer f.Close()
+				if err := svc.ImportAtmsReader(f); err != nil {
+					log.Printf("❌ Ошибка при импорте АТМ: %v", err)
+				}
+			}
+		}
+		if *importTerms != "" {
+			log.Printf("📄 Файл Терминалы: %s", *importTerms)
+			f, err := os.Open(*importTerms)
+			if err != nil {
+				log.Printf("❌ Ошибка открытия файла терминалов: %v", err)
+			} else {
+				defer f.Close()
+				if err := svc.ImportTerminalsReader(f); err != nil {
+					log.Printf("❌ Ошибка при импорте терминалов: %v", err)
+				}
+			}
+		}
+		if *importPos != "" {
+			log.Printf("📄 Файл ПОС-терминалы: %s", *importPos)
+			f, err := os.Open(*importPos)
+			if err != nil {
+				log.Printf("❌ Ошибка открытия файла ПОС: %v", err)
+			} else {
+				defer f.Close()
+				if err := svc.ImportPosReader(f); err != nil {
+					log.Printf("❌ Ошибка при импорте ПОС-терминалов: %v", err)
+				}
+			}
+		}
 
-        log.Println("✅ Все операции выполнены успешно.")
-        return
-    }
+		log.Println("✅ Все операции выполнены успешно.")
+		return
+	}
 
-	
 	logLevel := os.Getenv("LOG_LEVEL")
-	if logLevel == "" { logLevel = "info" }
-	
+	if logLevel == "" {
+		logLevel = "debug"
+	}
+
 	mainLogger, err := logger.CreateLogger(logLevel, "system")
-	if err != nil { panic("Не удалось создать логгер") }
+	if err != nil {
+		panic("Не удалось создать логгер")
+	}
 
 	// Миграции (Goose)
 	mainLogger.Info("Запуск миграций Goose...")
@@ -134,12 +154,12 @@ log.Printf("✅ Временная зона установлена: %s", time.Lo
 	e := echo.New()
 	e.HideBanner = true
 	e.Use(middleware.Recover())
-	
+
 	// CORS: Разрешаем куки и заголовки
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: cfg.Server.AllowedOrigins, // Берется из .env (исправленного на Шаге 1)
-		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodHead},
-		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "X-Requested-With", "ngrok-skip-browser-warning"},
+		AllowOrigins:     cfg.Server.AllowedOrigins, // Берется из .env (исправленного на Шаге 1)
+		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodHead},
+		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "X-Requested-With", "ngrok-skip-browser-warning"},
 		AllowCredentials: true,
 	}))
 
@@ -148,7 +168,7 @@ log.Printf("✅ Временная зона установлена: %s", time.Lo
 	dbConn := postgresql.ConnectDB(cfg.Postgres.DSN)
 	defer dbConn.Close()
 	e.Static("/uploads", "uploads")
-	
+
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.Redis.Address, Password: cfg.Redis.Password})
 
 	jwtSvc := service.NewJWTService(cfg.JWT.SecretKey, cfg.JWT.AccessTokenTTL, cfg.JWT.RefreshTokenTTL, authLogger)
@@ -158,7 +178,6 @@ log.Printf("✅ Временная зона установлена: %s", time.Lo
 
 	bus := eventbus.New(mainLogger)
 	wsHub := websocket.NewHub()
-	go wsHub.Run()
 
 	tgService := telegram.NewService(cfg.Telegram.BotToken)
 	notificationService := services.NewTelegramNotificationService(tgService, mainLogger)
@@ -177,18 +196,16 @@ log.Printf("✅ Временная зона установлена: %s", time.Lo
 
 	appCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go wsHub.Run(appCtx)
 
 	routes.InitRouter(e, dbConn, redisClient, jwtSvc, appLoggers, authPermissionService, cfg, bus, wsHub, adService, appCtx)
-
 
 	serverAddress := ":" + cfg.Server.Port
 	certPath := cfg.Server.CertFile
 	keyPath := cfg.Server.KeyFile
 
-
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		
 	}
 
 	s := &http.Server{
@@ -198,13 +215,12 @@ log.Printf("✅ Временная зона установлена: %s", time.Lo
 	}
 
 	go func() {
-		// Запуск сервера вручную через http.Server
 		if err := s.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
 			mainLogger.Fatal("🔴 Ошибка запуска HTTPS", zap.Error(err))
 		}
 	}()
 
-	mainLogger.Info("🚀 HTTPS СЕРВЕР ЗАПУЩЕН (ПОРТ "+cfg.Server.Port+")")
+	mainLogger.Info("🚀 HTTPS СЕРВЕР ЗАПУЩЕН (ПОРТ " + cfg.Server.Port + ")")
 	mainLogger.Info("🔗 Local: https://localhost" + serverAddress + "/ping")
 
 	quit := make(chan os.Signal, 1)

@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 	"time"
+	"encoding/json"  
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
@@ -18,34 +19,56 @@ import (
 	"request-system/pkg/utils"
 )
 
+// СТАЛО:
 type DashboardService struct {
-	repo     repositories.DashboardRepositoryInterface
-	userRepo repositories.UserRepositoryInterface
-	logger   *zap.Logger
+	repo      repositories.DashboardRepositoryInterface
+	userRepo  repositories.UserRepositoryInterface
+	cache     repositories.CacheRepositoryInterface
+	logger    *zap.Logger
 }
 
-func NewDashboardService(repo repositories.DashboardRepositoryInterface, userRepo repositories.UserRepositoryInterface, logger *zap.Logger) *DashboardService {
-	return &DashboardService{repo: repo, userRepo: userRepo, logger: logger}
+func NewDashboardService(
+	repo repositories.DashboardRepositoryInterface,
+	userRepo repositories.UserRepositoryInterface,
+	cache repositories.CacheRepositoryInterface,
+	logger *zap.Logger,
+) *DashboardService {
+	return &DashboardService{repo: repo, userRepo: userRepo, cache: cache, logger: logger}
 }
 
 func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.Filter) (*dto.DashboardStatsDTO, error) {
-	userID, _ := utils.GetUserIDFromCtx(ctx)
-	permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
+	
+	// Шаг 1 — получаем userID с проверкой
+	userID, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil {
+		return nil, apperrors.ErrUnauthorized
+	}
+
+	// Шаг 2 — кэш
+	cacheKey := "dashboard:stats:global"
+	if cached, err := s.cache.Get(ctx, cacheKey); err == nil {
+		var result dto.DashboardStatsDTO
+		if jsonErr := json.Unmarshal([]byte(cached), &result); jsonErr == nil {
+			s.logger.Debug("Dashboard served from cache", zap.Uint64("userID", userID))
+			return &result, nil
+		}
+	}
+
+	// Шаг 3 — permissions с проверкой
+	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+	if err != nil {
+		return nil, apperrors.ErrUnauthorized
+	}
+
+	// Шаг 4 — актор
 	actor, err := s.userRepo.FindUserByID(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
-
 	authContext := authz.Context{Actor: actor, Permissions: permissionsMap}
 
-	// === ЖЕЛЕЗОБЕТОННАЯ СБОРКА УСЛОВИЙ ===
-	// Используем nil интерфейс по умолчанию.
 	var securityBuilder sq.Sqlizer = nil
-
-	// Временный список условий (не sq.And, а просто массив)
 	var preds []sq.Sqlizer
-
-	// Если пользователь НЕ админ и НЕ аудитор — включаем фильтры
 	if !authContext.HasPermission(authz.ScopeAll) && !authContext.HasPermission(authz.ScopeAllView) {
 
 		// Собираем условия "ИЛИ" (ScopeDepartment OR ScopeBranch ...)
@@ -131,11 +154,12 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 
 	wg.Wait()
 
-	if len(errs) > 0 {
-		// Логируем ошибку, чтобы понять какой именно запрос упал
-		s.logger.Error("Dashboard fetching error", zap.Error(errs[0]))
-		return nil, apperrors.NewInternalError("Ошибка загрузки дашборда")
-	}
+if len(errs) > 0 {
+    for i, e := range errs {
+        s.logger.Error("Ошибка запроса дашборда", zap.Int("номер_запроса", i), zap.Error(e))
+    }
+    return nil, apperrors.NewInternalError("Ошибка загрузки дашборда")
+}
 
 	// 1. Заполняем пропуски в графике нулями
 	weekly = fillMissingDays(weekly)
@@ -213,7 +237,7 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 		}
 	}
 
-	return &dto.DashboardStatsDTO{
+	finalResult := &dto.DashboardStatsDTO{
 		Alerts:          alerts,
 		KPIs:            kpis,
 		SLA:             sla,
@@ -226,10 +250,18 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 		LastActivity:    lastAct,
 		Departments:     depts,
 		Branches:        branches,
-	}, nil
+	}
+
+	
+	if data, err := json.Marshal(finalResult); err == nil {
+		if err := s.cache.Set(ctx, cacheKey, string(data), 3*time.Minute); err != nil {
+			s.logger.Warn("Failed to cache dashboard", zap.Error(err))
+		}
+	}
+
+	return finalResult, nil
 }
 
-// fillMissingDays генерирует 14 точек графика (от "13 дней назад" до "сегодня")
 func fillMissingDays(data []types.DashboardChartData) []types.DashboardChartData {
 	dataMap := make(map[string]int64)
 	for _, item := range data {
@@ -237,10 +269,11 @@ func fillMissingDays(data []types.DashboardChartData) []types.DashboardChartData
 	}
 
 	var result []types.DashboardChartData
-	// Используем время сервера, выровненное по часам, или просто Day
-	now := time.Now()
-	// Важно: если БД хранит UTC, а тут Local, метки могут не совпасть на границе дня.
-	// Но для dashboard "приблизительно сегодня" обычно достаточно.
+	loc, _ := time.LoadLocation("Asia/Dushanbe")
+	if loc == nil {
+		loc = time.Local
+	}
+	now := time.Now().In(loc)
 	start := now.AddDate(0, 0, -13)
 
 	for i := 0; i < 14; i++ {

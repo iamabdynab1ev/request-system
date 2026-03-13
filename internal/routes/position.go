@@ -5,21 +5,18 @@ import (
 	"request-system/internal/controllers"
 	"request-system/internal/services"
 	"request-system/pkg/middleware"
-
-	// "request-system/internal/authz"
-
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
-// ---> ГЛАВНОЕ ИЗМЕНЕНИЕ: Принимаем SERVICE, а не dbConn <---
+
 func runPositionRouter(
 	secureGroup *echo.Group,
 	positionService services.PositionServiceInterface,
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
 ) {
-	// Сервис уже готов, просто создаем контроллер
+
 	posCtrl := controllers.NewPositionController(positionService, logger)
 
 	positions := secureGroup.Group("/position")

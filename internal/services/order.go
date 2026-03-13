@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -47,7 +48,7 @@ var ValidationRegistry = map[string][]ValidationRule{
 
 type OrderServiceInterface interface {
 	CreateOrder(ctx context.Context, createDTO dto.CreateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error)
-	GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool) (*dto.OrderListResponseDTO, error)
+	GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool, onlyAssigned bool) (*dto.OrderListResponseDTO, error)
 	FindOrderByID(ctx context.Context, orderID uint64) (*dto.OrderResponseDTO, error)
 	UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader, explicitFields map[string]interface{}) (*dto.OrderResponseDTO, error)
 	DeleteOrder(ctx context.Context, orderID uint64) error
@@ -110,13 +111,16 @@ func NewOrderService(
 	}
 }
 
-func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool) (*dto.OrderListResponseDTO, error) {
+func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool, onlyAssigned bool) (*dto.OrderListResponseDTO, error) {
 	// 1. Получаем актора
 	userID, err := utils.GetUserIDFromCtx(ctx)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
-	permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
+	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+	if err != nil {
+		return nil, apperrors.ErrUnauthorized
+	}
 	actor, err := s.userRepo.FindUserByID(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
@@ -125,14 +129,12 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyP
 	// 2. AuthZ: Право на просмотр
 	authCtx := authz.Context{Actor: actor, Permissions: permissionsMap}
 	if !authz.CanDo(authz.OrdersView, authCtx) {
-		s.logger.Warn("Попытка доступа без order:view", zap.Uint64("userID", userID))
+		s.logger.Warn("Попытка доступа без прав на просмотр заявок", zap.Uint64("userID", userID))
 		return nil, apperrors.ErrForbidden
 	}
 
-	// 3. Строим SQL фильтры по Scopes
 	securityBuilder := sq.And{}
 
-	// Если НЕТ глобального доступа - добавляем ограничения
 	if !authCtx.HasPermission(authz.ScopeAll) && !authCtx.HasPermission(authz.ScopeAllView) {
 		scopeConditions := sq.Or{}
 
@@ -149,23 +151,27 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyP
 			scopeConditions = append(scopeConditions, sq.Eq{"o.office_id": *actor.OfficeID})
 		}
 		if authCtx.HasPermission(authz.ScopeOwn) {
-			scopeConditions = append(scopeConditions, sq.Eq{"o.user_id": actor.ID})     // Создатель
-			scopeConditions = append(scopeConditions, sq.Eq{"o.executor_id": actor.ID}) // Исполнитель
-			// Был участником истории
+			scopeConditions = append(scopeConditions, sq.Eq{"o.user_id": actor.ID})
+			scopeConditions = append(scopeConditions, sq.Eq{"o.executor_id": actor.ID})
+
 			scopeConditions = append(scopeConditions, sq.Expr("o.id IN (SELECT DISTINCT order_id FROM order_history WHERE user_id = ?)", actor.ID))
 		}
 
 		if len(scopeConditions) > 0 {
 			securityBuilder = append(securityBuilder, scopeConditions)
 		} else {
-			// Если прав совсем нет -> пустой список
+
 			return &dto.OrderListResponseDTO{List: []dto.OrderResponseDTO{}, TotalCount: 0}, nil
 		}
 	}
 
-	// 4. Флаг "Только мое участие" — показываем только создателя и текущего исполнителя
 	if onlyParticipant {
 		securityBuilder = append(securityBuilder, sq.Eq{"o.user_id": actor.ID})
+	}
+
+	// Назначены мне — только исполнитель
+	if onlyAssigned {
+		securityBuilder = append(securityBuilder, sq.Eq{"o.executor_id": actor.ID})
 	}
 
 	// 5. Запрос в БД
@@ -184,7 +190,6 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyP
 }
 
 func (s *OrderService) FindOrderByID(ctx context.Context, orderID uint64) (*dto.OrderResponseDTO, error) {
-	// Авторизация + загрузка target
 	authCtx, err := s.buildAuthzContext(ctx, orderID)
 	if err != nil {
 		return nil, err
@@ -201,20 +206,19 @@ func (s *OrderService) FindOrderByID(ctx context.Context, orderID uint64) (*dto.
 }
 
 func (s *OrderService) FindOrderByIDForTelegram(ctx context.Context, userID uint64, orderID uint64) (*entities.Order, error) {
-	// ✅ ЗАЩИТА: userID не может быть 0
 	if userID == 0 {
 		s.logger.Error("FindOrderByIDForTelegram вызван с userID=0",
 			zap.Uint64("orderID", orderID),
 			zap.Stack("stacktrace"))
 		return nil, apperrors.ErrUserNotFound
 	}
-	
+
 	if orderID == 0 {
 		s.logger.Error("FindOrderByIDForTelegram вызван с orderID=0",
 			zap.Uint64("userID", userID))
 		return nil, apperrors.NewBadRequestError("ID заявки не указан")
 	}
-	
+
 	order, err := s.orderRepo.FindByID(ctx, orderID)
 	if err != nil {
 		s.logger.Warn("Заявка не найдена",
@@ -248,12 +252,9 @@ func (s *OrderService) FindOrderByIDForTelegram(ctx context.Context, userID uint
 			zap.String("user_fio", user.Fio))
 		return nil, apperrors.ErrForbidden
 	}
-	
+
 	return order, nil
 }
-// =========================================================================
-// CREATE OPERATION
-// =========================================================================
 
 func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error) {
 	// 1. AuthZ
@@ -285,7 +286,6 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 		txID := uuid.New()
 
 		// 3. Rule Engine (определение исполнителя)
-		// Используем SafeDeref для безопасного получения значений из указателей DTO
 		orderCtx := OrderContext{
 			OrderTypeID:  utils.SafeDeref(createDTO.OrderTypeID),
 			DepartmentID: utils.SafeDeref(createDTO.DepartmentID),
@@ -317,11 +317,10 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 			return apperrors.ErrInternalServer
 		}
 
-		// 5. Construct Entity (DTO Ptr -> Entity Ptr matches perfectly)
+		// 5. Construct Entity
 		orderEntity := &entities.Order{
-			Name:    createDTO.Name,
-			Address: createDTO.Address,
-			// DTO Pointers mapping
+			Name:            createDTO.Name,
+			Address:         createDTO.Address,
 			OrderTypeID:     createDTO.OrderTypeID,
 			DepartmentID:    createDTO.DepartmentID,
 			OtdelID:         createDTO.OtdelID,
@@ -339,9 +338,9 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 
 		// 6. DB Create
 		newID, err := s.orderRepo.Create(ctx, tx, orderEntity)
-		if err != nil {
-			return err
-		}
+if err != nil {
+    return err
+}
 		createdID = newID
 		orderEntity.ID = newID
 
@@ -418,7 +417,7 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 			return nil, apperrors.NewBadRequestError("Для сохранения изменений необходимо добавить комментарий с описанием действий.")
 		}
 	}
-	
+
 	// Базовая защита
 	if len(explicitFields) == 0 && file == nil {
 		return nil, apperrors.NewBadRequestError("Нет данных для обновления")
@@ -426,19 +425,16 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
 		txID := uuid.New()
-		
+
 		// Синхронизация времени
-loc, _ := time.LoadLocation("Asia/Tashkent")
-if loc == nil {
-    loc = time.Local
-}
-now := time.Now().In(loc)
+		loc := time.Local
+		now := time.Now().In(loc)
 
-updated := *currentOrder
+		updated := *currentOrder
 
-// === ОБНОВЛЕНИЕ ПОЛЕЙ ===
-fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
-    updated.UpdatedAt = now
+		// === ОБНОВЛЕНИЕ ПОЛЕЙ ===
+		fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
+		updated.UpdatedAt = now
 		// === ЛОГИКА РЕРОУТИНГА ===
 		structureChanged := utils.DiffPtr(currentOrder.DepartmentID, updated.DepartmentID) ||
 			utils.DiffPtr(currentOrder.OtdelID, updated.OtdelID) ||
@@ -462,9 +458,8 @@ fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
 			fieldsChanged = true
 		}
 
-		// === ЛОГИКА МЕТРИК (SLA) ===
-		s.calculateMetrics(&updated, currentOrder, updateDTO, authCtx.Actor.ID, now)
-		
+		s.calculateMetrics(ctx, &updated, currentOrder, updateDTO, authCtx.Actor.ID, now)
+
 		// ✅ УЛУЧШЕННАЯ ПРОВЕРКА МЕТРИК - форсируем сохранение
 		metricsChanged := false
 
@@ -472,7 +467,7 @@ fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
 		if updated.FirstResponseTimeSeconds != nil {
 			if currentOrder.FirstResponseTimeSeconds == nil {
 				metricsChanged = true
-				s.logger.Info("🆕 Новая метрика: first_response_time_seconds", 
+				s.logger.Info("🆕 Новая метрика: first_response_time_seconds",
 					zap.Uint64("order_id", orderID),
 					zap.Uint64("value", *updated.FirstResponseTimeSeconds))
 			} else if *updated.FirstResponseTimeSeconds != *currentOrder.FirstResponseTimeSeconds {
@@ -533,7 +528,9 @@ fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
 
 		// === ЛОГИРОВАНИЕ ИСТОРИИ ===
 		histChanged, err := s.detectAndLogChanges(ctx, tx, currentOrder, &updated, updateDTO, authCtx.Actor, txID, now)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		// Если есть файл
 		if file != nil {
@@ -543,18 +540,18 @@ fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
 			fieldsChanged = true
 		}
 
-		// Если ничего не изменилось - выходим
 		if !fieldsChanged && !histChanged {
 			return apperrors.ErrNoChanges
 		}
-
 		return s.orderRepo.Update(ctx, tx, &updated)
 	})
 
 	if err != nil {
+		if errors.Is(err, apperrors.ErrNoChanges) {
+			return s.FindOrderByID(ctx, orderID)
+		}
 		return nil, err
 	}
-	// Финальный возврат обновленных данных
 	return s.FindOrderByID(ctx, orderID)
 }
 
@@ -562,7 +559,6 @@ fieldsChanged := utils.SmartUpdate(&updated, explicitFields)
 func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, new *entities.Order, dto dto.UpdateOrderDTO, actor *entities.User, txID uuid.UUID, now time.Time) (bool, error) {
 	hasLoggable := false
 
-	// Комментарий (из DTO всегда, т.к. в Entity нет поля current comment)
 	if dto.Comment != nil && strings.TrimSpace(*dto.Comment) != "" {
 		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "COMMENT", nil, nil, dto.Comment, txID, *new); err != nil {
 			return false, err
@@ -570,15 +566,12 @@ func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, 
 		hasLoggable = true
 	}
 
-	// ✅ ДОБАВЛЕНО: Проверка NAME
 	if old.Name != new.Name {
 		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "NAME_CHANGE", &new.Name, &old.Name, nil, txID, *new); err != nil {
 			return false, err
 		}
 		hasLoggable = true
 	}
-
-	// ✅ ДОБАВЛЕНО: Проверка ADDRESS (Address это *string - указатель)
 	if !utils.StringPtrEqual(old.Address, new.Address) {
 		if err := s.logHistoryEvent(ctx, tx, new.ID, actor, "ADDRESS_CHANGE", new.Address, old.Address, nil, txID, *new); err != nil {
 			return false, err
@@ -586,7 +579,6 @@ func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, 
 		hasLoggable = true
 	}
 
-	// ✅ ДОБАВЛЕНО: Проверка DURATION (срок выполнения, *time.Time)
 	if !utils.TimeEqual(old.Duration, new.Duration) {
 		valNew := ""
 		valOld := ""
@@ -613,7 +605,6 @@ func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, 
 		}
 	}
 
-	// ✅ ДОБАВЛЕНО: Проверка EQUIPMENT_ID
 	if utils.DiffPtr(old.EquipmentID, new.EquipmentID) {
 		valNew := utils.PtrToString(new.EquipmentID)
 		valOld := utils.PtrToString(old.EquipmentID)
@@ -623,7 +614,6 @@ func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, 
 		hasLoggable = true
 	}
 
-	// ✅ ДОБАВЛЕНО: Проверка EQUIPMENT_TYPE_ID
 	if utils.DiffPtr(old.EquipmentTypeID, new.EquipmentTypeID) {
 		valNew := utils.PtrToString(new.EquipmentTypeID)
 		valOld := utils.PtrToString(old.EquipmentTypeID)
@@ -633,7 +623,6 @@ func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, 
 		hasLoggable = true
 	}
 
-	// ✅ ДОБАВЛЕНО: Проверка ORDER_TYPE_ID
 	if utils.DiffPtr(old.OrderTypeID, new.OrderTypeID) {
 		valNew := utils.PtrToString(new.OrderTypeID)
 		valOld := utils.PtrToString(old.OrderTypeID)
@@ -643,11 +632,9 @@ func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, 
 		hasLoggable = true
 	}
 
-	// Делегация (Исполнитель)
 	if utils.DiffPtr(old.ExecutorID, new.ExecutorID) {
 		newExName := s.resolveUserName(ctx, new.ExecutorID)
 		txt := "Назначено на: " + newExName
-		// Для SQL значения берем указатели ID, преобразованные в строку
 		valNew := utils.PtrToString(new.ExecutorID)
 		valOld := utils.PtrToString(old.ExecutorID)
 
@@ -711,10 +698,6 @@ func (s *OrderService) detectAndLogChanges(ctx context.Context, tx pgx.Tx, old, 
 		}
 		hasLoggable = true
 	}
-
-	if utils.DiffPtr(old.DepartmentID, new.DepartmentID) || utils.DiffPtr(old.BranchID, new.BranchID) {
-	}
-
 	return hasLoggable, nil
 }
 
@@ -841,13 +824,19 @@ func (s *OrderService) toResponseDTO(o *entities.Order, cr, ex *entities.User, a
 
 func (s *OrderService) buildAuthzContext(ctx context.Context, orderID uint64) (*authz.Context, error) {
 	if orderID == 0 {
-		userID, _ := utils.GetUserIDFromCtx(ctx)
-		perms, _ := utils.GetPermissionsMapFromCtx(ctx)
+		userID, err := utils.GetUserIDFromCtx(ctx)
+		if err != nil {
+			return nil, apperrors.ErrUnauthorized
+		}
+		permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+		if err != nil {
+			return nil, apperrors.ErrUnauthorized
+		}
 		actor, err := s.userRepo.FindUserByID(ctx, userID)
 		if err != nil {
 			return nil, apperrors.ErrUserNotFound
 		}
-		return &authz.Context{Actor: actor, Permissions: perms}, nil
+		return &authz.Context{Actor: actor, Permissions: permissionsMap}, nil
 	}
 	t, err := s.orderRepo.FindByID(ctx, orderID)
 	if err != nil {
@@ -857,8 +846,14 @@ func (s *OrderService) buildAuthzContext(ctx context.Context, orderID uint64) (*
 }
 
 func (s *OrderService) buildAuthzContextWithTarget(ctx context.Context, t *entities.Order) (*authz.Context, error) {
-	userID, _ := utils.GetUserIDFromCtx(ctx)
-	perms, _ := utils.GetPermissionsMapFromCtx(ctx)
+	userID, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil {
+		return nil, apperrors.ErrUnauthorized
+	}
+	perms, err := utils.GetPermissionsMapFromCtx(ctx)
+	if err != nil {
+		return nil, apperrors.ErrUnauthorized
+	}
 	actor, err := s.userRepo.FindUserByID(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
@@ -874,34 +869,35 @@ func (s *OrderService) buildAuthzContextWithTarget(ctx context.Context, t *entit
 // calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
 // calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
 // calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
-func (s *OrderService) calculateMetrics(newOrder, oldOrder *entities.Order, dto dto.UpdateOrderDTO, actorID uint64, now time.Time) {
-	newStatus, _ := s.statusRepo.FindStatus(context.Background(), newOrder.StatusID)
+func (s *OrderService) calculateMetrics(ctx context.Context, newOrder, oldOrder *entities.Order, dto dto.UpdateOrderDTO, actorID uint64, now time.Time) {
+	newStatus, _ := s.statusRepo.FindStatus(ctx, newOrder.StatusID)
 	newCode := ""
-	if newStatus != nil && newStatus.Code != nil { newCode = *newStatus.Code }
-	oldStatus, _ := s.statusRepo.FindStatus(context.Background(), oldOrder.StatusID)
+	if newStatus != nil && newStatus.Code != nil {
+		newCode = *newStatus.Code
+	}
+	oldStatus, _ := s.statusRepo.FindStatus(ctx, oldOrder.StatusID)
 	oldCode := ""
-	if oldStatus != nil && oldStatus.Code != nil { oldCode = *oldStatus.Code }
+	if oldStatus != nil && oldStatus.Code != nil {
+		oldCode = *oldStatus.Code
+	}
 
 	// === ФИКС ВРЕМЕННЫХ ЗОН: Используем локальное время базы (Asia/Tashkent) ===
-loc, _ := time.LoadLocation("Asia/Tashkent")
-if loc == nil {
-	loc = time.Local // fallback на системную зону
-}
+	loc := time.Local
 
-// ✅ ИСПРАВЛЕНО: Конвертируем оба времени в Asia/Tashkent
-createdInTashkent := oldOrder.CreatedAt.In(loc)
-nowInTashkent := now.In(loc)
+	// ✅ ИСПРАВЛЕНО: Конвертируем оба времени в Asia/Tashkent
+	createdInTashkent := oldOrder.CreatedAt.In(loc)
+	nowInTashkent := now.In(loc)
 
-// Вычисляем разницу в секундах
-diff := int64(nowInTashkent.Sub(createdInTashkent).Seconds())
-if diff < 0 { 
-	s.logger.Warn("⚠️ Отрицательная разница времени", 
-		zap.Time("created", createdInTashkent), 
-		zap.Time("now", nowInTashkent),
-		zap.Int64("diff", diff))
-	diff = 0 
-}
-val := uint64(diff)
+	// Вычисляем разницу в секундах
+	diff := int64(nowInTashkent.Sub(createdInTashkent).Seconds())
+	if diff < 0 {
+		s.logger.Warn("⚠️ Отрицательная разница времени",
+			zap.Time("created", createdInTashkent),
+			zap.Time("now", nowInTashkent),
+			zap.Int64("diff", diff))
+		diff = 0
+	}
+	val := uint64(diff)
 
 	s.logger.Info("📊 Расчёт метрик времени",
 		zap.Uint64("order_id", newOrder.ID),
@@ -918,22 +914,22 @@ val := uint64(diff)
 	if oldOrder.FirstResponseTimeSeconds == nil || *oldOrder.FirstResponseTimeSeconds == 0 {
 		// Проверяем, является ли актор исполнителем
 		isExecutorAction := false
-		
+
 		// Случай 1: Исполнитель уже назначен и он делает действие
 		if oldOrder.ExecutorID != nil && *oldOrder.ExecutorID == actorID {
 			isExecutorAction = true
 		}
-		
+
 		// Случай 2: Исполнитель только что назначен (делегация)
 		if newOrder.ExecutorID != nil && *newOrder.ExecutorID == actorID {
 			isExecutorAction = true
 		}
-		
+
 		hasComment := dto.Comment != nil && strings.TrimSpace(*dto.Comment) != ""
 		statusChanged := (newOrder.StatusID != oldOrder.StatusID)
-		executorChanged := (oldOrder.ExecutorID == nil && newOrder.ExecutorID != nil) || 
-						   (oldOrder.ExecutorID != nil && newOrder.ExecutorID != nil && *oldOrder.ExecutorID != *newOrder.ExecutorID)
-		
+		executorChanged := (oldOrder.ExecutorID == nil && newOrder.ExecutorID != nil) ||
+			(oldOrder.ExecutorID != nil && newOrder.ExecutorID != nil && *oldOrder.ExecutorID != *newOrder.ExecutorID)
+
 		// ✅ Отклик = ЛЮБОЕ изменение от исполнителя
 		if isExecutorAction && (statusChanged || executorChanged || hasComment) {
 			newOrder.FirstResponseTimeSeconds = &val
@@ -958,16 +954,16 @@ val := uint64(diff)
 		if oldOrder.ResolutionTimeSeconds == nil || *oldOrder.ResolutionTimeSeconds == 0 {
 			newOrder.CompletedAt = &now
 			newOrder.ResolutionTimeSeconds = &val
-			
+
 			// SLA FCR: Решено за 10 минут (600 секунд)
-			if val <= 600 { 
+			if val <= 600 {
 				t := true
-				newOrder.IsFirstContactResolution = &t 
+				newOrder.IsFirstContactResolution = &t
 			} else {
 				f := false
 				newOrder.IsFirstContactResolution = &f
 			}
-			
+
 			// Если закрыли сразу без отклика, то отклик = решению
 			if newOrder.FirstResponseTimeSeconds == nil || *newOrder.FirstResponseTimeSeconds == 0 {
 				newOrder.FirstResponseTimeSeconds = &val
@@ -975,13 +971,13 @@ val := uint64(diff)
 					zap.Uint64("order_id", newOrder.ID),
 					zap.Uint64("seconds", val))
 			}
-			
+
 			s.logger.Info("✅ Заявка закрыта - записано время решения",
 				zap.Uint64("order_id", newOrder.ID),
 				zap.Uint64("resolution_seconds", val),
 				zap.Bool("is_fcr", val <= 600))
 		}
-	} 
+	}
 
 	// --- 3. ПЕРЕОТКРЫТИЕ (Reopen) ---
 	if oldCode == "CLOSED" && newCode != "CLOSED" {
@@ -989,12 +985,13 @@ val := uint64(diff)
 			zap.Uint64("order_id", newOrder.ID),
 			zap.String("old_status", oldCode),
 			zap.String("new_status", newCode))
-		
+
 		newOrder.CompletedAt = nil
-		newOrder.ResolutionTimeSeconds = nil 
+		newOrder.ResolutionTimeSeconds = nil
 		newOrder.IsFirstContactResolution = nil
 	}
 }
+
 // --- Utils wrappers ---
 func (s *OrderService) addHistoryAndPublish(ctx context.Context, tx pgx.Tx, item *repositories.OrderHistoryItem, o entities.Order, a *entities.User) error {
 	if err := s.historyRepo.CreateInTx(ctx, tx, item); err != nil {
@@ -1081,7 +1078,6 @@ func (s *OrderService) validateOrderRules(ctx context.Context, d dto.CreateOrder
 		}
 	}
 
-	
 	if code != "EQUIPMENT" {
 		if !s.checkFieldPresence(d, "comment") {
 			return apperrors.NewBadRequestError("Для данного типа заявки необходимо заполнить поле 'Комментарий'.")

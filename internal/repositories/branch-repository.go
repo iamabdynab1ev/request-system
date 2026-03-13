@@ -12,26 +12,24 @@ import (
 	"go.uber.org/zap"
 
 	"request-system/internal/entities"
-	// ВАЖНО: Подключаем твой билдер
 	"request-system/internal/infrastructure/bd"
-	
+
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
 )
 
 const branchTable = "branches"
 
-// ЕДИНАЯ КАРТА ПОЛЕЙ (Фильтр + Сортировка)
 var branchMap = map[string]string{
-	"id":           "b.id",
-	"name":         "b.name",
-	"short_name":   "b.short_name",
-	"status_id":    "b.status_id",
-	"address":      "b.address",
-	"email":        "b.email",
-	"open_date":    "b.open_date",
-	"created_at":   "b.created_at",
-	"updated_at":   "b.updated_at",
+	"id":         "b.id",
+	"name":       "b.name",
+	"short_name": "b.short_name",
+	"status_id":  "b.status_id",
+	"address":    "b.address",
+	"email":      "b.email",
+	"open_date":  "b.open_date",
+	"created_at": "b.created_at",
+	"updated_at": "b.updated_at",
 }
 
 // Интерфейс
@@ -52,11 +50,6 @@ type BranchRepository struct {
 func NewBranchRepository(storage *pgxpool.Pool, logger *zap.Logger) BranchRepositoryInterface {
 	return &BranchRepository{storage: storage, logger: logger}
 }
-
-// -----------------------------------------------------------
-// SCAN
-// -----------------------------------------------------------
-
 func scanBranch(row pgx.Row) (*entities.Branch, error) {
 	var b entities.Branch
 	var s entities.Status
@@ -107,12 +100,9 @@ func scanBranch(row pgx.Row) (*entities.Branch, error) {
 	return &b, nil
 }
 
-// -----------------------------------------------------------
-// GET (Список) - ИСПОЛЬЗУЕМ HELPER BD
-// -----------------------------------------------------------
 func (r *BranchRepository) GetBranches(ctx context.Context, filter types.Filter) ([]entities.Branch, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	
+
 	// Ручной поиск
 	applySearch := func(b sq.SelectBuilder) sq.SelectBuilder {
 		if filter.Search != "" {
@@ -127,7 +117,7 @@ func (r *BranchRepository) GetBranches(ctx context.Context, filter types.Filter)
 
 	// 1. COUNT
 	countBuilder := psql.Select("COUNT(b.id)").From("branches AS b")
-	
+
 	countBuilder = applySearch(countBuilder)
 
 	countFilter := filter
@@ -138,15 +128,16 @@ func (r *BranchRepository) GetBranches(ctx context.Context, filter types.Filter)
 	countBuilder = bd.ApplyListParams(countBuilder, countFilter, branchMap)
 
 	var total uint64
-	sqlCount, argsCount, _ := countBuilder.ToSql()
+	sqlCount, argsCount, err := countBuilder.ToSql()
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
+	}
 	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	if total == 0 {
 		return []entities.Branch{}, 0, nil
 	}
-
-	// 2. SELECT
 	baseBuilder := psql.Select(
 		"b.id", "b.name", "b.short_name", "b.address", "b.phone_number", "b.email", "b.email_index",
 		"b.open_date", "b.status_id", "b.external_id", "b.source_system",
@@ -186,9 +177,6 @@ func (r *BranchRepository) GetBranches(ctx context.Context, filter types.Filter)
 	return branches, total, nil
 }
 
-// -----------------------------------------------------------
-// FIND ONE
-// -----------------------------------------------------------
 func (r *BranchRepository) findOne(ctx context.Context, querier Querier, where sq.Eq) (*entities.Branch, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 	queryBuilder := psql.Select(
@@ -214,12 +202,9 @@ func (r *BranchRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, exte
 	if tx != nil {
 		querier = tx
 	}
+
 	return r.findOne(ctx, querier, sq.Eq{"b.external_id": externalID, "b.source_system": sourceSystem})
 }
-
-// -----------------------------------------------------------
-// CRUD
-// -----------------------------------------------------------
 
 func (r *BranchRepository) CreateBranch(ctx context.Context, tx pgx.Tx, branch entities.Branch) (uint64, error) {
 	query := `

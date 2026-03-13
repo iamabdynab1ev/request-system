@@ -7,11 +7,12 @@ import (
 	"errors"
 	"fmt"
 
-"request-system/internal/infrastructure/bd"
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"request-system/internal/infrastructure/bd"
 
 	"request-system/internal/entities"
 	apperrors "request-system/pkg/errors"
@@ -22,10 +23,10 @@ const otdelTable = "otdels"
 
 var (
 	otdelAllowedFilterFields = map[string]string{
-		"status_id":      "status_id",
+		"status_id":     "status_id",
 		"department_id": "department_id",
-		"branch_id":      "branch_id",
-		"parent_id":      "parent_id",
+		"branch_id":     "branch_id",
+		"parent_id":     "parent_id",
 	}
 	otdelAllowedSortFields = map[string]bool{"id": true, "name": true, "created_at": true, "updated_at": true}
 )
@@ -188,7 +189,10 @@ func (r *OtdelRepository) GetOtdels(ctx context.Context, filter types.Filter) ([
 	countBuilder = bd.ApplyListParams(countBuilder, countFilter, otdelMap)
 
 	var total uint64
-	sqlCount, argsCount, _ := countBuilder.ToSql()
+	sqlCount, argsCount, err := countBuilder.ToSql()
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
+	}
 	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
@@ -238,7 +242,7 @@ func (r *OtdelRepository) ValidateOtdelsInDepartment(ctx context.Context, deptID
 		return true, nil
 	}
 	query := `SELECT COUNT(DISTINCT id) FROM otdels WHERE departments_id = $1 AND id = ANY($2)`
-	
+
 	var count int
 	err := r.storage.QueryRow(ctx, query, deptID, otdelIDs).Scan(&count)
 	if err != nil {
@@ -247,7 +251,9 @@ func (r *OtdelRepository) ValidateOtdelsInDepartment(ctx context.Context, deptID
 
 	uniqueInput := make(map[uint64]bool)
 	for _, id := range otdelIDs {
-		if id > 0 { uniqueInput[id] = true }
+		if id > 0 {
+			uniqueInput[id] = true
+		}
 	}
 
 	return count == len(uniqueInput), nil

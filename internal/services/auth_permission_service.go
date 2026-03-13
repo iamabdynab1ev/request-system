@@ -45,30 +45,28 @@ func (s *AuthPermissionService) GetAllUserPermissions(ctx context.Context, userI
 	if err == nil {
 		var permissions []string
 		if err := json.Unmarshal([]byte(cachedData), &permissions); err == nil {
-			s.logger.Debug("Привилегии из кэша", zap.Uint64("userID", userID))
+			// s.logger.Debug("Привилегии из кэша", zap.Uint64("userID", userID)) 
 			return permissions, nil
 		}
-		s.logger.Warn("Не удалось распарсить привилегии из кэша", zap.Error(err), zap.String("key", cacheKey))
+		s.logger.Warn("Не удалось распарсить кэш привилегий", zap.Error(err))
 	}
 
-	s.logger.Debug("Кэш не найден. Загружаем привилегии из БД", zap.Uint64("userID", userID))
+	// s.logger.Debug("Загружаем привилегии из БД", zap.Uint64("userID", userID)) 
+
 	permissions, err := s.permissionRepo.GetAllUserPermissionsNames(ctx, userID)
 	if err != nil {
-		s.logger.Error("Не удалось получить привилегии из БД", zap.Uint64("userID", userID), zap.Error(err))
+		s.logger.Error("Ошибка загрузки прав из БД", zap.Uint64("userID", userID), zap.Error(err))
 		return nil, apperrors.ErrInternalServer
 	}
 
 	encoded, err := json.Marshal(permissions)
 	if err != nil {
-		s.logger.Error("Не удалось сериализовать привилегии", zap.Uint64("userID", userID), zap.Error(err))
+		s.logger.Error("Ошибка JSON", zap.Error(err))
 	} else {
 		if err := s.cacheRepo.Set(ctx, cacheKey, string(encoded), s.cacheTTL); err != nil {
-			s.logger.Error("Не удалось сохранить привилегии в кэше", zap.Uint64("userID", userID), zap.Error(err))
-		} else {
-			s.logger.Debug("Привилегии успешно сохранены в кэше", zap.Uint64("userID", userID))
+			s.logger.Error("Ошибка записи кэша", zap.Error(err))
 		}
 	}
-
 	return permissions, nil
 }
 

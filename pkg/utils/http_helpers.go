@@ -269,16 +269,6 @@ func ErrorResponse(c echo.Context, err error, logger *zap.Logger) error {
 	})
 }
 
-func TimeEqual(old, new *time.Time) bool {
-	if old == nil && new == nil {
-		return true
-	}
-	if old == nil || new == nil {
-		return false
-	}
-	return old.Equal(*new)
-}
-
 func StringPtrEqual(old, new *string) bool {
 	if old == nil && new == nil {
 		return true
@@ -287,4 +277,13 @@ func StringPtrEqual(old, new *string) bool {
 		return false
 	}
 	return *old == *new
+}
+func TimeEqual(a, b *time.Time) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Equal(*b)
 }

@@ -61,17 +61,16 @@ func SuccessList[T any](c echo.Context, message string, list []T, total uint64, 
 }
 
 func ErrorResponse(c echo.Context, err error) error {
-	code := 500
-	msg := err.Error()
+    code := 500
+    msg := "Внутренняя ошибка сервера"
 
-	// Для HttpError берем только пользовательское сообщение, без code и технических деталей
-	if httpErr, ok := err.(*apperrors.HttpError); ok {
-		code = httpErr.Code
-		msg = httpErr.Message
-	}
+    if httpErr, ok := err.(*apperrors.HttpError); ok {
+        code = httpErr.Code
+        msg = httpErr.Message
+    }
 
-	return c.JSON(code, Response[any]{
-		Status:  false,
-		Message: msg,
-	})
+    return c.JSON(code, Response[any]{
+        Status:  false,
+        Message: msg,
+    })
 }

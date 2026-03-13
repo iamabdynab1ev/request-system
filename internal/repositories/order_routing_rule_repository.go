@@ -22,13 +22,13 @@ const (
 )
 
 type OrderRoutingRuleRepositoryInterface interface {
-	Create(ctx context.Context, tx pgx.Tx, rule *entities.OrderRoutingRule) (int, error)
+	Create(ctx context.Context, tx pgx.Tx, rule *entities.OrderRoutingRule) (uint64, error)
 	Update(ctx context.Context, tx pgx.Tx, rule *entities.OrderRoutingRule) error
-	Delete(ctx context.Context, tx pgx.Tx, id int) error
-	FindByID(ctx context.Context, id int) (*entities.OrderRoutingRule, error)
+	Delete(ctx context.Context, tx pgx.Tx, id uint64) error
+	FindByID(ctx context.Context, id uint64) (*entities.OrderRoutingRule, error)
 	GetAll(ctx context.Context, limit, offset uint64, search string) ([]*entities.OrderRoutingRule, uint64, error)
-	FindByTypeID(ctx context.Context, tx pgx.Tx, orderTypeID int) (*entities.OrderRoutingRule, error)
-	ExistsByOrderTypeID(ctx context.Context, tx pgx.Tx, orderTypeID int) (bool, error)
+	FindByTypeID(ctx context.Context, tx pgx.Tx, orderTypeID uint64) (*entities.OrderRoutingRule, error)
+	ExistsByOrderTypeID(ctx context.Context, tx pgx.Tx, orderTypeID uint64) (bool, error)
 }
 
 type orderRoutingRuleRepository struct {
@@ -64,14 +64,14 @@ func (r *orderRoutingRuleRepository) scanRow(row pgx.Row) (*entities.OrderRoutin
 	return &rule, nil
 }
 
-func (r *orderRoutingRuleRepository) Create(ctx context.Context, tx pgx.Tx, rule *entities.OrderRoutingRule) (int, error) {
+func (r *orderRoutingRuleRepository) Create(ctx context.Context, tx pgx.Tx, rule *entities.OrderRoutingRule) (uint64, error) {
 	// Добавляем branch_id и office_id в INSERT
 	query := `INSERT INTO order_routing_rules 
 		(rule_name, order_type_id, department_id, otdel_id, branch_id, office_id, assign_to_position_id, status_id) 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
 		RETURNING id`
 
-	var id int
+	var id uint64
 	err := tx.QueryRow(ctx, query,
 		rule.RuleName,
 		rule.OrderTypeID,
@@ -125,7 +125,7 @@ func (r *orderRoutingRuleRepository) Update(ctx context.Context, tx pgx.Tx, rule
 	return nil
 }
 
-func (r *orderRoutingRuleRepository) Delete(ctx context.Context, tx pgx.Tx, id int) error {
+func (r *orderRoutingRuleRepository) Delete(ctx context.Context, tx pgx.Tx, id uint64) error {
 	query := "DELETE FROM order_routing_rules WHERE id = $1"
 	res, err := tx.Exec(ctx, query, id)
 	if err != nil {
@@ -141,13 +141,13 @@ func (r *orderRoutingRuleRepository) Delete(ctx context.Context, tx pgx.Tx, id i
 	return nil
 }
 
-func (r *orderRoutingRuleRepository) FindByID(ctx context.Context, id int) (*entities.OrderRoutingRule, error) {
+func (r *orderRoutingRuleRepository) FindByID(ctx context.Context, id uint64) (*entities.OrderRoutingRule, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", ruleFields, ruleTable)
 	row := r.storage.QueryRow(ctx, query, id)
 	return r.scanRow(row)
 }
 
-func (r *orderRoutingRuleRepository) FindByTypeID(ctx context.Context, tx pgx.Tx, orderTypeID int) (*entities.OrderRoutingRule, error) {
+func (r *orderRoutingRuleRepository) FindByTypeID(ctx context.Context, tx pgx.Tx, orderTypeID uint64) (*entities.OrderRoutingRule, error) {
 	// StatusID = 2 берем как хардкод активного статуса.
 	// Либо замени на константу constants.StatusActiveID, если она числовая (например 10)
 	query := fmt.Sprintf(`
@@ -168,7 +168,7 @@ func (r *orderRoutingRuleRepository) FindByTypeID(ctx context.Context, tx pgx.Tx
 	return r.scanRow(row)
 }
 
-func (r *orderRoutingRuleRepository) ExistsByOrderTypeID(ctx context.Context, tx pgx.Tx, orderTypeID int) (bool, error) {
+func (r *orderRoutingRuleRepository) ExistsByOrderTypeID(ctx context.Context, tx pgx.Tx, orderTypeID uint64) (bool, error) {
 	query := "SELECT EXISTS (SELECT 1 FROM order_routing_rules WHERE order_type_id = $1)"
 	var exists bool
 	var err error

@@ -148,4 +148,6 @@ const (
 
 	// Active Directory
 	UserManageADLink = "user:manage_ad_link"
+
+	EquipmentsImport = "equipment:import"
 )

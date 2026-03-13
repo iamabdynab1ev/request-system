@@ -61,11 +61,11 @@ func (db *dbStatus) ToEntity() entities.Status {
 		Name:      db.Name,
 		Code:      utils.NullToPtr(db.Code),
 		Type:      typeInt,
-		IconSmall: utils.NullToPtr(db.IconSmall), // <-- Важно убедиться, что эти поля есть в entities.Status
-		IconBig:   utils.NullToPtr(db.IconBig),   // <-- И они имеют тип *string
+		IconSmall: utils.NullToPtr(db.IconSmall), 
+		IconBig:   utils.NullToPtr(db.IconBig),   
 
-		CreatedAt: createdAtStr, // <-- Передаем строку
-		UpdatedAt: updatedAtStr, // <-- Передаем строку
+		CreatedAt: createdAtStr, 
+		UpdatedAt: updatedAtStr, 
 	}
 }
 
@@ -110,14 +110,12 @@ func (r *statusRepository) GetStatuses(ctx context.Context, filter types.Filter)
 	conditions := []string{}
 	argIndex := 1
 
-	// Поиск
 	if filter.Search != "" {
 		conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d OR code ILIKE $%d)", argIndex, argIndex))
 		args = append(args, "%"+filter.Search+"%")
 		argIndex++
 	}
 
-	// Фильтры (множественные значения через запятую)
 	for key, val := range filter.Filter {
 		strVal, ok := val.(string)
 		if !ok || strVal == "" {
@@ -139,13 +137,10 @@ func (r *statusRepository) GetStatuses(ctx context.Context, filter types.Filter)
 		}
 	}
 
-	// WHERE
 	whereSQL := ""
 	if len(conditions) > 0 {
 		whereSQL = "WHERE " + strings.Join(conditions, " AND ")
 	}
-
-	// ORDER BY
 	orderSQL := ""
 	if len(filter.Sort) > 0 {
 		orderParts := []string{}
@@ -161,14 +156,12 @@ func (r *statusRepository) GetStatuses(ctx context.Context, filter types.Filter)
 		orderSQL = "ORDER BY id ASC"
 	}
 
-	// Пагинация
 	limit := filter.Limit
 	offset := filter.Offset
 	if filter.WithPagination && limit > 0 {
 		orderSQL += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 	}
 
-	// Основной запрос
 	query := fmt.Sprintf(`SELECT %s FROM %s %s %s`, statusFields, statusTable, whereSQL, orderSQL)
 
 	rows, err := r.storage.Query(ctx, query, args...)
@@ -186,7 +179,6 @@ func (r *statusRepository) GetStatuses(ctx context.Context, filter types.Filter)
 		statuses = append(statuses, dbRow.ToDTO())
 	}
 
-	// Подсчёт общего количества
 	var total uint64
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", statusTable, whereSQL)
 	if err := r.storage.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
@@ -229,7 +221,6 @@ func (r *statusRepository) FindByCodeInTx(ctx context.Context, tx pgx.Tx, code s
 	return &entity, nil
 }
 
-// FindIDByCode - НОВЫЙ, КЛЮЧЕВОЙ МЕТОД
 func (r *statusRepository) FindIDByCode(ctx context.Context, code string) (uint64, error) {
 	var id uint64
 	err := r.storage.QueryRow(ctx, `SELECT id FROM statuses WHERE code = $1`, code).Scan(&id)
@@ -259,9 +250,12 @@ func (r *statusRepository) CreateStatus(ctx context.Context, payload dto.CreateS
 	err := r.storage.QueryRow(ctx, query, payload.Name, payload.Type, payload.Code, iconSmallPath, iconBigPath).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return nil, apperrors.ErrConflict
-		}
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+    if strings.Contains(pgErr.ConstraintName, "statuses_code") {
+        return nil, apperrors.NewBadRequestError("Статус с таким кодом уже существует.")
+    }
+    return nil, apperrors.NewBadRequestError("Статус с таким названием уже существует.")
+}
 		return nil, err
 	}
 	statusDTO := dbRow.ToDTO()

@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"strconv"
 )
 
 func SmartUpdate(dst interface{}, changes map[string]interface{}) bool {
@@ -93,9 +94,35 @@ func SmartUpdate(dst interface{}, changes map[string]interface{}) bool {
 	return hasChanges
 }
 
-// convertType приводит значение from к типу targetType.
-// Решает проблему json.Unmarshal, который парсит числа как float64.
 func convertType(from interface{}, targetType reflect.Type) interface{} {
+	// НОВОЕ: Прямая поддержка *time.Time и time.Time
+	if targetType == reflect.TypeOf(time.Time{}) {
+		switch v := from.(type) {
+		case time.Time:
+			return v
+		case *time.Time:
+			if v != nil {
+				return *v
+			}
+			return nil
+		case string:
+			// Пробуем RFC3339 (ISO 8601)
+			if t, err := time.Parse(time.RFC3339, v); err == nil {
+				return t
+			}
+			// Пробуем упрощенный формат
+			if t, err := time.Parse("2006-01-02T15:04:05Z07:00", v); err == nil {
+				return t
+			}
+			// Пробуем еще один вариант
+			if t, err := time.Parse("2006-01-02T15:04:05", v); err == nil {
+				return t
+			}
+			return nil
+		}
+		return nil
+	}
+	
 	fromVal := reflect.ValueOf(from)
 
 	// Если типы уже совпадают, возвращаем как есть
@@ -108,35 +135,12 @@ func convertType(from interface{}, targetType reflect.Type) interface{} {
 		return fromVal.Convert(targetType).Interface()
 	}
 
-	// НОВОЕ: Обработка строк в time.Time
-	if fromVal.Kind() == reflect.String && targetType == reflect.TypeOf(time.Time{}) {
-		strVal := fromVal.String()
-
-		// Пробуем RFC3339 (ISO 8601)
-		if t, err := time.Parse(time.RFC3339, strVal); err == nil {
-			return t
-		}
-
-		// Пробуем упрощенный формат
-		if t, err := time.Parse("2006-01-02T15:04:05Z07:00", strVal); err == nil {
-			return t
-		}
-
-		// Пробуем еще один вариант
-		if t, err := time.Parse("2006-01-02T15:04:05", strVal); err == nil {
-			return t
-		}
-
-		// Если не удалось спарсить - возвращаем nil (конвертация не удалась)
-		return nil
-	}
-
 	// Обработка JSON чисел (которые приходят как float64)
 	if fromVal.Kind() == reflect.Float64 {
 		floatV := fromVal.Float()
 		switch targetType.Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			return int64(floatV) // Возвращаем как int64 (Go потом сам кастанет через Value.Set)
+			return int64(floatV)
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			return uint64(floatV)
 		}
@@ -151,7 +155,7 @@ func convertType(from interface{}, targetType reflect.Type) interface{} {
 		}
 	}
 
-	// Если ничего не подошло (например, пытаемся записать строку в число), возвращаем nil
+	// Если ничего не подошло
 	return nil
 }
 
@@ -180,9 +184,17 @@ func PtrToString(val *uint64) string {
 }
 
 func convertAnyToString(v interface{}) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-
-	return ""
+    if s, ok := v.(string); ok {
+        return s
+    }
+    if u, ok := v.(uint64); ok {
+        return strconv.FormatUint(u, 10)
+    }
+    if u, ok := v.(uint32); ok {
+        return strconv.FormatUint(uint64(u), 10)
+    }
+    if f, ok := v.(float64); ok {
+        return strconv.FormatUint(uint64(f), 10)
+    }
+    return ""
 }

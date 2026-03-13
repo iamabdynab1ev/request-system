@@ -83,7 +83,6 @@ type LDAPConfig struct {
 	Port    int
 	Domain  string
 
-	// Исправлено: Возвращаем пропущенное поле
 	SearchEnabled bool
 
 	BindDN              string
@@ -100,9 +99,8 @@ type SeederConfig struct {
 	AdminPassword string
 }
 
-// New инициализирует конфигурацию, считывая .env
 func New() *Config {
-	// Если мы не в продакшене, пробуем загрузить .env, но не паникуем, если его нет
+
 	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️  Файл .env не найден или не может быть загружен. Используются системные переменные окружения.")
 	} else {
@@ -159,14 +157,14 @@ func New() *Config {
 			BaseURL: getEnv("FRONTEND_BASE_URL", "http://localhost:3000"),
 		},
 		LDAP: LDAPConfig{
-			Enabled:       getEnvAsBool("LDAP_ENABLED", false),
-			SearchEnabled: getEnvAsBool("LDAP_SEARCH_ENABLED", false), // <-- Вернули чтение переменной
-			Host:          getEnv("LDAP_HOST", "ldap.local"),
-			Port:          getEnvAsInt("LDAP_PORT", 389),
-			Domain:        getEnv("LDAP_DOMAIN", ""),
-			BindDN:        getEnv("LDAP_BIND_DN", ""),
-			BindPassword:  getEnv("LDAP_BIND_PASSWORD", ""),
-			SearchBaseDN:  getEnv("LDAP_SEARCH_BASE_DN", ""),
+			Enabled:             getEnvAsBool("LDAP_ENABLED", false),
+			SearchEnabled:       getEnvAsBool("LDAP_SEARCH_ENABLED", false),
+			Host:                getEnv("LDAP_HOST", "ldap.local"),
+			Port:                getEnvAsInt("LDAP_PORT", 389),
+			Domain:              getEnv("LDAP_DOMAIN", ""),
+			BindDN:              getEnv("LDAP_BIND_DN", ""),
+			BindPassword:        getEnv("LDAP_BIND_PASSWORD", ""),
+			SearchBaseDN:        getEnv("LDAP_SEARCH_BASE_DN", ""),
 			SearchFilterPattern: getEnv("LDAP_SEARCH_FILTER_PATTERN", "(&(objectClass=person)(sAMAccountName=%s))"),
 			SearchAttributes:    parseList(getEnv("LDAP_SEARCH_ATTRIBUTES", "sAMAccountName,displayName,mail")),
 			UsernameAttribute:   getEnv("LDAP_SEARCH_ATTR_USERNAME", "sAMAccountName"),
@@ -184,7 +182,6 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-// getRequiredEnv падает, если переменной нет (Fail Fast)
 func getRequiredEnv(key string) string {
 	value, exists := os.LookupEnv(key)
 	if !exists || value == "" {
@@ -198,7 +195,7 @@ func getEnvAsBool(key string, fallback bool) bool {
 	if valStr == "" {
 		return fallback
 	}
-	// true, TRUE, True, 1 -> true
+
 	val, err := strconv.ParseBool(valStr)
 	if err != nil {
 		return fallback

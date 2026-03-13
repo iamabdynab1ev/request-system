@@ -91,9 +91,6 @@ func (r *EquipmentRepository) scanEquipment(row pgx.Row) (*entities.Equipment, e
 	return &e, nil
 }
 
-// --------------------------------------------------------
-// GetEquipments
-// --------------------------------------------------------
 func (r *EquipmentRepository) GetEquipments(ctx context.Context, filter types.Filter) ([]entities.Equipment, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 	

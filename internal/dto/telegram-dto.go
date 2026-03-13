@@ -32,22 +32,25 @@ func (s *TelegramState) SetDuration(t *time.Time) {
 	}
 }
 
-// GetDuration получает срок выполнения
-func (s *TelegramState) GetDuration() (*time.Time, error) {
-	val, ok := s.Changes["duration"]
-	if !ok || val == "" {
-		return nil, nil
-	}
-	t, err := time.Parse(time.RFC3339, val)
-	if err != nil {
-		return nil, fmt.Errorf("invalid duration format: %w", err)
-	}
-	return &t, nil
+func (s *TelegramState) GetDuration() (*time.Time, bool, error) {
+
+    if _, cleared := s.Changes["duration_cleared"]; cleared {
+        return nil, true, nil
+    }
+    val, ok := s.Changes["duration"]
+    if !ok {
+        return nil, false, nil
+    }
+    t, err := time.Parse(time.RFC3339, val)
+    if err != nil {
+        return nil, false, fmt.Errorf("invalid duration format: %w", err)
+    }
+    return &t, true, nil
 }
 
-// ClearDuration очищает срок выполнения
 func (s *TelegramState) ClearDuration() {
-	s.Changes["duration"] = ""
+    s.Changes["duration_cleared"] = "true"
+    delete(s.Changes, "duration")
 }
 
 // === Методы для работы с ID полями ===
@@ -105,9 +108,16 @@ func (s *TelegramState) GetComment() (string, bool) {
 
 // HasChanges проверяет наличие изменений
 func (s *TelegramState) HasChanges() bool {
-	return len(s.Changes) > 0
+    for k := range s.Changes {
+        if k != "duration_cleared" {
+            return true
+        }
+    }
+    if _, cleared := s.Changes["duration_cleared"]; cleared {
+        return true
+    }
+    return false
 }
-
 // ClearChanges очищает все изменения
 func (s *TelegramState) ClearChanges() {
 	s.Changes = make(map[string]string)

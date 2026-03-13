@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	apperrors "request-system/pkg/errors"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -50,5 +52,5 @@ func (m *TxManager) RunInTransaction(ctx context.Context, fn func(tx pgx.Tx) err
 	}()
 
 	err = fn(tx)
-	return err
+return apperrors.WrapDBError(err)
 }

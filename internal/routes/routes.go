@@ -88,16 +88,16 @@ func InitRouter(
 		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService, nil)
 	historyService := services.NewOrderHistoryService(historyRepo, userRepo, departmentService, otdelService, statusRepo, priorityRepo, loggers.OrderHistory)
 	reportService := services.NewReportService(reportRepo, userRepo, loggers.Main)
+	_ = reportService
 	branchService := services.NewBranchService(txManager, branchRepo, userRepo, loggers.Main)
 	officeService := services.NewOfficeService(officeRepo, userRepo, txManager, loggers.Main)
 	tgService := telegram.NewService(cfg.Telegram.BotToken)
 	notificationService := services.NewTelegramNotificationService(tgService, loggers.Main)
 	orderService = services.NewOrderService(txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo, ruleEngineService,
 		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService, notificationService)
-	dashboardService := services.NewDashboardService(dashboardRepo, userRepo, loggers.Main)
+	dashboardService := services.NewDashboardService(dashboardRepo, userRepo, cacheRepo, loggers.Main)
 
 	// --- 3. КОНТРОЛЛЕРЫ ---
-	// Создаем ВСЕ контроллеры здесь, в одном месте.
 	userController := controllers.NewUserController(userService, adService, fileStorage, loggers.User)
 	historyController := controllers.NewOrderHistoryController(historyService, orderService, loggers.OrderHistory)
 	wsController := controllers.NewWebSocketController(wsHub, jwtSvc, loggers.Main)
@@ -106,9 +106,8 @@ func InitRouter(
 	// --- 4. РОУТЕРЫ ---
 	secureGroup := api.Group("", authMW.Auth)
 
-	runReportRouter(secureGroup, reportService, loggers.Main, authMW)
-
-	// <<<--- ИСПРАВЛЕННЫЙ ВЫЗОВ runAuthRouter
+	runEquipImportRouter(secureGroup, dbConn, loggers.Main, authMW)
+	runEquipmentRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runAuthRouter(api, dbConn, redisClient, jwtSvc, loggers.Auth, authMW, fileStorage, authPermissionService, cfg,
 		positionService, branchService, departmentService, otdelService, officeService)
 

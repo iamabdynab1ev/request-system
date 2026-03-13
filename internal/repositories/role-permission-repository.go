@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	// <-- ЭТА СТРОКА ДОЛЖНА БЫТЬ ТОЧНО ТУТ
 	"request-system/internal/dto"
 	apperrors "request-system/pkg/errors"
 
@@ -13,10 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ИСПРАВЛЕНО на правильное имя таблицы из DDL.
-const rolePermissionTable = "role_permissions"
 
-// Добавлены id, created_at, updated_at в список полей для RETURNING и SELECT.
+const rolePermissionTable = "role_permissions"
 const rolePermissionFields = "id, role_id, permission_id, created_at, updated_at"
 
 type RolePermissionRepositoryInterface interface {

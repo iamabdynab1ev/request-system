@@ -82,19 +82,19 @@ func (s *jwtService) GenerateTokens(userID uint64, roleID uint64, accessTokenTTL
 }
 
 func (s *jwtService) ValidateToken(tokenString string) (*JwtCustomClaim, error) {
-	s.logger.Debug("ValidateToken: Получена строка токена для валидации", zap.String("receivedToken", tokenString))
 	token, err := jwt.ParseWithClaims(tokenString, &JwtCustomClaim{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, apperrors.ErrInvalidSigningMethod
 		}
 		return []byte(s.SecretKey), nil
 	})
+
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
-			s.logger.Warn("Проверка токена: срок действия истек")
+			s.logger.Warn("Токен истек", zap.String("error", err.Error()))
 			return nil, apperrors.ErrTokenExpired
 		}
-		s.logger.Error("Ошибка парсинга токена", zap.Error(err))
+		s.logger.Error("Ошибка валидации токена", zap.Error(err))
 		return nil, apperrors.ErrInvalidToken
 	}
 
@@ -103,11 +103,10 @@ func (s *jwtService) ValidateToken(tokenString string) (*JwtCustomClaim, error) 
 			s.logger.Warn("Недопустимый UserID в токене")
 			return nil, apperrors.ErrInvalidToken
 		}
-		s.logger.Debug("Успешно извлечены claims", zap.Any("claims", claims))
 		return claims, nil
 	}
 
-	s.logger.Warn("Токен невалиден по неизвестной причине")
+	s.logger.Warn("Токен валиден, но Claims не соответствуют ожиданиям")
 	return nil, apperrors.ErrInvalidToken
 }
 

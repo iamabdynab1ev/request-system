@@ -122,8 +122,10 @@ func (c *TelegramController) handleStateInput(ctx context.Context, chatID int64,
 
 func (c *TelegramController) handleMenuButton(ctx context.Context, chatID int64, text string) error {
 	switch text {
-	case "📋 Мои Заявки":
+	case "📋 Мои заявки":
 		return c.handleMyTasksCommand(ctx, chatID)
+	case "👨‍💼 Назначены мне":
+		return c.handleAssignedToMeCommand(ctx, chatID)
 	case "⏰ На сегодня":
 		return c.handleTodayTasksCommand(ctx, chatID)
 	case "🔴 Просроченные":
@@ -143,63 +145,49 @@ func (c *TelegramController) handleMyTasksCommand(ctx context.Context, chatID in
 	if err != nil {
 		return err
 	}
-	
+
 	filter := types.Filter{
-		Limit: 10, 
-		Page: 1,
+		Limit: 10,
+		Page:  1,
 		Filter: map[string]interface{}{
-			"user_id": user.ID, 
+			"creator_id": user.ID, // только созданные мной
 		},
 	}
-	resp, err := c.orderService.GetOrders(userCtx, filter, true)
+	resp, err := c.orderService.GetOrders(userCtx, filter, true, false)
 	if err != nil {
 		c.logger.Error("GetOrders failed", zap.Error(err), zap.Int64("chat_id", chatID))
 		return c.tgService.SendMessageEx(ctx, chatID, "❌ Ошибка загрузки заявок\\.", telegram.WithMarkdownV2())
 	}
-	statusMap := c.getStatusMap(ctx)
+
 	var text strings.Builder
 	var keyboard [][]telegram.InlineKeyboardButton
-	
+
 	if len(resp.List) == 0 {
 		text.WriteString("✅ У вас нет активных заявок\\.")
 	} else {
-		// Отображаем, сколько показываем
 		text.WriteString(fmt.Sprintf("📋 *Ваши последние заявки* \\(%d\\):\n\n", len(resp.List)))
-		
-		currentRow := []telegram.InlineKeyboardButton{}
+		text.WriteString("_Нажмите на заявку:_")
+
+		statusMap := c.getStatusMap(ctx)
 		for _, order := range resp.List {
 			emoji := getStatusEmoji(statusMap[order.StatusID])
-			
-			// Формируем красивый список текстом
-			text.WriteString(fmt.Sprintf("%s *№%d* • %s\n",
-				emoji, order.ID, telegram.EscapeTextForMarkdownV2(order.Name)))
-			
-			// Формируем кнопку
-			cb := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, order.ID)
-			currentRow = append(currentRow, telegram.InlineKeyboardButton{
-				Text:         fmt.Sprintf("№%d", order.ID),
-				CallbackData: cb,
-			})
-			
-			// Разбиваем кнопки по 5 в ряд
-			if len(currentRow) >= 5 {
-				keyboard = append(keyboard, currentRow)
-				currentRow = []telegram.InlineKeyboardButton{}
+			buttonText := order.Name
+			if len(buttonText) > 30 {
+				buttonText = buttonText[:27] + "..."
 			}
+			buttonText = fmt.Sprintf("%s №%d • %s", emoji, order.ID, buttonText)
+
+			cb := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, order.ID)
+			keyboard = append(keyboard, []telegram.InlineKeyboardButton{
+				{Text: buttonText, CallbackData: cb},
+			})
 		}
-		
-		if len(currentRow) > 0 {
-			keyboard = append(keyboard, currentRow)
-		}
-		
+
 		if len(resp.List) >= 10 {
-			text.WriteString("\n_Показаны первые 10 заявок\\._")
-		} else {
-			text.WriteString("\n_Выберите заявку:_")
+			text.WriteString("\n\n_Показаны первые 10 заявок\\._")
 		}
 	}
-	
-	// ✅ ИЗМЕНЕНИЕ: Добавляем кнопку выхода/обновления, чтобы меню выглядело законченным
+
 	keyboard = append(keyboard, []telegram.InlineKeyboardButton{
 		{Text: "❌ Закрыть список", CallbackData: `{"action":"main_menu"}`},
 	})
@@ -211,7 +199,65 @@ func (c *TelegramController) handleMyTasksCommand(ctx context.Context, chatID in
 	return c.tgService.EditOrSendMessage(ctx, chatID, mid, text.String(),
 		telegram.WithKeyboard(keyboard), telegram.WithMarkdownV2())
 }
+func (c *TelegramController) handleAssignedToMeCommand(ctx context.Context, chatID int64, messageID ...int) error {
+	user, userCtx, err := c.prepareUserContext(ctx, chatID)
+	if err != nil {
+		return err
+	}
 
+	filter := types.Filter{
+		Limit: 10,
+		Page:  1,
+		Filter: map[string]interface{}{
+			"executor_id": user.ID, // только где я исполнитель
+		},
+	}
+	resp, err := c.orderService.GetOrders(userCtx, filter, false, true)
+	if err != nil {
+		c.logger.Error("GetOrders failed", zap.Error(err), zap.Int64("chat_id", chatID))
+		return c.tgService.SendMessageEx(ctx, chatID, "❌ Ошибка загрузки заявок\\.", telegram.WithMarkdownV2())
+	}
+
+	var text strings.Builder
+	var keyboard [][]telegram.InlineKeyboardButton
+
+	if len(resp.List) == 0 {
+		text.WriteString("✅ Нет заявок, назначенных на вас\\.")
+	} else {
+		text.WriteString(fmt.Sprintf("👨‍💼 *Назначены на вас* \\(%d\\):\n\n", len(resp.List)))
+		text.WriteString("_Нажмите на заявку:_")
+
+		statusMap := c.getStatusMap(ctx)
+		for _, order := range resp.List {
+			emoji := getStatusEmoji(statusMap[order.StatusID])
+			buttonText := order.Name
+			if len(buttonText) > 30 {
+				buttonText = buttonText[:27] + "..."
+			}
+			buttonText = fmt.Sprintf("%s №%d • %s", emoji, order.ID, buttonText)
+
+			cb := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, order.ID)
+			keyboard = append(keyboard, []telegram.InlineKeyboardButton{
+				{Text: buttonText, CallbackData: cb},
+			})
+		}
+
+		if len(resp.List) >= 10 {
+			text.WriteString("\n\n_Показаны первые 10 заявок\\._")
+		}
+	}
+
+	keyboard = append(keyboard, []telegram.InlineKeyboardButton{
+		{Text: "❌ Закрыть список", CallbackData: `{"action":"main_menu"}`},
+	})
+
+	mid := 0
+	if len(messageID) > 0 {
+		mid = messageID[0]
+	}
+	return c.tgService.EditOrSendMessage(ctx, chatID, mid, text.String(),
+		telegram.WithKeyboard(keyboard), telegram.WithMarkdownV2())
+}
 func (c *TelegramController) handleTodayTasksCommand(ctx context.Context, chatID int64, messageID ...int) error {
 	_, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
@@ -220,17 +266,17 @@ func (c *TelegramController) handleTodayTasksCommand(ctx context.Context, chatID
 	now := time.Now().In(c.loc)
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, c.loc)
 	endOfDay := startOfDay.Add(24 * time.Hour)
-	
+
 	filter := types.Filter{
 		Limit: maxOrdersPerPage,
 		Page:  1,
 		Filter: map[string]interface{}{
-			"created_from": startOfDay,  
+			"created_from": startOfDay,
 			"created_to":   endOfDay,
 		},
 	}
 
-	resp, err := c.orderService.GetOrders(userCtx, filter, true)
+	resp, err := c.orderService.GetOrders(userCtx, filter, false, false)
 	if err != nil {
 		c.logger.Error("GetOrders failed", zap.Error(err))
 		return c.tgService.SendMessageEx(ctx, chatID, "❌ Ошибка загрузки заявок\\.", telegram.WithMarkdownV2())
@@ -251,7 +297,7 @@ func (c *TelegramController) handleOverdueTasksCommand(ctx context.Context, chat
 			"overdue": true,
 		},
 	}
-	resp, err := c.orderService.GetOrders(userCtx, filter, true)
+	resp, err := c.orderService.GetOrders(userCtx, filter, false, false)
 	if err != nil {
 		c.logger.Error("GetOrders failed", zap.Error(err))
 		return c.tgService.SendMessageEx(ctx, chatID, "❌ Ошибка загрузки заявок\\.", telegram.WithMarkdownV2())
@@ -348,7 +394,7 @@ func (c *TelegramController) handleSearchQuery(ctx context.Context, chatID int64
 		Page:   1,
 		Search: text,
 	}
-	resp, err := c.orderService.GetOrders(userCtx, filter, true)
+	resp, err := c.orderService.GetOrders(userCtx, filter, false, false)
 	if err != nil {
 		c.logger.Error("Search failed", zap.Error(err))
 		return c.tgService.SendMessageEx(ctx, chatID, "❌ Ошибка поиска\\.", telegram.WithMarkdownV2())
@@ -372,7 +418,7 @@ func (c *TelegramController) sendMainMenu(ctx context.Context, chatID int64) err
 		"Система заявок банка\\.\n" +
 		"Выберите действие из меню ниже\\."
 	keyboard := [][]telegram.ReplyKeyboardButton{
-		{{Text: "📋 Мои Заявки"}},
+		{{Text: "📋 Мои заявки"}, {Text: "👨‍💼 Назначены мне"}},
 		{{Text: "⏰ На сегодня"}, {Text: "🔴 Просроченные"}},
 		{{Text: "🔍 Поиск"}, {Text: "📊 Статистика"}},
 	}
@@ -385,34 +431,33 @@ func (c *TelegramController) renderOrderList(ctx context.Context, chatID int64, 
 	title string, emptyText string, messageID ...int) error {
 	var text strings.Builder
 	var keyboard [][]telegram.InlineKeyboardButton
+
 	if len(orders) == 0 {
 		text.WriteString(emptyText)
 	} else {
 		text.WriteString(fmt.Sprintf("%s \\(%d\\):\n\n", title, len(orders)))
+		text.WriteString("_Нажмите на заявку:_")
+
 		statusMap := c.getStatusMap(ctx)
-		currentRow := []telegram.InlineKeyboardButton{}
 		for _, order := range orders {
 			emoji := getStatusEmoji(statusMap[order.StatusID])
-			text.WriteString(fmt.Sprintf("%s *№%d* • %s\n",
-				emoji, order.ID, telegram.EscapeTextForMarkdownV2(order.Name)))
-			cb := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, order.ID)
-			currentRow = append(currentRow, telegram.InlineKeyboardButton{
-				Text:         fmt.Sprintf("№%d", order.ID),
-				CallbackData: cb,
-			})
-			if len(currentRow) >= 5 {
-				keyboard = append(keyboard, currentRow)
-				currentRow = []telegram.InlineKeyboardButton{}
+			buttonText := order.Name
+			if len(buttonText) > 30 {
+				buttonText = buttonText[:27] + "..."
 			}
+			buttonText = fmt.Sprintf("%s №%d • %s", emoji, order.ID, buttonText)
+
+			cb := fmt.Sprintf(`{"action":"select_order","order_id":%d}`, order.ID)
+			keyboard = append(keyboard, []telegram.InlineKeyboardButton{
+				{Text: buttonText, CallbackData: cb},
+			})
 		}
-		if len(currentRow) > 0 {
-			keyboard = append(keyboard, currentRow)
-		}
-		text.WriteString("\n_Выберите заявку:_")
 	}
+
 	keyboard = append(keyboard, []telegram.InlineKeyboardButton{
 		{Text: "🏠 Главное меню", CallbackData: `{"action":"main_menu"}`},
 	})
+
 	mid := 0
 	if len(messageID) > 0 {
 		mid = messageID[0]

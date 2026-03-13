@@ -140,7 +140,7 @@ func (c *DepartmentController) UpdateDepartment(ctx echo.Context) error {
 
 func (c *DepartmentController) DeleteDepartment(ctx echo.Context) error {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
-	if err != nil { 
+	if err != nil {
 		c.logger.Error("DeleteDepartment: неверный формат ID", zap.String("id", ctx.Param("id")), zap.Error(err))
 		return utils.ErrorResponse(
 			ctx,

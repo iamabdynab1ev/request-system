@@ -243,13 +243,13 @@ func (ctrl *AuthController) UpdateMe(c echo.Context) error {
 
 	// 1. Читаем JSON данные
 	dataString := c.FormValue("data")
-	
+
 	// Это карта для отслеживания: что именно прислал фронтенд?
 	explicitFields := make(map[string]interface{})
 
 	if dataString != "" {
 		_ = json.Unmarshal([]byte(dataString), &payload)
-		_ = json.Unmarshal([]byte(dataString), &explicitFields) 
+		_ = json.Unmarshal([]byte(dataString), &explicitFields)
 	}
 
 	// 2. Обрабатываем загрузку файла
@@ -262,14 +262,14 @@ func (ctrl *AuthController) UpdateMe(c echo.Context) error {
 
 		payload.PhotoURL = photoURL
 	} else {
-		
+
 		if val, exists := explicitFields["photo_url"]; exists && val == nil {
-			deleteSignal := "SET_NULL" 
-			payload.PhotoURL = &deleteSignal // Отправляем спец-сигнал в сервис
+			deleteSignal := "SET_NULL"
+			payload.PhotoURL = &deleteSignal
 		} else {
-           
-            payload.PhotoURL = nil
-        }
+
+			payload.PhotoURL = nil
+		}
 	}
 
 	updatedUser, err := ctrl.authService.UpdateMyProfile(reqCtx, payload)

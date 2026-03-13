@@ -124,8 +124,9 @@ func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d
 	isHeadBranch := false
 	if d.BranchID != nil {
 		currentBranchName := ""
-		// Читаем имя из базы
-		_ = tx.QueryRow(ctx, "SELECT name FROM branches WHERE id = $1", *d.BranchID).Scan(&currentBranchName)
+if err := tx.QueryRow(ctx, "SELECT name FROM branches WHERE id = $1", *d.BranchID).Scan(&currentBranchName); err != nil {
+    s.logger.Warn("Не удалось получить название филиала", zap.Uint64("branchID", *d.BranchID), zap.Error(err))
+}
 
 		// Читаем эталон из настроек
 		headBranchNames := os.Getenv("HEAD_BRANCH_NAMES")
@@ -199,7 +200,7 @@ func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d
 		if branchID != nil { query += fmt.Sprintf(" AND u.branch_id = $%d", argIdx); args = append(args, *branchID); argIdx++ }
 		if officeID != nil { query += fmt.Sprintf(" AND u.office_id = $%d", argIdx); args = append(args, *officeID); argIdx++ }
 
-		query += " LIMIT 1" // Назначить на первого найденного (Директор, потом Зам)
+		query += " LIMIT 1"
 
 		var u entities.User
 		err := tx.QueryRow(ctx, query, args...).Scan(
@@ -207,21 +208,27 @@ func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d
 		)
 
 		if err == nil {
-			// Нашли! (Выходим, даже если это Заместитель, второй круг не нужен)
+	
 			s.logger.Info("Ответственный найден автоматически", zap.String("role", role), zap.String("fio", u.Fio))
 			return &RoutingResult{Executor: u, RuleFound: false}, nil
 		}
-		// Если не нашли — цикл повторяется со следующей ролью (DEPUTY_...)
+	
 	}
 
-	// Вывод ошибки (перевод ролей для пользователя)
-	roleName1 := constants.PositionTypeNames[constants.PositionType(targetRoles[0])]
-	if roleName1 == "" { roleName1 = targetRoles[0] }
-	roleName2 := constants.PositionTypeNames[constants.PositionType(targetRoles[1])]
-	if roleName2 == "" { roleName2 = targetRoles[1] }
+	
+roleName1 := ""
+roleName2 := ""
+if len(targetRoles) > 0 {
+    roleName1 = constants.PositionTypeNames[constants.PositionType(targetRoles[0])]
+    if roleName1 == "" { roleName1 = targetRoles[0] }
+}
+if len(targetRoles) > 1 {
+    roleName2 = constants.PositionTypeNames[constants.PositionType(targetRoles[1])]
+    if roleName2 == "" { roleName2 = targetRoles[1] }
+}
 
-	return nil, apperrors.NewHttpError(http.StatusBadRequest,
-		fmt.Sprintf("В подразделении '%s' не найден ни '%s', ни '%s'.", searchScopeName, roleName1, roleName2), nil, nil)
+return nil, apperrors.NewHttpError(http.StatusBadRequest,
+    fmt.Sprintf("В подразделении '%s' не найден ни '%s', ни '%s'.", searchScopeName, roleName1, roleName2), nil, nil)
 }
 func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, tx pgx.Tx, posID int, ctxData OrderContext) (*entities.User, error) {
 	positionID := uint64(posID)
@@ -257,7 +264,7 @@ func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, 
 	var u entities.User
 	err := tx.QueryRow(ctx, query, args...).Scan(&u.ID, &u.Fio, &u.Email, &u.PositionID, &u.DepartmentID, &u.BranchID)
 	if err != nil {
-		return nil, err // Если не нашли — ResolveExecutor поймает ошибку и запустит Hierarchy Search
+		return nil, err 
 	}
 	return &u, nil
 }
@@ -273,18 +280,4 @@ func (s *RuleEngineService) GetPredefinedRoute(ctx context.Context, tx pgx.Tx, o
 		return nil, err
 	}
 	return &res, nil
-}
-func (s *RuleEngineService) getDeputyType(mainType constants.PositionType) constants.PositionType {
-	switch mainType {
-	case constants.PositionTypeHeadOfDepartment:
-		return constants.PositionTypeDeputyHeadOfDepartment
-	case constants.PositionTypeHeadOfOtdel:
-		return constants.PositionTypeDeputyHeadOfOtdel
-	case constants.PositionTypeBranchDirector:
-		return constants.PositionTypeDeputyBranchDirector
-	case constants.PositionTypeHeadOfOffice:
-		return constants.PositionTypeDeputyHeadOfOffice
-	default:
-		return ""
-	}
 }

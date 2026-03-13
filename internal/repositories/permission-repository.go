@@ -59,13 +59,11 @@ func (r *PermissionRepository) FindPermissionByName(ctx context.Context, name st
 	return &p, nil
 }
 
-// Этот метод нужен для быстрой авторизации
 func (r *PermissionRepository) GetAllUserPermissionsNames(ctx context.Context, userID uint64) ([]string, error) {
-	r.logger.Info("GetAllUserPermissionsNames вызван, ПЕРЕНАПРАВЛЯЕМ на GetFinalUserPermissionIDs...", zap.Uint64("userID", userID))
-
 	// 1. Вызываем метод, который возвращает ID
 	permissionIDs, err := r.GetFinalUserPermissionIDs(ctx, userID)
 	if err != nil {
+		r.logger.Error("Ошибка получения ID разрешений пользователя", zap.Uint64("userID", userID), zap.Error(err))
 		return nil, err
 	}
 	if len(permissionIDs) == 0 {
@@ -76,19 +74,16 @@ func (r *PermissionRepository) GetAllUserPermissionsNames(ctx context.Context, u
 	query := "SELECT name FROM permissions WHERE id = ANY($1)"
 	rows, err := r.storage.Query(ctx, query, permissionIDs)
 	if err != nil {
+		r.logger.Error("Ошибка получения имен разрешений", zap.Error(err))
 		return nil, err
 	}
 	defer rows.Close()
 
 	permissions, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
+		r.logger.Error("Ошибка конвертации имен разрешений", zap.Error(err))
 		return nil, err
 	}
-
-	r.logger.Info("Права успешно получены и сконвертированы в имена",
-		zap.Uint64("userID", userID),
-		zap.Int("count", len(permissions)),
-	)
 
 	return permissions, nil
 }
@@ -252,7 +247,6 @@ func (r *PermissionRepository) GetAllPermissionSourcesForUser(ctx context.Contex
 }
 
 func (r *PermissionRepository) GetFinalUserPermissionIDs(ctx context.Context, userID uint64) ([]uint64, error) {
-	r.logger.Warn("!!! ВЫЗВАН GetFinalUserPermissionIDs !!!", zap.Uint64("userID", userID))
 	query := `
 		SELECT p.id FROM permissions p WHERE p.id IN (
 			SELECT permission_id FROM user_permissions WHERE user_id = $1
@@ -265,6 +259,7 @@ func (r *PermissionRepository) GetFinalUserPermissionIDs(ctx context.Context, us
 	`
 	rows, err := r.storage.Query(ctx, query, userID)
 	if err != nil {
+		r.logger.Error("Ошибка в SQL GetFinalUserPermissionIDs", zap.Uint64("userID", userID), zap.Error(err))
 		return nil, err
 	}
 	defer rows.Close()
@@ -329,7 +324,6 @@ func (r *PermissionRepository) GetDetailedPermissionsForUI(ctx context.Context, 
 	}, nil
 }
 
-// --- НОВЫЙ HELPER-МЕТОД, КОТОРЫЙ НУЖЕН СЕРВИСУ ---
 func (r *PermissionRepository) GetRolePermissionIDsForUser(ctx context.Context, userID uint64) ([]uint64, error) {
 	query := `
         SELECT DISTINCT rp.permission_id

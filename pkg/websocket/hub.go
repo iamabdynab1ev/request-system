@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 	"time"
+	 "context"
 )
 
 // Hub управляет всеми клиентами и рассылкой сообщений
@@ -27,21 +28,27 @@ func NewHub() *Hub {
 	}
 }
 
-func (h *Hub) Run() {
+func (h *Hub) Run(ctx context.Context) {
 	for {
 		select {
+		case <-ctx.Done():
+			h.mu.Lock()
+			for client := range h.clients {
+				close(client.Send)
+				delete(h.clients, client)
+			}
+			h.mu.Unlock()
+			return
 		case client := <-h.Register:
 			h.mu.Lock()
 			h.clients[client] = true
 			h.userClients[client.UserID] = append(h.userClients[client.UserID], client)
-			log.Printf("Клиент зарегистрирован: userID %d", client.UserID)
 			h.mu.Unlock()
 		case client := <-h.unregister:
 			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.Send)
-				// Удаляем клиента из среза userClients
 				clients := h.userClients[client.UserID]
 				for i, c := range clients {
 					if c == client {
@@ -52,11 +59,10 @@ func (h *Hub) Run() {
 				if len(h.userClients[client.UserID]) == 0 {
 					delete(h.userClients, client.UserID)
 				}
-				log.Printf("Клиент отсоединен: userID %d", client.UserID)
 			}
 			h.mu.Unlock()
 		case message := <-h.broadcast:
-			h.mu.RLock()
+			h.mu.Lock()
 			for client := range h.clients {
 				select {
 				case client.Send <- message:
@@ -65,16 +71,11 @@ func (h *Hub) Run() {
 					delete(h.clients, client)
 				}
 			}
-			h.mu.RUnlock()
+			h.mu.Unlock()
 		}
 	}
 }
-
-// SendMessageToUser — главный метод для отправки уведомления конкретному пользователю
 func (h *Hub) SendMessageToUser(userID uint64, payload interface{}, messageType string) error {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	envelope := Envelope{
 		Type:      messageType,
 		Payload:   payload,
@@ -87,13 +88,26 @@ func (h *Hub) SendMessageToUser(userID uint64, payload interface{}, messageType 
 		return err
 	}
 
-	if clients, ok := h.userClients[userID]; ok {
-		log.Printf("Найдено %d активных соединений для userID %d", len(clients), userID)
-		for _, client := range clients {
-			client.Send <- messageBytes
-		}
-	} else {
+	h.mu.RLock()
+	clients, ok := h.userClients[userID]
+	if !ok {
+		h.mu.RUnlock()
 		log.Printf("Для userID %d не найдено активных соединений", userID)
+		return nil
+	}
+	// Копируем срез чтобы отпустить мьютекс
+	clientsCopy := make([]*Client, len(clients))
+	copy(clientsCopy, clients)
+	h.mu.RUnlock()
+
+	log.Printf("Найдено %d активных соединений для userID %d", len(clientsCopy), userID)
+
+	for _, client := range clientsCopy {
+		select {
+		case client.Send <- messageBytes:
+		default:
+			log.Printf("Канал клиента userID %d заполнен, пропускаем", userID)
+		}
 	}
 
 	return nil

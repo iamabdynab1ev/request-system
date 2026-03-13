@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv" // <<-- 1. ДОБАВЛЕН ЭТОТ ИМПОРТ
+	"strconv" 
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +22,7 @@ import (
 	"request-system/pkg/websocket"
 )
 
-// ===== СТРУКТУРЫ ДЛЯ ГРУППИРОВКИ УВЕДОМЛЕНИЙ =====
+
 type eventGroupKey struct {
 	OrderID uint64
 	TxID    string
@@ -31,10 +31,10 @@ type eventGroupKey struct {
 type eventGroup struct {
 	events []events.OrderHistoryCreatedEvent
 	timer  *time.Timer
-	// поле recipients удалено, так как получатели определяются в момент отправки
+	
 }
 
-// ===========================================
+
 
 type NotificationListener struct {
 	notificationService   services.NotificationServiceInterface
@@ -77,7 +77,7 @@ func (l *NotificationListener) Register(bus *eventbus.Bus) {
 	l.logger.Info("NotificationListener (с группировкой) подписан на событие 'order.history.created'")
 }
 
-// handleOrderHistoryCreated - обработчик, который собирает события в группы.
+
 func (l *NotificationListener) handleOrderHistoryCreated(ctx context.Context, event eventbus.Event) error {
 	e, ok := event.(events.OrderHistoryCreatedEvent)
 	if !ok || e.HistoryItem.TxID == nil {
@@ -96,8 +96,6 @@ func (l *NotificationListener) handleOrderHistoryCreated(ctx context.Context, ev
 	if !exists {
 		group = &eventGroup{}
 		l.groups[key] = group
-		// Запускаем таймер, который вызовет отправку через 2 секунды.
-		// Передаем контекст, чтобы избежать гонки данных при логировании и запросах.
 		group.timer = time.AfterFunc(2*time.Second, func() {
 			l.sendGroupedNotification(context.Background(), key)
 		})
@@ -109,30 +107,31 @@ func (l *NotificationListener) handleOrderHistoryCreated(ctx context.Context, ev
 	return nil
 }
 
-// sendGroupedNotification - отправляет сгруппированное уведомление.
-// <<-- 2. ИСПРАВЛЕНА СИГНАТУРА: добавлен context
+
 func (l *NotificationListener) sendGroupedNotification(ctx context.Context, key eventGroupKey) {
-	l.groupsMu.Lock()
-	group, exists := l.groups[key]
-	if !exists {
-		l.groupsMu.Unlock()
-		return
-	}
-	delete(l.groups, key)
-	l.groupsMu.Unlock()
+    l.groupsMu.Lock()
+    group, exists := l.groups[key]
+    if !exists {
+        l.groupsMu.Unlock()
+        return
+    }
+    delete(l.groups, key)
+    l.groupsMu.Unlock()
 
-	if len(group.events) == 0 {
-		return
-	}
+    if len(group.events) == 0 {
+        return
+    }
+    sort.Slice(group.events, func(i, j int) bool {
+        return group.events[i].HistoryItem.CreatedAt.Before(group.events[j].HistoryItem.CreatedAt)
+    })
 
-	// Определяем получателей прямо перед отправкой, когда все события уже собраны.
-	recipients, err := l.determineRecipients(ctx, group.events)
+    recipients, err := l.determineRecipients(ctx, group.events)
 	if err != nil {
 		l.logger.Error("Не удалось определить получателей для отправки", zap.Error(err), zap.Any("key", key))
 		return
 	}
 
-	// Для каждого получателя формируем свое, персонализированное сообщение
+
 	for _, user := range recipients {
 		message := l.formatGroupedMessage(ctx, group.events, &user)
 		if message == "" {
@@ -143,17 +142,15 @@ func (l *NotificationListener) sendGroupedNotification(ctx context.Context, key 
 			continue
 		}
 
-		// Используем тот же 'ctx', который пришел в функцию
 		if err := l.notificationService.SendFormattedMessage(ctx, user.TelegramChatID.Int64, message); err != nil {
 			l.logger.Error("Не удалось отправить сгруппированное уведомление", zap.Uint64("userID", user.ID), zap.Error(err))
 		}
 		payload, err := l.formatWebSocketPayload(ctx, group.events, &user)
 		if err != nil {
 			l.logger.Error("Не удалось сформировать WebSocket payload", zap.Uint64("userID", user.ID), zap.Error(err))
-			continue // Пропускаем отправку, если payload не удалось собрать
+			continue 
 		}
 		if payload != nil {
-			// Отправляем с типом "notification", чтобы фронтенд знал, что это
 			err := l.wsNotificationService.SendNotification(user.ID, payload, "notification")
 			if err != nil {
 				l.logger.Error("Не удалось отправить WebSocket-уведомление", zap.Uint64("userID", user.ID), zap.Error(err))
@@ -162,7 +159,7 @@ func (l *NotificationListener) sendGroupedNotification(ctx context.Context, key 
 	}
 }
 
-// determineRecipients - решает, кому нужно отправить уведомление.
+
 func (l *NotificationListener) determineRecipients(ctx context.Context, groupEvents []events.OrderHistoryCreatedEvent) ([]entities.User, error) {
 	if len(groupEvents) == 0 {
 		return nil, nil
@@ -177,28 +174,24 @@ func (l *NotificationListener) determineRecipients(ctx context.Context, groupEve
 
 	userIDs := make(map[uint64]struct{})
 
-	// 1. Добавляем создателя и текущего исполнителя заявки
 	userIDs[order.CreatorID] = struct{}{}
 	if order.ExecutorID != nil {
 		userIDs[*order.ExecutorID] = struct{}{}
 	}
-
-	// 2. Добавляем всех, кто когда-либо участвовал в истории заявки
-	// (старые исполнители, авторы комментариев и т.д.)
 	for _, e := range groupEvents {
-		// Добавляем автора события в истории
-		if e.HistoryItem.UserID > 0 {
-			userIDs[e.HistoryItem.UserID] = struct{}{}
-		}
-		// Если это было переназначение, добавляем и старого исполнителя
-		if e.HistoryItem.EventType == "DELEGATION" && e.HistoryItem.OldValue.Valid {
-			oldExecutorID, _ := strconv.ParseUint(e.HistoryItem.OldValue.String, 10, 64)
-			userIDs[oldExecutorID] = struct{}{}
-		}
-	}
+    if e.HistoryItem.UserID > 0 {
+        userIDs[e.HistoryItem.UserID] = struct{}{}
+    }
+    if e.HistoryItem.EventType == "DELEGATION" && e.HistoryItem.OldValue.Valid {
+        oldExecutorID, err := strconv.ParseUint(e.HistoryItem.OldValue.String, 10, 64)
+        if err == nil && oldExecutorID > 0 {
+            userIDs[oldExecutorID] = struct{}{}
+        }
+    }
+}
 
-	// 4. Удаляем того, кто сам совершил действие, чтобы не спамить ему
-	if actor != nil {
+
+if actor != nil {
 		delete(userIDs, actor.ID)
 	}
 
@@ -229,10 +222,7 @@ func (l *NotificationListener) formatGroupedMessage(ctx context.Context, events 
 		return ""
 	}
 
-	sort.Slice(events, func(i, j int) bool { return events[i].HistoryItem.CreatedAt.Before(events[j].HistoryItem.CreatedAt) })
-
 	escape := telegram.EscapeTextForMarkdownV2
-	// --- ИСПРАВЛЕНИЕ: Берем первый элемент из слайса, а не весь слайс ---
 	firstEvent := events[0]
 	actor, _ := firstEvent.Actor.(*entities.User)
 	order, _ := firstEvent.Order.(*entities.Order)
@@ -244,14 +234,12 @@ func (l *NotificationListener) formatGroupedMessage(ctx context.Context, events 
 	actorName := escape(actor.Fio)
 	orderName := escape(order.Name)
 	orderLink := fmt.Sprintf("[Посмотреть мои заявки](%s/order?participant=me)", l.frontendCfg.BaseURL)
-	// orderLink := fmt.Sprintf("[Посмотреть заявки](%s/order)", l.frontendCfg.BaseURL)
 
 	var sb strings.Builder
 	var mainAction string
 	details := make(map[string]string)
 	var comment, attachmentText string
 
-	// --- ШАГ 1: Собираем всю информацию из событий (правильная логика для Telegram) ---
 	for _, e := range events {
 		item := e.HistoryItem
 		switch item.EventType {
@@ -333,52 +321,12 @@ func (l *NotificationListener) formatGroupedMessage(ctx context.Context, events 
 	return sb.String()
 }
 
-func (l *NotificationListener) formatSingleMessage(ctx context.Context, e events.OrderHistoryCreatedEvent, recipient *entities.User) string {
-	item := e.HistoryItem
-	actor, _ := e.Actor.(*entities.User)
-	order, _ := e.Order.(*entities.Order)
 
-	if actor == nil || order == nil {
-		return ""
-	}
-
-	escape := telegram.EscapeTextForMarkdownV2
-	orderLink := fmt.Sprintf("\n\n[Посмотреть мои заявки](%s/order?participant=me)", l.frontendCfg.BaseURL)
-
-	switch item.EventType {
-	case "CREATE":
-		return fmt.Sprintf("✅ *%s* создал\\(а\\) новую заявку *№%d*\n`%s`%s", escape(actor.Fio), order.ID, escape(order.Name), orderLink)
-	case "COMMENT":
-		if item.Comment.Valid && strings.TrimSpace(item.Comment.String) != "" {
-			return fmt.Sprintf("💬 *%s* оставил\\(а\\) комментарий к заявке №%d:\n`%s`%s", escape(actor.Fio), order.ID, escape(item.Comment.String), orderLink)
-		}
-	case "STATUS_CHANGE":
-		if statusID, err := strconv.ParseUint(item.NewValue.String, 10, 64); err == nil {
-			newStatus, _ := l.statusRepo.FindStatus(ctx, statusID)
-			if newStatus != nil {
-				return fmt.Sprintf("📝 *%s* изменил\\(а\\) статус заявки №%d на *%s*%s", escape(actor.Fio), order.ID, escape(newStatus.Name), orderLink)
-			}
-		}
-	case "PRIORITY_CHANGE":
-		if prioID, err := strconv.ParseUint(item.NewValue.String, 10, 64); err == nil {
-			newsPriority, _ := l.priorityRepo.FindByID(ctx, prioID)
-			if newsPriority != nil {
-				return fmt.Sprintf("📝 *%s* изменил\\(а\\) приоритет заявки №%d на *%s*%s", escape(actor.Fio), order.ID, escape(newsPriority.Name), orderLink)
-			}
-		}
-	}
-
-	return ""
-}
 
 func (l *NotificationListener) formatWebSocketPayload(ctx context.Context, events []events.OrderHistoryCreatedEvent, recipient *entities.User) (*websocket.NotificationPayload, error) {
 	if len(events) == 0 || recipient == nil {
 		return nil, nil
 	}
-
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].HistoryItem.CreatedAt.Before(events[j].HistoryItem.CreatedAt)
-	})
 
 	firstEvent := events[0]
 	actor, ok := firstEvent.Actor.(*entities.User)
@@ -391,7 +339,6 @@ func (l *NotificationListener) formatWebSocketPayload(ctx context.Context, event
 		return nil, fmt.Errorf("сущность Order не была передана в событии")
 	}
 
-	// Формируем основное сообщение
 	mainMessage := fmt.Sprintf("<strong>%s</strong> обновил(а) заявку <strong>%s №%d</strong>", actor.Fio, order.Name, order.ID)
 	if len(events) == 1 && events[0].HistoryItem.EventType == "CREATE" {
 		mainMessage = fmt.Sprintf("<strong>%s</strong> создал(а) новую заявку <strong>%s №%d</strong>", actor.Fio, order.Name, order.ID)
@@ -409,7 +356,6 @@ func (l *NotificationListener) formatWebSocketPayload(ctx context.Context, event
 					changes = append(changes, websocket.ChangeInfo{Type: "STATUS_CHANGE", Text: fmt.Sprintf("Статус: <strong>%s</strong>", status.Name)})
 				}
 			}
-			// <<< ИЗМЕНЕНИЕ: ДОБАВЛЯЕМ PRIORITY_CHANGE >>>
 		case "PRIORITY_CHANGE":
 			if prioID, err := strconv.ParseUint(item.NewValue.String, 10, 64); err == nil {
 				if prio, _ := l.priorityRepo.FindByID(ctx, prioID); prio != nil {
@@ -418,7 +364,6 @@ func (l *NotificationListener) formatWebSocketPayload(ctx context.Context, event
 			}
 		case "COMMENT":
 			if item.Comment.Valid {
-				// <<< ИЗМЕНЕНИЕ: ТЕПЕРЬ МЫ ПЕРЕДАЕМ САМ ТЕКСТ КОММЕНТАРИЯ >>>
 				changes = append(changes, websocket.ChangeInfo{Type: "COMMENT", Text: fmt.Sprintf("Комментарий: \"%s\"", item.Comment.String)})
 			}
 		case "DELEGATION":
@@ -431,7 +376,6 @@ func (l *NotificationListener) formatWebSocketPayload(ctx context.Context, event
 					changes = append(changes, websocket.ChangeInfo{Type: "DELEGATION", Text: text})
 				}
 			}
-		// <<< ИЗМЕНЕНИЕ: ДОБАВЛЯЕМ DURATION_CHANGE >>>
 		case "DURATION_CHANGE":
 			parsedTime, err := time.Parse(time.RFC3339, item.NewValue.String)
 			if err == nil {

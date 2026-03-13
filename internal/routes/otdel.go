@@ -13,17 +13,14 @@ import (
 	"go.uber.org/zap"
 )
 
-func runOtdelRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware, txManager repositories.TxManagerInterface) { // <-- ДОБАВЛЕН txManager
-	otdelRepository := repositories.NewOtdelRepository(dbConn, logger)
+func runOtdelRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware, txManager repositories.TxManagerInterface) {
 	userRepo := repositories.NewUserRepository(dbConn, logger)
-
-	// ИСПРАВЛЕНИЕ: Передаем txManager в конструктор
-	otdelService := services.NewOtdelService(txManager, otdelRepository, userRepo, logger)
+	otdelRepo := repositories.NewOtdelRepository(dbConn, logger)
+	otdelService := services.NewOtdelService(txManager, otdelRepo, userRepo, logger)
 	otdelCtrl := controllers.NewOtdelController(otdelService, logger)
 
 	otdelGroup := secureGroup.Group("/otdel")
 
-	// Роуты (без изменений)
 	otdelGroup.GET("", otdelCtrl.GetOtdels, authMW.AuthorizeAny(authz.OtdelsView))
 	otdelGroup.GET("/:id", otdelCtrl.FindOtdel, authMW.AuthorizeAny(authz.OtdelsView))
 	otdelGroup.POST("", otdelCtrl.CreateOtdel, authMW.AuthorizeAny(authz.OtdelsCreate))

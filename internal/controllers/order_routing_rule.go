@@ -4,7 +4,6 @@ package controllers
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -43,9 +42,11 @@ func (c *OrderRoutingRuleController) Create(ctx echo.Context) error {
 }
 
 func (c *OrderRoutingRuleController) Update(ctx echo.Context) error {
-	id, _ := strconv.Atoi(ctx.Param("id"))
-	idParam := ctx.Param("id")
-	fmt.Printf("\n🚀 [DEBUG] UPDATE вызван! ID из URL: %s, Метод: %s\n\n", idParam, ctx.Request().Method)
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный ID"), c.logger)
+	}
+
 	rawBody, err := io.ReadAll(ctx.Request().Body)
 	if err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Не удалось прочитать тело запроса", err, nil), c.logger)
@@ -70,7 +71,10 @@ func (c *OrderRoutingRuleController) Update(ctx echo.Context) error {
 }
 
 func (c *OrderRoutingRuleController) Delete(ctx echo.Context) error {
-	id, _ := strconv.Atoi(ctx.Param("id"))
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный ID"), c.logger)
+	}
 	if err := c.service.Delete(ctx.Request().Context(), id); err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
@@ -78,7 +82,10 @@ func (c *OrderRoutingRuleController) Delete(ctx echo.Context) error {
 }
 
 func (c *OrderRoutingRuleController) GetByID(ctx echo.Context) error {
-	id, _ := strconv.Atoi(ctx.Param("id"))
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
+	if err != nil {
+		return utils.ErrorResponse(ctx, apperrors.NewBadRequestError("Неверный ID"), c.logger)
+	}
 	result, err := c.service.GetByID(ctx.Request().Context(), id)
 	if err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)

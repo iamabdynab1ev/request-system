@@ -44,13 +44,13 @@ func (m *AuthMiddleware) Auth(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		if claims.IsRefreshToken {
-			m.logger.Warn("Попытка доступа с refresh токеном")
+			m.logger.Warn("Попытка доступа с refresh токеном", zap.Uint64("userID", claims.UserID))
 			return utils.ErrorResponse(c, apperrors.ErrTokenIsNotAccess, m.logger)
 		}
 
 		permissions, err := m.authPermissionService.GetAllUserPermissions(c.Request().Context(), claims.UserID)
 		if err != nil {
-			m.logger.Error("Не удалось получить финальный список привилегий для пользователя",
+			m.logger.Error("Ошибка получения прав пользователя",
 				zap.Uint64("userID", claims.UserID),
 				zap.Error(err),
 			)
@@ -64,15 +64,10 @@ func (m *AuthMiddleware) Auth(next echo.HandlerFunc) echo.HandlerFunc {
 
 		ctx := c.Request().Context()
 		newCtx := context.WithValue(ctx, contextkeys.UserIDKey, claims.UserID)
-		newCtx = context.WithValue(newCtx, contextkeys.UserRoleIDKey, claims.RoleID) // RoleID из claims, если оно есть и нужно для чего-то
+		newCtx = context.WithValue(newCtx, contextkeys.UserRoleIDKey, claims.RoleID)
 		newCtx = context.WithValue(newCtx, contextkeys.UserPermissionsKey, permissions)
 		newCtx = context.WithValue(newCtx, contextkeys.UserPermissionsMapKey, permissionsMap)
 		c.SetRequest(c.Request().WithContext(newCtx))
-
-		m.logger.Info("Пользователь успешно аутентифицирован, финальные привилегии загружены",
-			zap.Uint64("userID", claims.UserID),
-			zap.Strings("permissions", permissions),
-		)
 
 		return next(c)
 	}
@@ -94,39 +89,28 @@ func getUserPermissionsFromContext(ctx context.Context) ([]string, bool) {
 	return permissions, true
 }
 
-func isSuperuser(permissions []string) bool {
-	for _, perm := range permissions {
-		if perm == "superuser" { // Предполагается, что существует такое право
-			return true
-		}
-	}
-	return false
-}
-
 func (m *AuthMiddleware) AuthorizeAny(requiredPermissions ...string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			userPermissions, ok := getUserPermissionsFromContext(c.Request().Context())
 			if !ok {
-				m.logger.Error("Привилегии пользователя не найдены в контексте запроса (возможно, AuthMiddleware не был запущен).")
+				m.logger.Error("Права не найдены в контексте (Middleware Auth не сработал?)")
 				return utils.ErrorResponse(c, apperrors.ErrUnauthorized, m.logger)
 			}
-
-			if isSuperuser(userPermissions) {
-				m.logger.Debug("Доступ разрешен Superuser'у.", zap.Any("userID", c.Request().Context().Value(contextkeys.UserIDKey)))
-				return next(c)
-			}
-
 			for _, requiredPerm := range requiredPermissions {
 				for _, userPerm := range userPermissions {
 					if userPerm == requiredPerm {
-						m.logger.Debug("Пользователь имеет требуемую привилегию.", zap.Any("userID", c.Request().Context().Value(contextkeys.UserIDKey)), zap.String("required", requiredPerm))
 						return next(c)
 					}
 				}
 			}
 
-			m.logger.Warn("Пользователь не имеет ни одной из необходимых привилегий.", zap.Any("userID", c.Request().Context().Value(contextkeys.UserIDKey)), zap.Strings("requiredPermissions", requiredPermissions), zap.Strings("userPermissions", userPermissions))
+			userID := c.Request().Context().Value(contextkeys.UserIDKey)
+			m.logger.Warn("Доступ запрещен (AuthorizeAny)", 
+				zap.Any("userID", userID), 
+				zap.Strings("required", requiredPermissions),
+				zap.Strings("actual", userPermissions),
+			)
 			return utils.ErrorResponse(c, apperrors.ErrForbidden, m.logger)
 		}
 	}
@@ -137,13 +121,8 @@ func (m *AuthMiddleware) AuthorizeAll(requiredPermissions ...string) echo.Middle
 		return func(c echo.Context) error {
 			userPermissions, ok := getUserPermissionsFromContext(c.Request().Context())
 			if !ok {
-				m.logger.Error("Привилегии пользователя не найдены в контексте запроса (возможно, AuthMiddleware не был запущен).")
+				m.logger.Error("Права не найдены в контексте")
 				return utils.ErrorResponse(c, apperrors.ErrUnauthorized, m.logger)
-			}
-
-			if isSuperuser(userPermissions) {
-				m.logger.Debug("Доступ разрешен Superuser'у.", zap.Any("userID", c.Request().Context().Value(contextkeys.UserIDKey)))
-				return next(c)
 			}
 
 			missingPermissions := make([]string, 0)
@@ -161,11 +140,14 @@ func (m *AuthMiddleware) AuthorizeAll(requiredPermissions ...string) echo.Middle
 			}
 
 			if len(missingPermissions) > 0 {
-				m.logger.Warn("Пользователь не имеет всех необходимых привилегий.", zap.Any("userID", c.Request().Context().Value(contextkeys.UserIDKey)), zap.Strings("missingPermissions", missingPermissions), zap.Strings("requiredPermissions", requiredPermissions), zap.Strings("userPermissions", userPermissions))
-				return utils.ErrorResponse(c, apperrors.ErrForbidden, m.logger) // Добавил возврат Forbidden
+				userID := c.Request().Context().Value(contextkeys.UserIDKey)
+				m.logger.Warn("Доступ запрещен (AuthorizeAll)", 
+					zap.Any("userID", userID), 
+					zap.Strings("missing", missingPermissions),
+				)
+				return utils.ErrorResponse(c, apperrors.ErrForbidden, m.logger)
 			}
 
-			m.logger.Debug("Пользователь имеет все требуемые привилегии.", zap.Any("userID", c.Request().Context().Value(contextkeys.UserIDKey)))
 			return next(c)
 		}
 	}

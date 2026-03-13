@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-    "strings"
+	"strings"
+
 	"request-system/internal/dto"
 	"request-system/internal/services"
 	apperrors "request-system/pkg/errors"
@@ -101,6 +102,11 @@ func (c *StatusController) CreateStatus(ctx echo.Context) error {
 		}
 	}
 
+	
+	if dto.Code == "" && dto.Name != "" {
+		dto.Code = strings.ToUpper(strings.ReplaceAll(dto.Name, " ", "_"))
+	}
+
 	if err := ctx.Validate(&dto); err != nil {
 		return utils.ErrorResponse(ctx, err, c.logger)
 	}
@@ -139,6 +145,12 @@ func (c *StatusController) UpdateStatus(ctx echo.Context) error {
 				return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный JSON в 'data'", err, nil), c.logger)
 			}
 		}
+	}
+
+	// Если код не передан, а имя передано, генерируем его из названия
+	if (dto.Code == nil || *dto.Code == "") && (dto.Name != nil && *dto.Name != "") {
+		newCode := strings.ToUpper(strings.ReplaceAll(*dto.Name, " ", "_"))
+		dto.Code = &newCode
 	}
 
 	if err := ctx.Validate(&dto); err != nil {

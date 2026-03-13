@@ -105,10 +105,15 @@ func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entitie
 
 	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
 	if err != nil {
+		s.logger.Error("Ошибка при поиске пользователя (FindUserByEmailOrLogin)", 
+zap.String("login", loginInput),
+			zap.Error(err),
+	)
 		return nil, apperrors.ErrInvalidCredentials
 	}
 
 	if user.StatusCode != constants.UserStatusActiveCode {
+		s.logger.Warn("Попытка входа заблокированного пользователя", zap.String("login", loginInput))
 		return nil, apperrors.ErrUserDisabled
 	}
 
@@ -134,6 +139,7 @@ func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entitie
 	}
 
 	if !authenticated {
+		s.logger.Warn("Неверный пароль или ошибка LDAP при входе", zap.String("login", loginInput))
 		return nil, apperrors.ErrInvalidCredentials
 	}
 
@@ -275,8 +281,14 @@ func (s *AuthService) ResetPassword(ctx context.Context, payload dto.ResetPasswo
 	}
 	if err != nil { return apperrors.ErrInvalidCredentials }
 
-	parsedID, _ := strconv.ParseUint(userIDStr, 10, 64)
-	hashedPassword, _ := utils.HashPassword(payload.NewPassword)
+	parsedID, err := strconv.ParseUint(userIDStr, 10, 64)
+if err != nil {
+    return apperrors.ErrInvalidCredentials
+}
+hashedPassword, err := utils.HashPassword(payload.NewPassword)
+if err != nil {
+    return apperrors.ErrInternal
+}
 	
 	if isForceChange {
 		err = s.userRepo.UpdatePasswordAndClearFlag(ctx, parsedID, hashedPassword)
@@ -288,7 +300,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, payload dto.ResetPasswo
 	return err
 }
 
-// --- Хелперы для *string и *bool ---
+
 func safeString(ptr *string) string {
 	if ptr == nil { return "" }
 	return *ptr

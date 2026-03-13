@@ -13,7 +13,7 @@ import (
 
 func runPermissionRouter(
 	secureGroup *echo.Group,
-	permissionService services.PermissionServiceInterface, // <-- Принимаем готовый сервис
+	permissionService services.PermissionServiceInterface,
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
 ) {

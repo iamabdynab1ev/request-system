@@ -109,13 +109,13 @@ func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 	return api.SuccessOne(ctx, http.StatusOK, "Заявка обновлена", res)
 }
 
-// GetOrders - Получение списка
 func (c *OrderController) GetOrders(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 	onlyParticipant := ctx.QueryParam("participant") == "me"
+	onlyAssigned := ctx.QueryParam("assigned") == "me"
 
-	result, err := c.orderService.GetOrders(reqCtx, filter, onlyParticipant)
+	result, err := c.orderService.GetOrders(reqCtx, filter, onlyParticipant, onlyAssigned)
 	if err != nil {
 		c.logger.Error("GetOrders failed", zap.Error(err))
 		return api.ErrorResponse(ctx, err)

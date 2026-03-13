@@ -28,7 +28,7 @@ type EquipmentServiceInterface interface {
 
 type EquipmentService struct {
 	eqRepository   repositories.EquipmentRepositoryInterface
-	userRepository repositories.UserRepositoryInterface // Нужен для проверки прав
+	userRepository repositories.UserRepositoryInterface 
 	logger         *zap.Logger
 }
 

@@ -29,7 +29,7 @@ func NewWebSocketNotificationService(hub *websocket.Hub, logger *zap.Logger) Web
 
 // Метод, который просто "пробрасывает" вызов в Hub
 func (s *WebSocketNotificationService) SendNotification(userID uint64, payload interface{}, messageType string) error {
-	s.logger.Info("Отправка WebSocket-уведомления",
+	s.logger.Debug("Отправка WebSocket-уведомления",
 		zap.Uint64("userID", userID),
 		zap.String("type", messageType),
 	)

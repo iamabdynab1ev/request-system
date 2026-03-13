@@ -80,6 +80,244 @@ func stringToPtr(s string) *string {
 	return &s
 }
 
+func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) error {
+	countTotal := len(data)
+	countCreated := 0
+	countUpdated := 0
+
+	h.logger.Info("Processing users from 1C (partial update mode)", zap.Int("incoming", countTotal))
+
+	err := h.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		activeStatus, err := h.statusRepo.FindByCodeInTx(ctx, tx, "ACTIVE")
+		if err != nil {
+			return err
+		}
+		inactiveStatus, err := h.statusRepo.FindByCodeInTx(ctx, tx, "INACTIVE")
+		if err != nil {
+			return err
+		}
+
+		var defaultRoleIDs []uint64
+		for _, roleName := range h.cfg.DefaultRolesFor1CUsers {
+			name := strings.TrimSpace(roleName)
+			if name == "" {
+				continue
+			}
+			role, err := h.roleRepo.FindByName(ctx, tx, name)
+			if err == nil && role != nil {
+				defaultRoleIDs = append(defaultRoleIDs, role.ID)
+			} else {
+				h.logger.Warn("Default role from env not found in DB", zap.String("name", name))
+			}
+		}
+
+		trimOrEmpty := func(s *string) string {
+			if s == nil {
+				return ""
+			}
+			return strings.TrimSpace(*s)
+		}
+
+		for _, item := range data {
+			externalID := strings.TrimSpace(item.ExternalID)
+			if externalID == "" {
+				continue
+			}
+
+			existing, err := h.userRepo.FindByExternalID(ctx, tx, externalID, sourceSystem1C)
+			if err != nil && !isNotFound(err) {
+				return fmt.Errorf("DB Error User %s: %w", externalID, err)
+			}
+
+			userFound := err == nil && existing != nil && existing.ID != 0
+			entity := entities.User{
+				Fio:          fmt.Sprintf("1c_user_%s", externalID),
+				Email:        fmt.Sprintf("no_email_%s@1c.local", externalID),
+				PhoneNumber:  fmt.Sprintf("N%s", externalID),
+				StatusID:     activeStatus.ID,
+				ExternalID:   stringToPtr(externalID),
+				SourceSystem: stringToPtr(sourceSystem1C),
+			}
+			if userFound {
+				entity = *existing
+			}
+
+			if fio := trimOrEmpty(item.Fio); fio != "" {
+				entity.Fio = fio
+			}
+
+			cleanEmail := trimOrEmpty(item.Email)
+			if cleanEmail != "" {
+				entity.Email = cleanEmail
+			}
+
+			cleanPhone := trimOrEmpty(item.PhoneNumber)
+			if cleanPhone != "" {
+				entity.PhoneNumber = cleanPhone
+			}
+
+			if username := trimOrEmpty(item.Username); username != "" {
+				entity.Username = &username
+			}
+
+			if item.IsActive != nil {
+				if *item.IsActive {
+					entity.StatusID = activeStatus.ID
+				} else {
+					entity.StatusID = inactiveStatus.ID
+				}
+			}
+
+			var resolvedPosition *entities.Position
+			positionFromPayload := false
+
+			positionExternalID := trimOrEmpty(item.PositionExternalID)
+			if positionExternalID != "" {
+				pos, err := h.positionRepo.FindByExternalID(ctx, tx, positionExternalID, sourceSystem1C)
+				if err != nil {
+					if !isNotFound(err) {
+						return fmt.Errorf("DB Error Position %s for user %s: %w", positionExternalID, externalID, err)
+					}
+					h.logger.Warn("Position from 1C not found, position_id is not changed", zap.String("user_external_id", externalID), zap.String("position_external_id", positionExternalID))
+				} else if pos != nil {
+					resolvedPosition = pos
+					entity.PositionID = &pos.ID
+					positionFromPayload = true
+				}
+			}
+
+			otdelFromPayload := false
+
+			if depExternalID := trimOrEmpty(item.DepartmentExternalID); depExternalID != "" {
+				dep, err := h.departmentRepo.FindByExternalID(ctx, tx, depExternalID, sourceSystem1C)
+				if err != nil {
+					if !isNotFound(err) {
+						return fmt.Errorf("DB Error Department %s for user %s: %w", depExternalID, externalID, err)
+					}
+					h.logger.Warn("Department from 1C not found, department_id is not changed", zap.String("user_external_id", externalID), zap.String("department_external_id", depExternalID))
+				} else if dep != nil {
+					entity.DepartmentID = &dep.ID
+				}
+			}
+
+			if otdelExternalID := trimOrEmpty(item.OtdelExternalID); otdelExternalID != "" {
+				otdel, err := h.otdelRepo.FindByExternalID(ctx, tx, otdelExternalID, sourceSystem1C)
+				if err != nil {
+					if !isNotFound(err) {
+						return fmt.Errorf("DB Error Otdel %s for user %s: %w", otdelExternalID, externalID, err)
+					}
+					h.logger.Warn("Otdel from 1C not found, otdel_id is not changed", zap.String("user_external_id", externalID), zap.String("otdel_external_id", otdelExternalID))
+				} else if otdel != nil {
+					entity.OtdelID = &otdel.ID
+					otdelFromPayload = true
+				}
+			}
+
+			if branchExternalID := trimOrEmpty(item.BranchExternalID); branchExternalID != "" {
+				branch, err := h.branchRepo.FindByExternalID(ctx, tx, branchExternalID, sourceSystem1C)
+				if err != nil {
+					if !isNotFound(err) {
+						return fmt.Errorf("DB Error Branch %s for user %s: %w", branchExternalID, externalID, err)
+					}
+					h.logger.Warn("Branch from 1C not found, branch_id is not changed", zap.String("user_external_id", externalID), zap.String("branch_external_id", branchExternalID))
+				} else if branch != nil {
+					entity.BranchID = &branch.ID
+				}
+			}
+
+			if officeExternalID := trimOrEmpty(item.OfficeExternalID); officeExternalID != "" {
+				office, err := h.officeRepo.FindByExternalID(ctx, tx, officeExternalID, sourceSystem1C)
+				if err != nil {
+					if !isNotFound(err) {
+						return fmt.Errorf("DB Error Office %s for user %s: %w", officeExternalID, externalID, err)
+					}
+					h.logger.Warn("Office from 1C not found, office_id is not changed", zap.String("user_external_id", externalID), zap.String("office_external_id", officeExternalID))
+				} else if office != nil {
+					entity.OfficeID = &office.ID
+				}
+			}
+
+			if !userFound && resolvedPosition != nil {
+				if entity.DepartmentID == nil {
+					entity.DepartmentID = resolvedPosition.DepartmentID
+				}
+				if entity.OtdelID == nil {
+					entity.OtdelID = resolvedPosition.OtdelID
+				}
+				if entity.BranchID == nil {
+					entity.BranchID = resolvedPosition.BranchID
+				}
+				if entity.OfficeID == nil {
+					entity.OfficeID = resolvedPosition.OfficeID
+				}
+			}
+
+			if cleanEmail != "" {
+				if userFound {
+					_, _ = tx.Exec(ctx, "UPDATE users SET email = 'old_' || id || '@trash.local' WHERE LOWER(email) = LOWER($1) AND id != $2", cleanEmail, existing.ID)
+				} else {
+					_, _ = tx.Exec(ctx, "UPDATE users SET email = 'old_' || id || '@trash.local' WHERE LOWER(email) = LOWER($1) AND external_id != $2", cleanEmail, externalID)
+				}
+			}
+
+			if cleanPhone != "" {
+				if userFound {
+					_, _ = tx.Exec(ctx, "UPDATE users SET phone_number = 'D_' || id::text WHERE phone_number = $1 AND id != $2", cleanPhone, existing.ID)
+				} else {
+					_, _ = tx.Exec(ctx, "UPDATE users SET phone_number = 'D_' || id::text WHERE phone_number = $1 AND external_id != $2", cleanPhone, externalID)
+				}
+			}
+
+			var userID uint64
+			if userFound {
+				_, _ = tx.Exec(ctx, "UPDATE users SET deleted_at = NULL WHERE id = $1", existing.ID)
+				if err := h.userRepo.UpdateFromSync(ctx, tx, existing.ID, entity); err != nil {
+					return fmt.Errorf("Update Error User %s: %w", externalID, err)
+				}
+				userID = existing.ID
+				countUpdated++
+			} else {
+				entity.Password = "SYNC_USER_NO_PASSWORD"
+				newID, err := h.userRepo.CreateFromSync(ctx, tx, entity)
+				if err != nil {
+					return fmt.Errorf("Create Error User %s: %w", externalID, err)
+				}
+
+				userID = newID
+				for _, rID := range defaultRoleIDs {
+					if _, err := tx.Exec(ctx, "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", newID, rID); err != nil {
+						return err
+					}
+				}
+				countCreated++
+			}
+
+			// Keep manual assignments: do not delete links, only ensure links from 1C exist.
+			if positionFromPayload && entity.PositionID != nil {
+				if _, err := tx.Exec(ctx, "INSERT INTO user_positions (user_id, position_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", userID, *entity.PositionID); err != nil {
+					return fmt.Errorf("Sync user_positions failed for user %d: %w", userID, err)
+				}
+			}
+
+			if otdelFromPayload && entity.OtdelID != nil {
+				if _, err := tx.Exec(ctx, "INSERT INTO user_otdels (user_id, otdel_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", userID, *entity.OtdelID); err != nil {
+					return fmt.Errorf("Sync user_otdels failed for user %d: %w", userID, err)
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		h.logger.Error("Critical user sync error", zap.Error(err))
+		return err
+	}
+
+	h.logger.Info("User sync finished", zap.Int("incoming", countTotal), zap.Int("created", countCreated), zap.Int("updated", countUpdated))
+	return nil
+}
+
 // isNotFound проверяет, является ли ошибка сигналом о том, что запись не найдена.
 func isNotFound(err error) bool {
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -389,7 +627,7 @@ func (h *DBHandler) ProcessPositions(ctx context.Context, data []dto.Position1CD
 // ПОЛЬЗОВАТЕЛИ
 // =========================================================================================
 
-func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) error {
+func (h *DBHandler) processUsersLegacy(ctx context.Context, data []dto.User1CDTO) error {
 	countTotal := len(data)
 	countCreated := 0
 	countUpdated := 0
@@ -417,8 +655,18 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 
 		// Обработка сотрудников
 		for _, item := range data {
-			cleanEmail := strings.TrimSpace(item.Email)
-			cleanPhone := strings.TrimSpace(item.PhoneNumber)
+			cleanEmail := ""
+			if item.Email != nil {
+				cleanEmail = strings.TrimSpace(*item.Email)
+			}
+			cleanPhone := ""
+			if item.PhoneNumber != nil {
+				cleanPhone = strings.TrimSpace(*item.PhoneNumber)
+			}
+			fio := ""
+			if item.Fio != nil {
+				fio = strings.TrimSpace(*item.Fio)
+			}
 			if item.ExternalID == "" {
 				continue
 			}
@@ -434,16 +682,16 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 			}
 			
 			// Проверка должности
-			if item.PositionExternalID == "" {
+			if item.PositionExternalID == nil || strings.TrimSpace(*item.PositionExternalID) == "" {
 				continue
 			}
-			pos, err := h.positionRepo.FindByExternalID(ctx, tx, item.PositionExternalID, sourceSystem1C)
+			pos, err := h.positionRepo.FindByExternalID(ctx, tx, strings.TrimSpace(*item.PositionExternalID), sourceSystem1C)
 			if err != nil {
 				continue
 			}
 
 			statusID := activeStatus.ID
-			if !item.IsActive {
+			if item.IsActive != nil && !*item.IsActive {
 				statusID = inactiveStatus.ID
 			}
 
@@ -474,12 +722,9 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 			if branchID == nil { branchID = pos.BranchID }
 			if officeID == nil { officeID = pos.OfficeID }
 
-			// Поиск пользователя только по EXTERNAL_ID
 			existing, err := h.userRepo.FindByExternalID(ctx, tx, item.ExternalID, sourceSystem1C)
 			userFound := (err == nil && existing != nil && existing.ID != 0)
 
-			// --- Очистка путей для соблюдения уникальности (UNIQUE CONSTRAINTS) ---
-			// Убираем эти же контакты у ЛЮБОГО ДРУГОГО пользователя в базе
 			if cleanEmail != "" {
 				_, _ = tx.Exec(ctx, "UPDATE users SET email = 'old_' || id || '@trash.local' WHERE LOWER(email) = LOWER($1) AND external_id != $2", cleanEmail, item.ExternalID)
 			}
@@ -488,13 +733,15 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 			}
 
 			var usernamePtr *string
-			if item.Username != "" {
-				val := item.Username
-				usernamePtr = &val
+			if item.Username != nil {
+				val := strings.TrimSpace(*item.Username)
+				if val != "" {
+					usernamePtr = &val
+				}
 			}
 
 			entity := entities.User{
-				Fio:          item.Fio,
+				Fio:          fio,
 				Email:        dbEmail,
 				PhoneNumber:  dbPhone,
 				StatusID:     statusID,
@@ -519,7 +766,7 @@ func (h *DBHandler) ProcessUsers(ctx context.Context, data []dto.User1CDTO) erro
 				entity.Password = "SYNC_USER_NO_PASSWORD"
 				newID, err := h.userRepo.CreateFromSync(ctx, tx, entity)
 				if err == nil {
-					// Назначение ролей по умолчанию ТОЛЬКО для новых сотрудников
+					
 					for _, rID := range defaultRoleIDs {
 						_, _ = tx.Exec(ctx, "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", newID, rID)
 					}

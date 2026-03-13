@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Сигнатура функции правильная - принимает fileStorage
+
 func runStatusRouter(
 	secureGroup *echo.Group,
 	dbConn *pgxpool.Pool,
@@ -21,11 +21,10 @@ func runStatusRouter(
 	authMW *middleware.AuthMiddleware,
 	fileStorage filestorage.FileStorageInterface,
 ) {
-	// Инициализируем ВСЕ репозитории, которые нужны сервису
+	
 	statusRepository := repositories.NewStatusRepository(dbConn)
-	userRepository := repositories.NewUserRepository(dbConn, logger) // <-- ВОТ ЧЕГО НЕ ХВАТАЛО
+	userRepository := repositories.NewUserRepository(dbConn, logger) 
 
-	// Теперь вызываем конструктор с правильным набором аргументов
 	statusService := services.NewStatusService(statusRepository, userRepository, fileStorage, logger)
 
 	statusCtrl := controllers.NewStatusController(statusService, logger)

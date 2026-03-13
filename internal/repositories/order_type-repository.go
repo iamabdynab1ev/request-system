@@ -25,15 +25,15 @@ const (
 
 // OrderTypeRepositoryInterface определяет контракт для работы с типами заявок в БД.
 type OrderTypeRepositoryInterface interface {
-	Create(ctx context.Context, tx pgx.Tx, orderType *entities.OrderType) (int, error)
+	Create(ctx context.Context, tx pgx.Tx, orderType *entities.OrderType) (uint64, error)
 	Update(ctx context.Context, tx pgx.Tx, orderType *entities.OrderType) error
-	Delete(ctx context.Context, tx pgx.Tx, id int) error
-	FindByID(ctx context.Context, id int) (*entities.OrderType, error)
+	Delete(ctx context.Context, tx pgx.Tx, id uint64) error
+	FindByID(ctx context.Context, id uint64) (*entities.OrderType, error)
 	FindCodeByID(ctx context.Context, id uint64) (string, error)
 	GetAll(ctx context.Context, limit, offset uint64, search string) ([]*entities.OrderType, uint64, error)
 	FindCodesByIDs(ctx context.Context, ids []uint64) (map[uint64]string, error)
-	ExistsByName(ctx context.Context, tx pgx.Tx, name string, excludeID int) (bool, error)
-	ExistsByCode(ctx context.Context, tx pgx.Tx, code *string, excludeID int) (bool, error)
+	ExistsByName(ctx context.Context, tx pgx.Tx, name string, excludeID uint64) (bool, error)
+	ExistsByCode(ctx context.Context, tx pgx.Tx, code *string, excludeID uint64) (bool, error)
 }
 
 type orderTypeRepository struct {
@@ -65,13 +65,13 @@ func (r *orderTypeRepository) scanRow(row pgx.Row) (*entities.OrderType, error) 
 }
 
 // Create создает новый тип заявки в транзакции.
-func (r *orderTypeRepository) Create(ctx context.Context, tx pgx.Tx, orderType *entities.OrderType) (int, error) {
+func (r *orderTypeRepository) Create(ctx context.Context, tx pgx.Tx, orderType *entities.OrderType) (uint64, error) {
 	query := fmt.Sprintf(`
 		INSERT INTO %s (name, code, status_id) 
 		VALUES ($1, $2, $3) 
 		RETURNING id`, orderTypeTable)
 
-	var id int
+	var id uint64
 	err := tx.QueryRow(ctx, query, orderType.Name, orderType.Code, orderType.StatusID).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -108,7 +108,7 @@ func (r *orderTypeRepository) Update(ctx context.Context, tx pgx.Tx, orderType *
 }
 
 // Delete удаляет тип заявки по ID в транзакции.
-func (r *orderTypeRepository) Delete(ctx context.Context, tx pgx.Tx, id int) error {
+func (r *orderTypeRepository) Delete(ctx context.Context, tx pgx.Tx, id uint64) error {
 	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", orderTypeTable)
 
 	result, err := tx.Exec(ctx, query, id)
@@ -128,7 +128,7 @@ func (r *orderTypeRepository) Delete(ctx context.Context, tx pgx.Tx, id int) err
 }
 
 // FindByID находит тип заявки по ID.
-func (r *orderTypeRepository) FindByID(ctx context.Context, id int) (*entities.OrderType, error) {
+func (r *orderTypeRepository) FindByID(ctx context.Context, id uint64) (*entities.OrderType, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", orderTypeFields, orderTypeTable)
 	row := r.storage.QueryRow(ctx, query, id)
 	return r.scanRow(row)
@@ -235,7 +235,7 @@ func (r *orderTypeRepository) FindCodesByIDs(ctx context.Context, ids []uint64) 
 	return codesMap, rows.Err()
 }
 
-func (r *orderTypeRepository) ExistsByName(ctx context.Context, tx pgx.Tx, name string, excludeID int) (bool, error) {
+func (r *orderTypeRepository) ExistsByName(ctx context.Context, tx pgx.Tx, name string, excludeID uint64) (bool, error) {
 	// Добавляем `AND id != $2` в запрос
 	query := "SELECT EXISTS(SELECT 1 FROM order_types WHERE name = $1 AND id != $2)"
 	var exists bool
@@ -246,7 +246,7 @@ func (r *orderTypeRepository) ExistsByName(ctx context.Context, tx pgx.Tx, name 
 	return exists, err
 }
 
-func (r *orderTypeRepository) ExistsByCode(ctx context.Context, tx pgx.Tx, code *string, excludeID int) (bool, error) {
+func (r *orderTypeRepository) ExistsByCode(ctx context.Context, tx pgx.Tx, code *string, excludeID uint64) (bool, error) {
 	if code == nil || *code == "" {
 		return false, nil
 	}

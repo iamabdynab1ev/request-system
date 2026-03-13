@@ -19,6 +19,7 @@ func runUserRouter(
 	{
 		users.POST("", userCtrl.CreateUser, authMW.AuthorizeAny(authz.UsersCreate))
 		users.GET("", userCtrl.GetUsers, authMW.AuthorizeAny(authz.UsersView))
+		users.POST("/bind-ad-usernames", userCtrl.BindADUsernamesByEmail, authMW.AuthorizeAny(authz.UserManageADLink))
 		users.GET("/:id", userCtrl.FindUser, authMW.AuthorizeAny(authz.UsersView))
 		users.PUT("/:id", userCtrl.UpdateUser, authMW.AuthorizeAny(authz.UsersUpdate))
 		users.DELETE("/:id", userCtrl.DeleteUser, authMW.AuthorizeAny(authz.UsersDelete))

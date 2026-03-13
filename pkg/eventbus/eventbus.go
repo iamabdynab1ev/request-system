@@ -49,7 +49,7 @@ func (b *Bus) Publish(ctx context.Context, event Event) {
 			go func(l Listener) {
 				// Создаем контекст с таймаутом, чтобы избежать "вечных" горутин.
 				// Например, 1 минута на обработку события.
-				ctxWithTimeout, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+				ctxWithTimeout, cancel := context.WithTimeout(ctx, 1*time.Minute)
 				defer cancel()
 
 				// Логируем ошибки от слушателей, а не игнорируем их.

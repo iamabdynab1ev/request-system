@@ -3,6 +3,8 @@ package services
 import (
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"go.uber.org/zap"
@@ -14,6 +16,7 @@ import (
 
 type ADServiceInterface interface {
 	SearchUsers(searchQuery string) ([]dto.ADUserDTO, error)
+	FindExactUsernames(localParts []string) (map[string]string, error)
 }
 
 type ADService struct {
@@ -82,4 +85,95 @@ func (s *ADService) SearchUsers(searchQuery string) ([]dto.ADUserDTO, error) {
 	}
 
 	return users, nil
+}
+
+func (s *ADService) FindExactUsernames(localParts []string) (map[string]string, error) {
+	if !s.ldapCfg.SearchEnabled {
+		s.logger.Warn("attempt to search AD while LDAP search is disabled")
+		return nil, apperrors.NewHttpError(
+			http.StatusServiceUnavailable,
+			"Функция поиска в Active Directory отключена в конфигурации.",
+			nil,
+			nil,
+		)
+	}
+
+	unique := make(map[string]string, len(localParts))
+	for _, part := range localParts {
+		clean := strings.TrimSpace(part)
+		if clean == "" {
+			continue
+		}
+
+		lower := strings.ToLower(clean)
+		if _, exists := unique[lower]; !exists {
+			unique[lower] = clean
+		}
+	}
+
+	result := make(map[string]string, len(unique))
+	if len(unique) == 0 {
+		return result, nil
+	}
+
+	conn, err := ldap.DialURL(fmt.Sprintf("ldap://%s:%d", s.ldapCfg.Host, s.ldapCfg.Port))
+	if err != nil {
+		s.logger.Error("[AD_EXACT] LDAP dial failed", zap.Error(err))
+		return nil, apperrors.ErrInternalServer
+	}
+	defer conn.Close()
+	conn.SetTimeout(10 * time.Second)
+
+	if err := conn.Bind(s.ldapCfg.BindDN, s.ldapCfg.BindPassword); err != nil {
+		s.logger.Error("[AD_EXACT] LDAP bind failed", zap.String("bind_dn", s.ldapCfg.BindDN), zap.Error(err))
+		return nil, apperrors.ErrInternalServer
+	}
+
+	placeholders := strings.Count(s.ldapCfg.SearchFilterPattern, "%s")
+	buildFilter := func(query string) string {
+		escaped := ldap.EscapeFilter(query)
+		switch {
+		case placeholders <= 0:
+			return s.ldapCfg.SearchFilterPattern
+		case placeholders == 1:
+			return fmt.Sprintf(s.ldapCfg.SearchFilterPattern, escaped)
+		default:
+			args := make([]interface{}, placeholders)
+			for i := range args {
+				args[i] = escaped
+			}
+			return fmt.Sprintf(s.ldapCfg.SearchFilterPattern, args...)
+		}
+	}
+
+	for lower, localPart := range unique {
+		filter := buildFilter(localPart)
+		searchRequest := ldap.NewSearchRequest(
+			s.ldapCfg.SearchBaseDN,
+			ldap.ScopeWholeSubtree,
+			ldap.NeverDerefAliases,
+			0,
+			0,
+			false,
+			filter,
+			s.ldapCfg.SearchAttributes,
+			nil,
+		)
+
+		sr, searchErr := conn.Search(searchRequest)
+		if searchErr != nil {
+			s.logger.Warn("[AD_EXACT] LDAP search failed for local-part", zap.String("local_part", localPart), zap.Error(searchErr))
+			continue
+		}
+
+		for _, entry := range sr.Entries {
+			username := strings.TrimSpace(entry.GetAttributeValue(s.ldapCfg.UsernameAttribute))
+			if strings.EqualFold(username, localPart) {
+				result[lower] = username
+				break
+			}
+		}
+	}
+
+	return result, nil
 }

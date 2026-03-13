@@ -48,8 +48,6 @@ func toPositionResponseDTO(e *entities.Position) *dto.PositionResponseDTO {
 		return nil
 	}
 
-	// КОММЕНТАРИЙ: Создаем переменную statusID и безопасно извлекаем значение
-	// из указателя *uint64. Если указатель nil, значение будет 0.
 	var statusID int
 	if e.StatusID != nil {
 		statusID = int(*e.StatusID)
@@ -80,7 +78,6 @@ func (s *PositionService) Create(ctx context.Context, d dto.CreatePositionDTO) (
 
 	statusID64 := uint64(d.StatusID)
 
-	// ИСПРАВЛЕНИЕ: Передаем `entities.Position`, а не `*entities.Position`
 	posEntity := entities.Position{
 		Name:         d.Name,
 		StatusID:     &statusID64,
@@ -91,14 +88,14 @@ func (s *PositionService) Create(ctx context.Context, d dto.CreatePositionDTO) (
 		OfficeID:     utils.NullIntToUint64Ptr(d.OfficeID),
 	}
 
-	var newID uint64 // <-- ИСПРАВЛЕНИЕ: тип изменен на uint64
+	var newID uint64
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		createdID, errTx := s.repo.Create(ctx, tx, posEntity) // repo.Create теперь ожидает entities.Position
+		createdID, errTx := s.repo.Create(ctx, tx, posEntity)
 		if errTx != nil {
 			return errTx
 		}
-		newID = createdID // <-- ИСПРАВЛЕНИЕ: присваиваем uint64
+		newID = createdID
 		return nil
 	})
 	if err != nil {
@@ -114,7 +111,6 @@ func (s *PositionService) Create(ctx context.Context, d dto.CreatePositionDTO) (
 	return toPositionResponseDTO(created), nil
 }
 
-// Update - ИСПРАВЛЕН
 func (s *PositionService) Update(ctx context.Context, id uint64, patchDTO dto.UpdatePositionDTO, rawBody []byte) (*dto.PositionResponseDTO, error) {
 	authContext, err := buildAuthzContext(ctx, s.userRepo)
 	if err != nil {
@@ -129,7 +125,6 @@ func (s *PositionService) Update(ctx context.Context, id uint64, patchDTO dto.Up
 		return nil, err
 	}
 
-	// Ваша логика обновления с помощью патча - остается
 	if err := utils.ApplyPatchFinal(existing, patchDTO, rawBody); err != nil {
 		s.logger.Error("Ошибка применения патча для Position", zap.Error(err))
 		return nil, err
@@ -138,7 +133,7 @@ func (s *PositionService) Update(ctx context.Context, id uint64, patchDTO dto.Up
 	existing.UpdatedAt = time.Now()
 
 	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		// ИСПРАВЛЕНИЕ: `Update` теперь принимает `id uint64` и `entities.Position`
+
 		return s.repo.Update(ctx, tx, id, *existing)
 	})
 	if err != nil {
@@ -225,13 +220,19 @@ func (s *PositionService) Delete(ctx context.Context, id uint64) error {
 	}
 
 	return s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-		return s.repo.Delete(ctx, tx, int(id))
+		return s.repo.Delete(ctx, tx, id)
 	})
 }
 
 func buildAuthzContext(ctx context.Context, userRepo repositories.UserRepositoryInterface) (*authz.Context, error) {
-	userID, _ := utils.GetUserIDFromCtx(ctx)
-	permissionsMap, _ := utils.GetPermissionsMapFromCtx(ctx)
+	userID, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil {
+		return nil, apperrors.ErrUnauthorized
+	}
+	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+	if err != nil {
+		return nil, apperrors.ErrUnauthorized
+	}
 	actor, err := userRepo.FindUserByID(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound

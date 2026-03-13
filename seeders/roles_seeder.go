@@ -23,7 +23,7 @@ func seedRoles(ctx context.Context, db *pgxpool.Pool) error {
 	var activeStatusID uint64
 	err = tx.QueryRow(ctx, "SELECT id FROM statuses WHERE code = 'ACTIVE'").Scan(&activeStatusID)
 	if err != nil {
-		return err // Не можем продолжать без статуса 'ACTIVE'
+		return err 
 	}
 
 	var query string

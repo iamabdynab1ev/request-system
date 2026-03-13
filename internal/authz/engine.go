@@ -44,10 +44,18 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 
 		// Руководитель (Своего подразделения)
 		// Проверяем: (ЕстьПраво) И (IDНеПустой) И (IDСовпадают)
-		if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID { return true }
-		if ctx.HasPermission(ScopeBranch) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID { return true }
-		if ctx.HasPermission(ScopeOtdel) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID { return true }
-		if ctx.HasPermission(ScopeOffice) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID { return true }
+		if ctx.HasPermission(ScopeDepartment) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
+			return true
+		}
+		if ctx.HasPermission(ScopeBranch) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
+			return true
+		}
+		if ctx.HasPermission(ScopeOtdel) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID {
+			return true
+		}
+		if ctx.HasPermission(ScopeOffice) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID {
+			return true
+		}
 
 		// Личный доступ (Участник может смотреть)
 		if ctx.HasPermission(ScopeOwn) {
@@ -69,10 +77,18 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 	}
 
 	// Руководитель (Может менять внутри своего подразделения)
-	if ctx.HasPermission(OrdersUpdateInDepartmentScope) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID { return true }
-	if ctx.HasPermission(OrdersUpdateInBranchScope) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID { return true }
-	if ctx.HasPermission(OrdersUpdateInOtdelScope) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID { return true }
-	if ctx.HasPermission(OrdersUpdateInOfficeScope) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID { return true }
+	if ctx.HasPermission(OrdersUpdateInDepartmentScope) && actor.DepartmentID != nil && target.DepartmentID != nil && *actor.DepartmentID == *target.DepartmentID {
+		return true
+	}
+	if ctx.HasPermission(OrdersUpdateInBranchScope) && actor.BranchID != nil && target.BranchID != nil && *actor.BranchID == *target.BranchID {
+		return true
+	}
+	if ctx.HasPermission(OrdersUpdateInOtdelScope) && actor.OtdelID != nil && target.OtdelID != nil && *actor.OtdelID == *target.OtdelID {
+		return true
+	}
+	if ctx.HasPermission(OrdersUpdateInOfficeScope) && actor.OfficeID != nil && target.OfficeID != nil && *actor.OfficeID == *target.OfficeID {
+		return true
+	}
 
 	// Личный доступ (Строгий: только создатель или текущий исполнитель)
 	if ctx.HasPermission(OrdersUpdate) {
@@ -90,12 +106,9 @@ func canAccessOrder(ctx Context, target *entities.Order) bool {
 	return false
 }
 
-// canAccessUser — логика для Пользователей ("ТЕЛЕФОННАЯ КНИГА" + СТРОГОСТЬ)
 func canAccessUser(ctx Context, target *entities.User) bool {
 	actor := ctx.Actor
 	action := getAction(ctx.CurrentPermission)
-
-	// Правило 1: Сам себя вижу и правлю (если есть базовые права)
 	if actor.ID == target.ID {
 		return true
 	}
@@ -105,9 +118,7 @@ func canAccessUser(ctx Context, target *entities.User) bool {
 		return true
 	}
 
-	// Правило 3 (НОВОЕ): Глобальный просмотр.
-	// Если действие == view, мы разрешаем доступ к карточке любого сотрудника.
-	// Это нужно, чтобы выбирать пользователей из списка, даже если они в другом отделе.
+	// Правило 3 (НОВОЕ): Глобальный просмотр
 	if action == "view" {
 		return true
 	}
@@ -152,5 +163,5 @@ func CanDo(permission string, ctx Context) bool {
 		return canAccessUser(ctx, target)
 	}
 
-	return true
+	return false
 }

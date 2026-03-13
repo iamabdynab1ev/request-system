@@ -66,9 +66,14 @@ type UserRepositoryInterface interface {
 	CreateUser(ctx context.Context, tx pgx.Tx, user *entities.User) (uint64, error)
 	UpdateUserFull(ctx context.Context, user *entities.User) error
 	UpdateUser(ctx context.Context, tx pgx.Tx, user *entities.User) error
+	UpdateUsername(ctx context.Context, tx pgx.Tx, userID uint64, username *string) error
+	UpdateUsernameAny(ctx context.Context, tx pgx.Tx, userID uint64, username *string) error
+	UpdateUsernameDirect(ctx context.Context, userID uint64, username *string) error
 	DeleteUser(ctx context.Context, id uint64) error
 
 	FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error)
+	FindUserByUsername(ctx context.Context, username string) (*entities.User, error)
+	FindAnyUserByUsername(ctx context.Context, username string) (*entities.User, error)
 	FindUserByPhone(ctx context.Context, phone string) (*entities.User, error)
 	UpdatePassword(ctx context.Context, userID uint64, newPasswordHash string) error
 	UpdatePasswordAndClearFlag(ctx context.Context, userID uint64, newPasswordHash string) error
@@ -237,7 +242,10 @@ func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter) ([]e
 	countBuilder = bd.ApplyListParams(countBuilder, countFilter, userMap)
 
 	var totalCount uint64
-	sqlCount, argsCount, _ := countBuilder.ToSql()
+	sqlCount, argsCount, err := countBuilder.ToSql()
+if err != nil {
+    return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
+}
 	
 	// Выполняем запрос
 	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&totalCount); err != nil {
@@ -377,6 +385,40 @@ func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, u *entities.
 
 	return nil
 }
+
+func (r *UserRepository) UpdateUsername(ctx context.Context, tx pgx.Tx, userID uint64, username *string) error {
+	tag, err := tx.Exec(ctx, "UPDATE users SET username=$1, updated_at=NOW() WHERE id=$2 AND deleted_at IS NULL", username, userID)
+	if err != nil {
+		return r.handlePgError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) UpdateUsernameAny(ctx context.Context, tx pgx.Tx, userID uint64, username *string) error {
+	tag, err := tx.Exec(ctx, "UPDATE users SET username=$1, updated_at=NOW() WHERE id=$2", username, userID)
+	if err != nil {
+		return r.handlePgError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) UpdateUsernameDirect(ctx context.Context, userID uint64, username *string) error {
+	tag, err := r.storage.Exec(ctx, "UPDATE users SET username=$1, updated_at=NOW() WHERE id=$2 AND deleted_at IS NULL", username, userID)
+	if err != nil {
+		return r.handlePgError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
 func (r *UserRepository) handlePgError(err error) error {
 	if pgErr, ok := err.(*pgconn.PgError); ok {
 		switch pgErr.Code {
@@ -432,19 +474,30 @@ func (r *UserRepository) UpdateFromSync(ctx context.Context, tx pgx.Tx, id uint6
 	return err
 }
 
-// 3. Изменяем FindUserByEmailOrLogin (Улучшаем поиск для логина)
+
 func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error) {
-	// Строим сложный запрос: (username = login ИЛИ email = login) И удален = NULL
 	whereClause := sq.And{
 		sq.Or{
 			sq.Eq{"LOWER(u.email)": strings.ToLower(login)},
-			// Убедись, что колонка в БД точно называется "username" (как в миграции)
 			sq.Eq{"LOWER(u.username)": strings.ToLower(login)},
 		},
 		sq.Eq{"u.deleted_at": nil},
 	}
 
-	// Теперь передаем whereClause (который sq.And) в функцию, ожидающую interface{}
+	return r.findOneUser(ctx, r.storage, whereClause)
+}
+
+func (r *UserRepository) FindUserByUsername(ctx context.Context, username string) (*entities.User, error) {
+	whereClause := sq.And{
+		sq.Eq{"LOWER(u.username)": strings.ToLower(username)},
+		sq.Eq{"u.deleted_at": nil},
+	}
+
+	return r.findOneUser(ctx, r.storage, whereClause)
+}
+
+func (r *UserRepository) FindAnyUserByUsername(ctx context.Context, username string) (*entities.User, error) {
+	whereClause := sq.Eq{"LOWER(u.username)": strings.ToLower(username)}
 	return r.findOneUser(ctx, r.storage, whereClause)
 }
 
@@ -452,7 +505,6 @@ func (r *UserRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, extern
 	return r.findOneUser(ctx, r.getQuerier(tx), sq.Eq{"u.external_id": externalID, "u.source_system": source})
 }
 
-// --- Specific Finders ---
 func (r *UserRepository) FindUserByPhone(ctx context.Context, phone string) (*entities.User, error) {
 	return r.findOneUser(ctx, r.storage, sq.Eq{"u.phone_number": phone, "u.deleted_at": nil})
 }
@@ -511,8 +563,9 @@ func (r *UserRepository) FindUserIDsByRoleID(ctx context.Context, roleID uint64)
 	var ids []uint64
 	for rows.Next() {
 		var id uint64
-		rows.Scan(&id)
-		ids = append(ids, id)
+	if err := rows.Scan(&id); err == nil {
+    ids = append(ids, id)
+}
 	}
 	return ids, nil
 }
@@ -548,12 +601,12 @@ func (r *UserRepository) GetRolesByUserID(ctx context.Context, userID uint64) ([
 	var list []dto.ShortRoleDTO
 	for rows.Next() {
 		var d dto.ShortRoleDTO
-		rows.Scan(&d.ID, &d.Name)
-		list = append(list, d)
+		if err := rows.Scan(&d.ID, &d.Name); err == nil {
+			list = append(list, d)
+		}
 	}
 	return list, nil
 }
-
 func (r *UserRepository) FindUsersByIDs(ctx context.Context, userIDs []uint64) (map[uint64]entities.User, error) {
 	if len(userIDs) == 0 {
 		return map[uint64]entities.User{}, nil
@@ -614,7 +667,11 @@ func (r *UserRepository) FindActiveUsersByBranch(ctx context.Context, tx pgx.Tx,
 		q = q.Where(sq.Eq{"u.office_id": *offID})
 	}
 
-	sqlStr, args, _ := q.ToSql()
+sqlStr, args, err := q.ToSql()
+if err != nil {
+    return nil, fmt.Errorf("ошибка построения запроса: %w", err)
+}
+
 	rows, err := tx.Query(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, err

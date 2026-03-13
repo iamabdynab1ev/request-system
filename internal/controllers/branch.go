@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type BranchController struct {	
+type BranchController struct {
 	branchService services.BranchServiceInterface
 	logger        *zap.Logger
 }
@@ -21,7 +21,7 @@ type BranchController struct {
 func NewBranchController(service services.BranchServiceInterface, logger *zap.Logger) *BranchController {
 	return &BranchController{branchService: service, logger: logger}
 }
-																																																																																																																																																																																																																																																																																																								
+
 func (c *BranchController) GetBranches(ctx echo.Context) error {
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
 	branches, total, err := c.branchService.GetBranches(ctx.Request().Context(), filter)

@@ -54,7 +54,7 @@ func (c *OrderTypeController) Create(ctx echo.Context) error {
 // Update обрабатывает запрос на обновление типа заявки (PUT /order-types/:id).
 func (c *OrderTypeController) Update(ctx echo.Context) error {
 	// Считываем ID из параметра URL.
-	id, err := strconv.Atoi(ctx.Param("id"))
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный ID в URL", err, nil), c.logger)
 	}
@@ -77,7 +77,7 @@ func (c *OrderTypeController) Update(ctx echo.Context) error {
 
 // Delete обрабатывает запрос на удаление типа заявки (DELETE /order-types/:id).
 func (c *OrderTypeController) Delete(ctx echo.Context) error {
-	id, err := strconv.Atoi(ctx.Param("id"))
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный ID в URL", err, nil), c.logger)
 	}
@@ -93,7 +93,7 @@ func (c *OrderTypeController) Delete(ctx echo.Context) error {
 
 // GetByID обрабатывает запрос на получение одного типа заявки по ID (GET /order-types/:id).
 func (c *OrderTypeController) GetByID(ctx echo.Context) error {
-	id, err := strconv.Atoi(ctx.Param("id"))
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 64)
 	if err != nil {
 		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusBadRequest, "Неверный ID в URL", err, nil), c.logger)
 	}

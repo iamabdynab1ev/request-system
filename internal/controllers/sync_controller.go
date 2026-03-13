@@ -6,7 +6,7 @@ import (
 
 	"request-system/internal/dto"
 	"request-system/internal/services"
-	apperrors "request-system/pkg/errors" // <-- ДОБАВЛЯЕМ ИМПОРТ APP ERRORS
+	apperrors "request-system/pkg/errors" 
 	"request-system/pkg/utils"
 
 	"github.com/labstack/echo/v4"
@@ -31,7 +31,7 @@ func (c *SyncController) HandleSyncFrom1C(ctx echo.Context) error {
 	if err := ctx.Bind(&payload); err != nil {
 		c.logger.Warn("Не удалось распознать тело запроса вебхука от 1С. Проверьте структуру JSON.", zap.Error(err))
 
-		// ИСПРАВЛЕНИЕ: Создаем объект ошибки и передаем его
+	
 		apiErr := apperrors.NewHttpError(http.StatusBadRequest, "Неверный формат JSON", err, nil)
 		return utils.ErrorResponse(ctx, apiErr, c.logger)
 	}
@@ -49,7 +49,7 @@ func (c *SyncController) HandleSyncFrom1C(ctx echo.Context) error {
 func (c *SyncController) HandleSyncAll(ctx echo.Context) error {
 	c.logger.Warn("Получен запрос на устаревший эндпоинт /sync/run. Этот метод больше не выполняет никаких действий.")
 
-	// ИСПРАВЛЕНИЕ: Создаем объект ошибки и передаем его
+
 	apiErr := apperrors.NewHttpError(
 		http.StatusNotImplemented,
 		"Этот метод синхронизации больше не поддерживается. Перейдите на использование вебхуков 1С.",

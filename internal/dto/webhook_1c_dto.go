@@ -69,12 +69,12 @@ type Position1CDTO struct {
 // User1CDTO представляет одного пользователя из 1С.
 type User1CDTO struct {
 	ExternalID           string  `json:"externalId"`
-	Fio                  string  `json:"fio"`
-	Username             string  `json:"username"`
-	Email                string  `json:"email"`
-	PhoneNumber          string  `json:"phoneNumber"`
-	IsActive             bool    `json:"isActive"`
-	PositionExternalID   string  `json:"positionExternalId"`
+	Fio                  *string `json:"fio,omitempty"`
+	Username             *string `json:"username,omitempty"`
+	Email                *string `json:"email,omitempty"`
+	PhoneNumber          *string `json:"phoneNumber,omitempty"`
+	IsActive             *bool   `json:"isActive,omitempty"`
+	PositionExternalID   *string `json:"positionExternalId,omitempty"`
 	DepartmentExternalID *string `json:"departmentExternalId,omitempty"`
 	OtdelExternalID      *string `json:"otdelExternalId,omitempty"`
 	BranchExternalID     *string `json:"branchExternalId,omitempty"`

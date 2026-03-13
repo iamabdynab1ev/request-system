@@ -23,9 +23,9 @@ import (
 
 type OrderTypeServiceInterface interface {
 	Create(ctx context.Context, createDTO dto.CreateOrderTypeDTO) (*dto.OrderTypeResponseDTO, error)
-	Update(ctx context.Context, id int, updateDTO dto.UpdateOrderTypeDTO) (*dto.OrderTypeResponseDTO, error)
-	Delete(ctx context.Context, id int) error
-	GetByID(ctx context.Context, id int) (*dto.OrderTypeResponseDTO, error)
+	Update(ctx context.Context, id uint64, updateDTO dto.UpdateOrderTypeDTO) (*dto.OrderTypeResponseDTO, error)
+	Delete(ctx context.Context, id uint64) error
+	GetByID(ctx context.Context, id uint64) (*dto.OrderTypeResponseDTO, error)
 	GetAll(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.OrderTypeResponseDTO], error)
 	GetConfig(ctx context.Context, orderTypeID uint64) (map[string]interface{}, error)
 }
@@ -113,10 +113,9 @@ func (s *OrderTypeService) Create(ctx context.Context, createDTO dto.CreateOrder
 	if finalCode == "" {
 		finalCode = fmt.Sprintf("TYPE_%d", time.Now().UnixNano())
 	}
-	// Указатель для структуры
+
 	codePtr := &finalCode
 
-	// 3. Создаем структуру (БЕЗ полей времени, чтобы не было ошибки unknown field)
 	entity := &entities.OrderType{
 		Name:     createDTO.Name,
 		Code:     codePtr,
@@ -159,10 +158,10 @@ func (s *OrderTypeService) Create(ctx context.Context, createDTO dto.CreateOrder
 		return nil, err
 	}
 
-	return s.GetByID(ctx, entity.ID)
+	return s.GetByID(ctx, uint64(entity.ID))
 }
 
-func (s *OrderTypeService) Update(ctx context.Context, id int, updateDTO dto.UpdateOrderTypeDTO) (*dto.OrderTypeResponseDTO, error) {
+func (s *OrderTypeService) Update(ctx context.Context, id uint64, updateDTO dto.UpdateOrderTypeDTO) (*dto.OrderTypeResponseDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err
@@ -214,14 +213,14 @@ func (s *OrderTypeService) Update(ctx context.Context, id int, updateDTO dto.Upd
 		return s.repo.Update(ctx, tx, existingEntity)
 	})
 	if err != nil {
-		s.logger.Error("Ошибка при обновлении типа заявки", zap.Int("id", id), zap.Error(err))
+		s.logger.Error("Ошибка при обновлении типа заявки", zap.Uint64("id", id), zap.Error(err))
 		return nil, err
 	}
 
 	return toResponseDTO(existingEntity), nil
 }
 
-func (s *OrderTypeService) Delete(ctx context.Context, id int) error {
+func (s *OrderTypeService) Delete(ctx context.Context, id uint64) error {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return err
@@ -234,13 +233,13 @@ func (s *OrderTypeService) Delete(ctx context.Context, id int) error {
 		return s.repo.Delete(ctx, tx, id)
 	})
 	if err != nil {
-		s.logger.Error("Ошибка при удалении типа заявки", zap.Int("id", id), zap.Error(err))
+		s.logger.Error("Ошибка при удалении типа заявки", zap.Uint64("id", id), zap.Error(err))
 	}
 
 	return err
 }
 
-func (s *OrderTypeService) GetByID(ctx context.Context, id int) (*dto.OrderTypeResponseDTO, error) {
+func (s *OrderTypeService) GetByID(ctx context.Context, id uint64) (*dto.OrderTypeResponseDTO, error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {
 		return nil, err

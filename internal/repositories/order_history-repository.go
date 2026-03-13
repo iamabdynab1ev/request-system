@@ -174,7 +174,7 @@ func (r *OrderHistoryRepository) FindByOrderID(ctx context.Context, orderID uint
 		return nil, err
 	}
 
-	r.logger.Info("История заявки получена",
+	r.logger.Debug("История заявки получена",
 		zap.Uint64("orderID", orderID),
 		zap.Int("count", len(history)))
 	return history, nil

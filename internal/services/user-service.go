@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,10 +27,13 @@ const telegramLinkTokenTTL = 10 * time.Minute
 
 type UserServiceInterface interface {
 	GetUsers(ctx context.Context, filter types.Filter) ([]dto.UserDTO, uint64, error)
+	GetUsersForADBinding(ctx context.Context, filter types.Filter) ([]dto.UserDTO, error)
 	FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error)
 	CreateUser(ctx context.Context, payload dto.CreateUserDTO) (*dto.UserDTO, error)
 
 	UpdateUser(ctx context.Context, payload dto.UpdateUserDTO, explicitFields map[string]interface{}) (*dto.UserDTO, error)
+	SetUsernameForADBinding(ctx context.Context, userID uint64, username string) error
+	SetUsernamesForADBinding(ctx context.Context, updates map[uint64]string) map[uint64]error
 
 	DeleteUser(ctx context.Context, id uint64) error
 
@@ -132,6 +136,23 @@ func (s *UserService) GetUsers(ctx context.Context, filter types.Filter) ([]dto.
 		dtos[i] = *d
 	}
 	return dtos, total, nil
+}
+
+func (s *UserService) GetUsersForADBinding(ctx context.Context, filter types.Filter) ([]dto.UserDTO, error) {
+	if _, err := s.checkAccess(ctx, authz.UserManageADLink, nil); err != nil {
+		return nil, err
+	}
+
+	users, _, err := s.userRepository.GetUsers(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	dtos := make([]dto.UserDTO, len(users))
+	for i, u := range users {
+		dtos[i] = *userEntityToUserDTO(&u)
+	}
+	return dtos, nil
 }
 func (s *UserService) FindUser(ctx context.Context, id uint64) (*dto.UserDTO, error) {
 	u, err := s.userRepository.FindUserByID(ctx, id)
@@ -366,6 +387,208 @@ func (s *UserService) UpdateUser(ctx context.Context, p dto.UpdateUserDTO, expli
 	return s.FindUser(ctx, p.ID)
 }
 
+func (s *UserService) SetUsernameForADBinding(ctx context.Context, userID uint64, username string) error {
+	if _, err := s.checkAccess(ctx, authz.UserManageADLink, nil); err != nil {
+		return err
+	}
+
+	cleanUsername := strings.TrimSpace(username)
+	if cleanUsername == "" {
+		return apperrors.NewBadRequestError("username cannot be empty")
+	}
+
+	return s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		return s.userRepository.UpdateUsername(ctx, tx, userID, &cleanUsername)
+	})
+}
+
+func (s *UserService) SetUsernamesForADBinding(ctx context.Context, updates map[uint64]string) map[uint64]error {
+	failed := make(map[uint64]error)
+	if len(updates) == 0 {
+		return failed
+	}
+
+	if _, err := s.checkAccess(ctx, authz.UserManageADLink, nil); err != nil {
+		for userID := range updates {
+			failed[userID] = err
+		}
+		return failed
+	}
+
+	duplicateInBatch := make(map[string][]uint64)
+	originalUsernameByLower := make(map[string]string)
+
+	for userID, username := range updates {
+		cleanUsername := strings.TrimSpace(username)
+		if cleanUsername == "" {
+			continue
+		}
+
+		lowerUsername := strings.ToLower(cleanUsername)
+		duplicateInBatch[lowerUsername] = append(duplicateInBatch[lowerUsername], userID)
+		if _, exists := originalUsernameByLower[lowerUsername]; !exists {
+			originalUsernameByLower[lowerUsername] = cleanUsername
+		}
+	}
+
+	for lowerUsername, userIDs := range duplicateInBatch {
+		if len(userIDs) < 2 {
+			continue
+		}
+
+		conflictErr := newADUsernameBatchConflictError(originalUsernameByLower[lowerUsername], userIDs)
+		for _, userID := range userIDs {
+			failed[userID] = conflictErr
+		}
+	}
+
+	for userID, username := range updates {
+		if _, alreadyFailed := failed[userID]; alreadyFailed {
+			continue
+		}
+
+		cleanUsername := strings.TrimSpace(username)
+		if cleanUsername == "" {
+			failed[userID] = apperrors.NewBadRequestError("username cannot be empty")
+			continue
+		}
+
+		reassigned, conflictErr, err := s.tryReassignADUsername(ctx, userID, cleanUsername)
+		if err != nil {
+			failed[userID] = err
+			continue
+		}
+		if reassigned {
+			s.logger.Info("AD username reassigned to matching user", zap.Uint64("user_id", userID), zap.String("username", cleanUsername))
+			continue
+		}
+		if conflictErr != nil {
+			failed[userID] = conflictErr
+			continue
+		}
+
+		if err := s.userRepository.UpdateUsernameDirect(ctx, userID, &cleanUsername); err != nil {
+			reassigned, conflictErr, lookupErr := s.tryReassignADUsername(ctx, userID, cleanUsername)
+			if lookupErr != nil {
+				failed[userID] = lookupErr
+				continue
+			}
+			if reassigned {
+				s.logger.Info("AD username reassigned to matching user after retry", zap.Uint64("user_id", userID), zap.String("username", cleanUsername))
+				continue
+			}
+			if conflictErr != nil {
+				failed[userID] = conflictErr
+				continue
+			}
+
+			failed[userID] = err
+		}
+	}
+
+	return failed
+}
+
+func (s *UserService) tryReassignADUsername(ctx context.Context, userID uint64, username string) (bool, error, error) {
+	existingUser, err := s.userRepository.FindAnyUserByUsername(ctx, username)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil, nil
+		}
+		return false, nil, err
+	}
+
+	if existingUser == nil || existingUser.ID == userID {
+		return false, nil, nil
+	}
+
+	if !shouldReassignADUsername(existingUser, username) {
+		return false, newADUsernameTakenError(username, existingUser), nil
+	}
+
+	cleanUsername := strings.TrimSpace(username)
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		if err := s.userRepository.UpdateUsernameAny(ctx, tx, existingUser.ID, nil); err != nil {
+			return err
+		}
+		return s.userRepository.UpdateUsername(ctx, tx, userID, &cleanUsername)
+	})
+	if err != nil {
+		return false, nil, err
+	}
+
+	s.logger.Warn(
+		"AD username moved from non-matching user to matching user",
+		zap.String("username", cleanUsername),
+		zap.Uint64("from_user_id", existingUser.ID),
+		zap.String("from_email", existingUser.Email),
+		zap.Uint64("to_user_id", userID),
+	)
+
+	return true, nil, nil
+}
+
+func newADUsernameTakenError(username string, existingUser *entities.User) error {
+	details := map[string]interface{}{
+		"username":         username,
+		"conflict_user_id": existingUser.ID,
+		"conflict_fio":     existingUser.Fio,
+		"conflict_email":   existingUser.Email,
+		"deleted_at":       existingUser.DeletedAt,
+		"is_deleted":       existingUser.DeletedAt != nil,
+	}
+
+	message := fmt.Sprintf("Логин AD '%s' уже привязан к пользователю ID=%d, FIO=%s, email=%s", username, existingUser.ID, existingUser.Fio, existingUser.Email)
+	if existingUser.DeletedAt != nil {
+		message = fmt.Sprintf(
+			"Логин AD '%s' уже привязан к удаленному пользователю ID=%d, FIO=%s, email=%s, deleted_at=%s",
+			username,
+			existingUser.ID,
+			existingUser.Fio,
+			existingUser.Email,
+			existingUser.DeletedAt.Format(time.RFC3339),
+		)
+	}
+
+	return apperrors.NewHttpErrorWithDetails(http.StatusConflict, message, nil, nil, details)
+}
+
+func newADUsernameBatchConflictError(username string, userIDs []uint64) error {
+	details := map[string]interface{}{
+		"username":          username,
+		"conflict_user_ids": userIDs,
+	}
+
+	message := fmt.Sprintf("Логин AD '%s' одновременно найден для нескольких пользователей: %v", username, userIDs)
+	return apperrors.NewHttpErrorWithDetails(http.StatusConflict, message, nil, nil, details)
+}
+
+func shouldReassignADUsername(existingUser *entities.User, username string) bool {
+	if existingUser == nil {
+		return false
+	}
+
+	if existingUser.DeletedAt != nil {
+		return true
+	}
+
+	existingLocalPart := extractEmailLocalPart(existingUser.Email)
+	if existingLocalPart == "" {
+		return true
+	}
+
+	return !strings.EqualFold(existingLocalPart, username)
+}
+
+func extractEmailLocalPart(email string) string {
+	cleanEmail := strings.TrimSpace(email)
+	if cleanEmail == "" || !strings.Contains(cleanEmail, "@") {
+		return ""
+	}
+
+	return strings.TrimSpace(strings.SplitN(cleanEmail, "@", 2)[0])
+}
+
 func (s *UserService) DeleteUser(ctx context.Context, id uint64) error {
 	u, err := s.userRepository.FindUserByID(ctx, id)
 	if err != nil {
@@ -470,7 +693,7 @@ func userEntityToUserDTO(e *entities.User) *dto.UserDTO {
 		StatusID: e.StatusID, StatusCode: e.StatusCode,
 		BranchID: e.BranchID, DepartmentID: e.DepartmentID,
 		PositionID: e.PositionID, 
-       
+    
         PositionIDs: e.PositionIDs, 
  		OtdelIDs: e.OtdelIDs,
         OfficeID: e.OfficeID, OtdelID: e.OtdelID,

@@ -28,10 +28,10 @@ import (
 const (
 	telegramStateKey     = "tg_user_state:%d"
 	maxMessageAgeSeconds = 120
-	commandCooldown      = 1000 * time.Millisecond // 1 сек между командами
-	callbackCooldown     = 500 * time.Millisecond  // 0.5 сек между кликами
-	menuCooldown         = 2000 * time.Millisecond // 🔥 УВЕЛИЧИЛ ДО 2 сек для статистики/меню
-	stateExpiration      = 30 * time.Minute
+	commandCooldown      = 1000 * time.Millisecond  // 1 сек между командами
+	callbackCooldown     = 500 * time.Millisecond   // 0.5 сек между кликами
+	menuCooldown         = 2000 * time.Millisecond  // 2 сек для статистики/меню
+	stateExpiration      = 60 * time.Minute         // ✅ УВЕЛИЧЕНО: 60 минут вместо 30
 	goroutineTimeout     = 45 * time.Second 
 	
 	maxCommentLength     = 500
@@ -113,39 +113,37 @@ func (c *TelegramController) HandleTelegramWebhook(ctx echo.Context) error {
 		return ctx.NoContent(http.StatusOK)
 	}
 
-	if update.CallbackQuery != nil {
-		if !c.cfg.AdvancedMode { return ctx.NoContent(http.StatusOK) }
-		
-		// 1. АНТИ-СПАМ ПРОВЕРКА (Сразу)
-		chatID := update.CallbackQuery.Message.Chat.ID
-		if !c.deduplicator.TryAcquire(chatID, "cb", callbackCooldown) {
-			// Гасим "часики", но логику не запускаем
-			go c.tgService.AnswerCallbackQuery(context.Background(), update.CallbackQuery.ID, "")
-			return ctx.NoContent(http.StatusOK)
-		}
-		
-		go c.handleCallbackQueryAsync(update.CallbackQuery)
-	}
+if update.CallbackQuery != nil {
+    if !c.cfg.AdvancedMode { return ctx.NoContent(http.StatusOK) }
+    
+    chatID := update.CallbackQuery.Message.Chat.ID
+    if !c.deduplicator.TryAcquire(chatID, "cb", callbackCooldown) {
+        go c.tgService.AnswerCallbackQuery(context.Background(), update.CallbackQuery.ID, "")
+        return ctx.NoContent(http.StatusOK)
+    }
+    
+    go c.handleCallbackQueryAsync(update.CallbackQuery)
+    return ctx.NoContent(http.StatusOK)
+}
 
 	if update.Message != nil {
 		go c.handleMessageAsync(update.Message)
 	}
 	return ctx.NoContent(http.StatusOK)
 }
+
 // ==================== АСИНХРОННАЯ ОБРАБОТКА ====================
 func (c *TelegramController) handleCallbackQueryAsync(query *TelegramCallbackQuery) {
-	// 🔥 СЕМАФОР ТЕПЕРЬ ТУТ (Защита базы данных)
-	c.sem <- struct{}{}
-	defer func() { <-c.sem }()
+    c.sem <- struct{}{}
+    defer func() { <-c.sem }()
 
-	defer c.recoverPanic("handleCallbackQueryAsync")
-	bgCtx, cancel := context.WithTimeout(context.Background(), goroutineTimeout)
-	defer cancel()
+    defer c.recoverPanic("handleCallbackQueryAsync")
+    bgCtx, cancel := context.WithTimeout(context.Background(), goroutineTimeout)
+    defer cancel()
 
-	_ = c.tgService.AnswerCallbackQuery(bgCtx, query.ID, "")
-	if err := c.handleCallbackQuery(bgCtx, query); err != nil {
-		c.logger.Error("Callback error", zap.Error(err))
-	}
+    if err := c.handleCallbackQuery(bgCtx, query); err != nil {
+        c.logger.Error("Callback error", zap.Error(err))
+    }
 }
 
 func (c *TelegramController) handleMessageAsync(msg *TelegramMessage) {
@@ -155,34 +153,27 @@ func (c *TelegramController) handleMessageAsync(msg *TelegramMessage) {
 	msgID := msg.MessageID
 	text := strings.TrimSpace(msg.Text)
 
-
-	// Это критически важно для "Статистики" и кнопок меню, чтобы не плодить 100 запросов.
 	isCommand := strings.HasPrefix(text, "/")
 	isMenu := c.isMenuButton(text)
 
 	if isCommand {
 		if !c.deduplicator.TryAcquire(chatID, "cmd", commandCooldown) {
-			// Игнорируем дубль команды
-			// Можно удалить сообщение юзера, чтобы не мусорил
 			go c.tgService.DeleteMessage(context.Background(), chatID, msgID)
 			return
 		}
 	} else if c.cfg.AdvancedMode && isMenu {
 		if !c.deduplicator.TryAcquire(chatID, "menu", menuCooldown) {
-			// Игнорируем дубль нажатия меню
 			go c.tgService.DeleteMessage(context.Background(), chatID, msgID)
 			return
 		}
 	}
 
-
 	// Запускаем удаление сообщения юзера в отдельной горутине
 	go func() {
-		time.Sleep(500 * time.Millisecond) // Эстетическая задержка
+		time.Sleep(500 * time.Millisecond)
 		_ = c.tgService.DeleteMessage(context.Background(), chatID, msgID)
 	}()
 
-	// 🔥 3. ТЕПЕРЬ МОЖНО ЗАГРУЖАТЬ СИСТЕМУ (Вход в семафор)
 	c.sem <- struct{}{}
 	defer func() { <-c.sem }()
 
@@ -195,7 +186,6 @@ func (c *TelegramController) handleMessageAsync(msg *TelegramMessage) {
 	}
 
 	if c.cfg.AdvancedMode {
-		// Обработка текста и кнопок меню
 		if err := c.handleTextMessage(bgCtx, chatID, text); err != nil {
 			c.logger.Error("Text error", zap.Error(err))
 		}
@@ -225,20 +215,16 @@ func (c *TelegramController) setUserState(ctx context.Context, chatID int64, sta
 }
 
 func (c *TelegramController) isMessageRecent(update *TelegramUpdate) bool {
-	// 1. Если это нажатие кнопки (Callback), мы ВСЕГДА считаем его свежим.
-	// Потому что Update.CallbackQuery.Message.Date — это дата ОТПРАВКИ сообщения ботом,
-	// а не дата нажатия кнопки. Меню может висеть час, и клик по нему валиден.
+	// ✅ Callback всегда свежий (дата кнопки = дата отправки меню ботом)
 	if update.CallbackQuery != nil {
 		return true
 	}
 
-	// 2. Только для новых текстовых сообщений проверяем время, чтобы не отвечать на старый спам
-	// если бот лежал выключенным неделю.
+	// Только для текстовых сообщений проверяем время
 	if update.Message != nil {
 		msgDate := update.Message.Date
 		if msgDate > 0 {
 			msgTime := time.Unix(msgDate, 0)
-			// Если сообщению больше 2 минут - игнорируем
 			if time.Since(msgTime) > 2*time.Minute {
 				return false
 			}
@@ -247,6 +233,7 @@ func (c *TelegramController) isMessageRecent(update *TelegramUpdate) bool {
 	
 	return true
 }
+
 func (c *TelegramController) isMenuButton(text string) bool {
 	menuButtons := []string{
 		"📋 Мои Заявки", 
@@ -279,9 +266,8 @@ func (c *TelegramController) sendInternalError(ctx context.Context, chatID int64
 }
 
 func (c *TelegramController) sendStaleStateError(ctx context.Context, chatID int64, messageID int) error {
-	
 	return c.tgService.SendMessageEx(ctx, chatID, 
-        "⚠️ Срок действия кнопки истек\\.\nПожалуйста, вызовите меню заново: /my\\_tasks", 
+        "⚠️ Срок действия меню истек\\.\nВызовите заново: /my\\_tasks", 
         telegram.WithMarkdownV2())
 }
 
@@ -351,7 +337,8 @@ func (c *TelegramController) prepareUserContext(ctx context.Context, chatID int6
 
 func (c *TelegramController) getStatusMap(ctx context.Context) map[uint64]*entities.Status {
 	c.statusCacheMutex.RLock()
-	if time.Since(c.statusCacheTime) < 5*time.Minute && len(c.statusCache) > 0 {
+	// ✅ ОПТИМИЗАЦИЯ: Кэш на 10 минут вместо 5
+	if time.Since(c.statusCacheTime) < 10*time.Minute && len(c.statusCache) > 0 {
 		defer c.statusCacheMutex.RUnlock()
 		return c.statusCache
 	}
@@ -453,7 +440,7 @@ func (c *TelegramController) RegisterWebhook(baseURL string) error {
 func (c *TelegramController) StartCleanup(ctx context.Context) {
 	if c.deduplicator != nil {
 		c.logger.Info("Запуск фоновой очистки дедупликатора")
-		c.deduplicator.Cleanup(ctx, 1*time.Minute)
+		c.deduplicator.Cleanup(ctx, 2*time.Minute) // ✅ Очистка каждые 2 минуты
 		c.logger.Info("Фоновая очистка остановлена")
 	}
 }

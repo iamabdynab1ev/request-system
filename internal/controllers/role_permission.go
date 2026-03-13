@@ -16,14 +16,13 @@ import (
 )
 
 type RolePermissionController struct {
-	// ИСПРАВЛЕНО ЗДЕСЬ: rpService теперь интерфейсный тип
-	rpService services.RolePermissionServiceInterface // <-- ИЗМЕНЕНО: был *services.RolePermissionService
+	rpService services.RolePermissionServiceInterface 
 	logger    *zap.Logger
 }
 
-// ИСПРАВЛЕНО: Конструктор теперь принимает интерфейсный тип
+
 func NewRolePermissionController(
-	rpService services.RolePermissionServiceInterface, // <-- ИЗМЕНЕНО: был *services.RolePermissionService
+	rpService services.RolePermissionServiceInterface,
 	logger *zap.Logger,
 ) *RolePermissionController {
 	return &RolePermissionController{

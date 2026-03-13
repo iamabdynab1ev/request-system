@@ -1,5 +1,4 @@
-// internal/controllers/telegram/request_deduplicator.go
-package telegram 
+package telegram
 
 import (
 	"context"
@@ -8,26 +7,35 @@ import (
 	"time"
 )
 
+type dedupEntry struct {
+	expiry time.Time
+}
+
 type RequestDeduplicator struct {
-	locks sync.Map
+	mu    sync.Mutex
+	locks map[string]dedupEntry
 }
 
 func NewRequestDeduplicator() *RequestDeduplicator {
-	return &RequestDeduplicator{}
+	return &RequestDeduplicator{
+		locks: make(map[string]dedupEntry),
+	}
 }
 
 func (d *RequestDeduplicator) TryAcquire(chatID int64, keySuffix string, ttl time.Duration) bool {
 	key := fmt.Sprintf("%d_%s", chatID, keySuffix)
 	now := time.Now()
 
-	if val, exists := d.locks.Load(key); exists {
-		expiry := val.(time.Time)
-		if now.Before(expiry) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if entry, exists := d.locks[key]; exists {
+		if now.Before(entry.expiry) {
 			return false
 		}
 	}
 
-	d.locks.Store(key, now.Add(ttl))
+	d.locks[key] = dedupEntry{expiry: now.Add(ttl)}
 	return true
 }
 
@@ -41,13 +49,13 @@ func (d *RequestDeduplicator) Cleanup(ctx context.Context, interval time.Duratio
 			return
 		case <-ticker.C:
 			now := time.Now()
-			d.locks.Range(func(key, value interface{}) bool {
-				expiry := value.(time.Time)
-				if now.After(expiry) {
-					d.locks.Delete(key)
+			d.mu.Lock()
+			for key, entry := range d.locks {
+				if now.After(entry.expiry) {
+					delete(d.locks, key)
 				}
-				return true
-			})
+			}
+			d.mu.Unlock()
 		}
 	}
 }
