@@ -14,12 +14,12 @@ import (
 )
 
 type EquipmentController struct {
-	equipmentService services.EquipmentServiceInterface 
+	equipmentService services.EquipmentServiceInterface
 	logger           *zap.Logger
 }
 
 func NewEquipmentController(
-	service services.EquipmentServiceInterface, 
+	service services.EquipmentServiceInterface,
 	logger *zap.Logger,
 ) *EquipmentController {
 	return &EquipmentController{

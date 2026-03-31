@@ -52,5 +52,5 @@ func (m *TxManager) RunInTransaction(ctx context.Context, fn func(tx pgx.Tx) err
 	}()
 
 	err = fn(tx)
-return apperrors.WrapDBError(err)
+	return apperrors.WrapDBError(err)
 }

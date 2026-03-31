@@ -274,6 +274,9 @@ func (ctrl *AuthController) UpdateMe(c echo.Context) error {
 
 	updatedUser, err := ctrl.authService.UpdateMyProfile(reqCtx, payload)
 	if err != nil {
+		if photoURL != nil {
+			_ = ctrl.fileStorage.Delete(*photoURL)
+		}
 		return ctrl.errorResponse(c, err)
 	}
 

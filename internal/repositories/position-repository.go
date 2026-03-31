@@ -213,11 +213,7 @@ func (r *positionRepository) Create(ctx context.Context, tx pgx.Tx, p entities.P
 
 	var newID uint64
 	if err := tx.QueryRow(ctx, query, args...).Scan(&newID); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return 0, fmt.Errorf("должность уже существует: %w", apperrors.ErrConflict)
-		}
-		return 0, fmt.Errorf("ошибка создания positions: %w", err)
+		return 0, apperrors.WrapDBError(err)
 	}
 	return newID, nil
 }
@@ -240,11 +236,7 @@ func (r *positionRepository) Update(ctx context.Context, tx pgx.Tx, id uint64, p
 
 	result, err := tx.Exec(ctx, query, args...)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return fmt.Errorf("должность уже существует: %w", apperrors.ErrConflict)
-		}
-		return fmt.Errorf("ошибка обновления positions: %w", err)
+		return apperrors.WrapDBError(err)
 	}
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
@@ -265,7 +257,7 @@ func (r *positionRepository) Delete(ctx context.Context, tx pgx.Tx, id uint64) e
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return apperrors.NewHttpError(http.StatusBadRequest, "Запись используется", err, nil)
 		}
-		return fmt.Errorf("ошибка удаления: %w", err)
+		return apperrors.WrapDBError(err)
 	}
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound

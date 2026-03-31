@@ -54,10 +54,10 @@ func NewTelegramNotificationService(tgService telegram.ServiceInterface, logger 
 }
 
 func (s *telegramNotificationService) SendPlainMessage(ctx context.Context, chatID int64, message string) error {
-    if chatID == 0 {
-        return fmt.Errorf("chat id не может быть 0")
-    }
-    return s.tgService.SendMessageEx(ctx, chatID, telegram.EscapeTextForMarkdownV2(message), telegram.WithMarkdownV2())
+	if chatID == 0 {
+		return fmt.Errorf("chat id не может быть 0")
+	}
+	return s.tgService.SendMessageEx(ctx, chatID, telegram.EscapeTextForMarkdownV2(message), telegram.WithMarkdownV2())
 }
 
 func (s *telegramNotificationService) SendFormattedMessage(ctx context.Context, chatID int64, message string) error {

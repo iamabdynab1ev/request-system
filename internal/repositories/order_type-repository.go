@@ -74,11 +74,7 @@ func (r *orderTypeRepository) Create(ctx context.Context, tx pgx.Tx, orderType *
 	var id uint64
 	err := tx.QueryRow(ctx, query, orderType.Name, orderType.Code, orderType.StatusID).Scan(&id)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
-			return 0, fmt.Errorf("тип заявки с таким кодом уже существует: %w", apperrors.ErrConflict)
-		}
-		return 0, fmt.Errorf("ошибка создания order_type: %w", err)
+		return 0, apperrors.WrapDBError(err)
 	}
 
 	return id, nil
@@ -93,11 +89,7 @@ func (r *orderTypeRepository) Update(ctx context.Context, tx pgx.Tx, orderType *
 
 	result, err := tx.Exec(ctx, query, orderType.Name, orderType.Code, orderType.StatusID, orderType.ID)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return fmt.Errorf("тип заявки с таким кодом уже существует: %w", apperrors.ErrConflict)
-		}
-		return fmt.Errorf("ошибка обновления order_type: %w", err)
+		return apperrors.WrapDBError(err)
 	}
 
 	if result.RowsAffected() == 0 {
@@ -117,7 +109,7 @@ func (r *orderTypeRepository) Delete(ctx context.Context, tx pgx.Tx, id uint64) 
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" { // foreign_key_violation
 			return fmt.Errorf("невозможно удалить тип заявки, так как он используется: %w", apperrors.NewHttpError(http.StatusBadRequest, "Тип заявки используется и не может быть удалён", err, nil))
 		}
-		return fmt.Errorf("ошибка удаления order_type: %w", err)
+		return apperrors.WrapDBError(err)
 	}
 
 	if result.RowsAffected() == 0 {

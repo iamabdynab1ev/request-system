@@ -1,6 +1,5 @@
 package dto
 
-
 type ReportItemDTO struct {
 	OrderID          int64  `json:"order_id"`
 	CreatorFio       string `json:"creator_fio"`

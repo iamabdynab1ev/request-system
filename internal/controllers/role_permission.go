@@ -5,7 +5,7 @@ import (
 	"strconv"
 
 	"request-system/internal/dto"
-	"request-system/internal/services" 
+	"request-system/internal/services"
 
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/utils"
@@ -16,10 +16,9 @@ import (
 )
 
 type RolePermissionController struct {
-	rpService services.RolePermissionServiceInterface 
+	rpService services.RolePermissionServiceInterface
 	logger    *zap.Logger
 }
-
 
 func NewRolePermissionController(
 	rpService services.RolePermissionServiceInterface,

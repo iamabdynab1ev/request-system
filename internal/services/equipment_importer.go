@@ -2,12 +2,15 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xuri/excelize/v2"
+	"go.uber.org/zap"
 )
 
 var expectedColumns = map[string]string{
@@ -22,19 +25,22 @@ type dbEnt struct {
 }
 
 type EquipImportService struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	logger *zap.Logger
 }
 
-func NewEquipImportService(db *pgxpool.Pool) *EquipImportService {
-	return &EquipImportService{db: db}
+func NewEquipImportService(db *pgxpool.Pool, logger *zap.Logger) *EquipImportService {
+	return &EquipImportService{db: db, logger: logger.Named("equipment_import")}
 }
 
 func (s *EquipImportService) ImportAtmsReader(r io.Reader) error {
 	return s.masterImportReader(r, "Банкомат")
 }
+
 func (s *EquipImportService) ImportPosReader(r io.Reader) error {
 	return s.masterImportReader(r, "Пос-терминал")
 }
+
 func (s *EquipImportService) ImportTerminalsReader(r io.Reader) error {
 	return s.masterImportReader(r, "ТЕРМИНАЛ_СМАРТ")
 }
@@ -47,25 +53,48 @@ func (s *EquipImportService) masterImportReader(r io.Reader, targetType string) 
 	defer f.Close()
 
 	ctx := context.Background()
-
-	// Начинаем транзакцию
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("ошибка начала транзакции: %w", err)
 	}
-	defer tx.Rollback(ctx) // откат если что-то пошло не так
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			s.logger.Warn("Не удалось откатить транзакцию импорта оборудования", zap.Error(rollbackErr))
+		}
+	}()
 
-	branchData := s.getRawEntities(ctx, "branches")
-	officeData := s.getRawEntities(ctx, "offices")
-	statusID := s.getOrCreate(ctx, "statuses", "ACTIVE", "code")
+	branchData, err := s.getRawEntitiesTx(ctx, tx, "branches")
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки филиалов: %w", err)
+	}
+	officeData, err := s.getRawEntitiesTx(ctx, tx, "offices")
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки офисов: %w", err)
+	}
+	statusID, err := s.getOrCreateTx(ctx, tx, "statuses", "ACTIVE", "code")
+	if err != nil {
+		return fmt.Errorf("ошибка подготовки статуса оборудования: %w", err)
+	}
 
-	vnutrTypeID := s.getOrCreate(ctx, "equipment_types", "Внутренний терминал", "name")
-	vneshTypeID := s.getOrCreate(ctx, "equipment_types", "Внешний терминал", "name")
-	cashTypeID := s.getOrCreate(ctx, "equipment_types", "Терминал Cash-in/out", "name")
+	vnutrTypeID, err := s.getOrCreateTx(ctx, tx, "equipment_types", "Внутренний терминал", "name")
+	if err != nil {
+		return fmt.Errorf("ошибка подготовки типа оборудования 'Внутренний терминал': %w", err)
+	}
+	vneshTypeID, err := s.getOrCreateTx(ctx, tx, "equipment_types", "Внешний терминал", "name")
+	if err != nil {
+		return fmt.Errorf("ошибка подготовки типа оборудования 'Внешний терминал': %w", err)
+	}
+	cashTypeID, err := s.getOrCreateTx(ctx, tx, "equipment_types", "Терминал Cash-in/out", "name")
+	if err != nil {
+		return fmt.Errorf("ошибка подготовки типа оборудования 'Терминал Cash-in/out': %w", err)
+	}
 
 	var defaultTypeID uint64
 	if targetType != "ТЕРМИНАЛ_СМАРТ" {
-		defaultTypeID = s.getOrCreate(ctx, "equipment_types", targetType, "name")
+		defaultTypeID, err = s.getOrCreateTx(ctx, tx, "equipment_types", targetType, "name")
+		if err != nil {
+			return fmt.Errorf("ошибка подготовки типа оборудования '%s': %w", targetType, err)
+		}
 	}
 
 	success, updated := 0, 0
@@ -75,13 +104,14 @@ func (s *EquipImportService) masterImportReader(r io.Reader, targetType string) 
 	for _, sheet := range f.GetSheetList() {
 		rows, err := f.GetRows(sheet)
 		if err != nil {
+			s.logger.Warn("Не удалось прочитать лист Excel", zap.String("sheet", sheet), zap.Error(err))
 			continue
 		}
 
-		fmt.Printf("🔍 Анализирую лист: %s\n", sheet)
+		s.logger.Info("Анализ листа импорта оборудования", zap.String("sheet", sheet), zap.String("target_type", targetType))
 
 		var bIdx, nIdx, oIdx, aIdx, kIdx = -1, -1, -1, -1, -1
-		var headerFoundRow = -1
+		headerFoundRow := -1
 
 		for rIdx, row := range rows {
 			rowStr := strings.ToLower(strings.Join(row, "|"))
@@ -133,14 +163,14 @@ func (s *EquipImportService) masterImportReader(r io.Reader, targetType string) 
 
 			var finalTypeID uint64
 			if targetType == "ТЕРМИНАЛ_СМАРТ" {
-				if strings.Contains(vidText, "внеш") {
+				switch {
+				case strings.Contains(vidText, "внеш"):
 					finalTypeID = vneshTypeID
-				} else if strings.Contains(vidText, "внутр") {
+				case strings.Contains(vidText, "внутр"):
 					finalTypeID = vnutrTypeID
-				} else if strings.Contains(vidText, "cash") {
+				case strings.Contains(vidText, "cash"):
 					finalTypeID = cashTypeID
-				} else {
-					// Вид не определён — откат транзакции
+				default:
 					return fmt.Errorf("строка %d: [%s] вид терминала не определён: '%s' — импорт отменён", i+1, name, vidText)
 				}
 			} else {
@@ -163,7 +193,6 @@ func (s *EquipImportService) masterImportReader(r io.Reader, targetType string) 
 			bID := s.fuzzyFind(branchName, branchData)
 			oID := s.fuzzyFind(officeName, officeData)
 
-			// Собираем все незаполненные поля
 			missingFields := []string{}
 			if branchName != "" && bID == 0 {
 				missingFields = append(missingFields, fmt.Sprintf("филиал='%s'", branchName))
@@ -177,43 +206,38 @@ func (s *EquipImportService) masterImportReader(r io.Reader, targetType string) 
 			if vidText == "" && targetType == "ТЕРМИНАЛ_СМАРТ" {
 				missingFields = append(missingFields, "вид терминала=пусто")
 			}
-
 			if len(missingFields) > 0 {
-				fmt.Printf("⚠️ Стр %d: [%s] Не найдены/не заполнены: %s\n", i+1, name, strings.Join(missingFields, " | "))
+				s.logger.Warn(
+					"Не найдены связанные данные при импорте оборудования",
+					zap.Int("row", i+1),
+					zap.String("name", name),
+					zap.String("details", strings.Join(missingFields, " | ")),
+				)
 			}
 
-			var dbBID interface{} = nil
+			var dbBID interface{}
 			if bID > 0 {
 				dbBID = bID
 			}
-			var dbOID interface{} = nil
+			var dbOID interface{}
 			if oID > 0 {
 				dbOID = oID
 			}
 
 			query := `
-    INSERT INTO equipments (name, address, branch_id, office_id, status_id, equipment_type_id, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, NOW())
-    ON CONFLICT (name) 
-    DO UPDATE SET 
-        address = COALESCE(NULLIF(EXCLUDED.address, '-'), equipments.address),
-        equipment_type_id = EXCLUDED.equipment_type_id,
-        updated_at = NOW(),
-        -- Обновляем филиал/офис ТОЛЬКО если в Excel нашлась связка
-        -- Если не нашлась ($3 IS NULL) — не трогаем то что установлено вручную
-        branch_id = CASE 
-            WHEN $3 IS NOT NULL THEN $3 
-            ELSE equipments.branch_id 
-        END,
-        office_id = CASE 
-            WHEN $4 IS NOT NULL THEN $4 
-            ELSE equipments.office_id 
-        END
-    RETURNING (xmax = 0) AS is_insert`
+				INSERT INTO equipments (name, address, branch_id, office_id, status_id, equipment_type_id, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, NOW())
+				ON CONFLICT (name)
+				DO UPDATE SET
+					address = COALESCE(NULLIF(EXCLUDED.address, '-'), equipments.address),
+					equipment_type_id = EXCLUDED.equipment_type_id,
+					updated_at = NOW(),
+					branch_id = CASE WHEN $3 IS NOT NULL THEN $3 ELSE equipments.branch_id END,
+					office_id = CASE WHEN $4 IS NOT NULL THEN $4 ELSE equipments.office_id END
+				RETURNING (xmax = 0) AS is_insert`
 
 			var isInsert bool
-			err = tx.QueryRow(ctx, query, name, address, dbBID, dbOID, statusID, finalTypeID).Scan(&isInsert)
-			if err != nil {
+			if err := tx.QueryRow(ctx, query, name, address, dbBID, dbOID, statusID, finalTypeID).Scan(&isInsert); err != nil {
 				return fmt.Errorf("строка %d: [%s] ошибка БД: %w — импорт отменён", i+1, name, err)
 			}
 
@@ -225,9 +249,8 @@ func (s *EquipImportService) masterImportReader(r io.Reader, targetType string) 
 		}
 	}
 
-	// Удаляем устаревшие записи
-	if len(processedNames) > 0 {
-		typeIDs := []uint64{}
+	if len(processedNames) > 0 && len(touchedTypesMap) > 0 {
+		typeIDs := make([]uint64, 0, len(touchedTypesMap))
 		for tID := range touchedTypesMap {
 			typeIDs = append(typeIDs, tID)
 		}
@@ -237,20 +260,19 @@ func (s *EquipImportService) masterImportReader(r io.Reader, targetType string) 
 		if delErr != nil {
 			return fmt.Errorf("ошибка при удалении устаревших записей: %w — импорт отменён", delErr)
 		}
-		deletedCount := cmdTag.RowsAffected()
-		if deletedCount > 0 {
-			fmt.Printf("🧹 Очистка: удалено %d записей, отсутствующих в Excel.\n", deletedCount)
+		if deletedCount := cmdTag.RowsAffected(); deletedCount > 0 {
+			s.logger.Info("Удалены устаревшие записи оборудования", zap.Int64("deleted", deletedCount), zap.String("target_type", targetType))
 		}
 	}
 
-	// Всё хорошо — фиксируем транзакцию
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("ошибка фиксации транзакции: %w", err)
 	}
 
-	fmt.Printf("\n🏁 ИТОГ: Новых: %d | Обновлено: %d\n", success, updated)
+	s.logger.Info("Импорт оборудования завершен", zap.String("target_type", targetType), zap.Int("created", success), zap.Int("updated", updated))
 	return nil
 }
+
 func (s *EquipImportService) fuzzyFind(excelName string, dbItems []dbEnt) uint64 {
 	excelName = strings.ToLower(strings.TrimSpace(excelName))
 	if excelName == "" {
@@ -268,20 +290,20 @@ func (s *EquipImportService) fuzzyFind(excelName string, dbItems []dbEnt) uint64
 
 func cleanString(in string) string {
 	in = strings.NewReplacer(
-		"ҳ", "х",
-		"ҷ", "ч",
-		"қ", "к",
-		"ӯ", "у",
-		"ӣ", "и",
-		"ғ", "г",
-		"ӡ", "з",
+		"Ті", "х",
+		"Т·", "ч",
+		"Т›", "к",
+		"УЇ", "у",
+		"УЈ", "и",
+		"Т“", "г",
+		"УЎ", "з",
 	).Replace(strings.ToLower(in))
 
 	replacer := strings.NewReplacer(
 		"филиали", "", "филиал", "",
-		"чсп бонки арванд", "", "жсп бонки арванд", "",
+		"чсп банки арванд", "", "жсп банки арванд", "",
 		"чсп", "", "жсп", "",
-		"бонки", "", "арванд", "",
+		"банки", "", "арванд", "",
 		"хиёбони исмоили сомони", "",
 		"маркази филиали", "", "маркази", "", "марказ", "",
 		"шахри", "", "шари", "",
@@ -297,22 +319,28 @@ func cleanString(in string) string {
 
 func (s *EquipImportService) isTrash(val string) bool {
 	v := strings.ToLower(strings.TrimSpace(val))
-	if v == "" || strings.Contains(v, "итого") || strings.Contains(v, "всего") {
-		return true
-	}
-	return false
+	return v == "" || strings.Contains(v, "итого") || strings.Contains(v, "всего")
 }
 
-func (s *EquipImportService) getRawEntities(ctx context.Context, table string) []dbEnt {
-	rows, _ := s.db.Query(ctx, fmt.Sprintf("SELECT id, name FROM %s", table))
+func (s *EquipImportService) getRawEntitiesTx(ctx context.Context, tx pgx.Tx, table string) ([]dbEnt, error) {
+	rows, err := tx.Query(ctx, fmt.Sprintf("SELECT id, name FROM %s", table))
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
+
 	var res []dbEnt
 	for rows.Next() {
 		var e dbEnt
-		rows.Scan(&e.ID, &e.Name)
+		if err := rows.Scan(&e.ID, &e.Name); err != nil {
+			return nil, err
+		}
 		res = append(res, e)
 	}
-	return res
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 func (s *EquipImportService) safeGet(row []string, idx int) string {
@@ -322,14 +350,24 @@ func (s *EquipImportService) safeGet(row []string, idx int) string {
 	return strings.TrimSpace(row[idx])
 }
 
-func (s *EquipImportService) getOrCreate(ctx context.Context, table, val, col string) uint64 {
+func (s *EquipImportService) getOrCreateTx(ctx context.Context, tx pgx.Tx, table, val, col string) (uint64, error) {
 	var id uint64
-	_ = s.db.QueryRow(ctx, fmt.Sprintf("SELECT id FROM %s WHERE %s = $1", table, col), val).Scan(&id)
-	if id == 0 {
-		_ = s.db.QueryRow(ctx, fmt.Sprintf("INSERT INTO %s (%s, created_at, updated_at) VALUES ($1, NOW(), NOW()) RETURNING id", table, col), val).Scan(&id)
+	selectQuery := fmt.Sprintf("SELECT id FROM %s WHERE %s = $1", table, col)
+	err := tx.QueryRow(ctx, selectQuery, val).Scan(&id)
+	if err == nil {
+		return id, nil
 	}
-	return id
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, err
+	}
+
+	insertQuery := fmt.Sprintf("INSERT INTO %s (%s, created_at, updated_at) VALUES ($1, NOW(), NOW()) RETURNING id", table, col)
+	if err := tx.QueryRow(ctx, insertQuery, val).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
+
 func (s *EquipImportService) ValidateFileType(filePath string, fileType string) error {
 	expected, ok := expectedColumns[fileType]
 	if !ok {
@@ -350,13 +388,11 @@ func (s *EquipImportService) ValidateFileType(filePath string, fileType string) 
 		for _, row := range rows {
 			for _, cell := range row {
 				if strings.Contains(strings.ToLower(strings.TrimSpace(cell)), expected) {
-					return nil // нашли — файл правильный
+					return nil
 				}
 			}
-			// Проверяем только первые 5 строк
 			break
 		}
-		// Проверяем первые 5 строк каждого листа
 		for i, row := range rows {
 			if i >= 5 {
 				break
@@ -371,6 +407,7 @@ func (s *EquipImportService) ValidateFileType(filePath string, fileType string) 
 
 	return fmt.Errorf("файл не похож на тип '%s' — колонка '%s' не найдена. Проверьте что загружаете правильный файл", fileType, expected)
 }
+
 func (s *EquipImportService) DetectFileTypeReader(r io.Reader) (string, error) {
 	f, err := excelize.OpenReader(r)
 	if err != nil {

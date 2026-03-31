@@ -16,7 +16,7 @@ func runEquipImportRouter(
 	logger *zap.Logger,
 	authMW *middleware.AuthMiddleware,
 ) {
-	importSvc := services.NewEquipImportService(dbConn)
+	importSvc := services.NewEquipImportService(dbConn, logger)
 	ctrl := controllers.NewEquipImportController(importSvc, logger)
 
 	equip := group.Group("/equipment-import")

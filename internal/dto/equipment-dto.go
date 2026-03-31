@@ -6,8 +6,8 @@ type CreateEquipmentDTO struct {
 
 	BranchID        *uint64 `json:"branch_id" validate:"omitempty"`
 	OfficeID        *uint64 `json:"office_id" validate:"omitempty"`
-	StatusID        uint64 `json:"status_id" validate:"required"`
-	EquipmentTypeID uint64 `json:"equipment_type_id" validate:"required"`
+	StatusID        uint64  `json:"status_id" validate:"required"`
+	EquipmentTypeID uint64  `json:"equipment_type_id" validate:"required"`
 }
 
 type UpdateEquipmentDTO struct {
@@ -31,15 +31,15 @@ type EquipmentDTO struct {
 	UpdatedAt     string                `json:"updated_at"`
 }
 type EquipmentListResponseDTO struct {
-	ID              uint64 `json:"id"`
-	Name            string `json:"name"`
-	Address         string `json:"address"`
-    BranchID        *uint64 `json:"branch_id"`
+	ID              uint64  `json:"id"`
+	Name            string  `json:"name"`
+	Address         string  `json:"address"`
+	BranchID        *uint64 `json:"branch_id"`
 	OfficeID        *uint64 `json:"office_id"`
-	EquipmentTypeID uint64 `json:"equipment_type_id"`
-	StatusID        uint64 `json:"status_id"`
-	CreatedAt       string `json:"created_at"`
-	UpdatedAt       string `json:"updated_at"`
+	EquipmentTypeID uint64  `json:"equipment_type_id"`
+	StatusID        uint64  `json:"status_id"`
+	CreatedAt       string  `json:"created_at"`
+	UpdatedAt       string  `json:"updated_at"`
 }
 type ShortEquipmentDTO struct {
 	ID   uint64 `json:"id"`

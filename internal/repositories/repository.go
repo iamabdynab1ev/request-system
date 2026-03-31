@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -73,6 +74,43 @@ func getBaseName(identifier string) string {
 	return parts[len(parts)-1]
 }
 
+var tableColumnsCache sync.Map
+
+func getCachedColumns(ctx context.Context, dbPool *pgxpool.Pool, tableSQLName string) ([]string, error) {
+	actualTableNameForSchema := getBaseName(tableSQLName)
+	if cached, ok := tableColumnsCache.Load(actualTableNameForSchema); ok {
+		return cached.([]string), nil
+	}
+
+	query := `
+		SELECT column_name
+		FROM information_schema.columns
+		WHERE table_name = $1
+		ORDER BY ordinal_position
+	`
+	rows, err := dbPool.Query(ctx, query, actualTableNameForSchema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query columns for table %s: %w", actualTableNameForSchema, err)
+	}
+	defer rows.Close()
+
+	var cols []string
+	for rows.Next() {
+		var colName string
+		if err := rows.Scan(&colName); err != nil {
+			return nil, fmt.Errorf("scanning column name for table %s: %w", actualTableNameForSchema, err)
+		}
+		cols = append(cols, colName)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error after querying columns for %s: %w", actualTableNameForSchema, err)
+	}
+
+	tableColumnsCache.Store(actualTableNameForSchema, cols)
+	return cols, nil
+}
+
 func getColumnsForSelect(
 	ctx context.Context,
 	dbPool *pgxpool.Pool,
@@ -82,26 +120,13 @@ func getColumnsForSelect(
 	isBaseTable bool,
 	groupRelatedFieldsByPrefix bool,
 ) (string, error) {
-	actualTableNameForSchema := getBaseName(tableSQLName)
-	query := `
-		SELECT column_name
-		FROM information_schema.columns
-		WHERE table_name = $1
-		ORDER BY ordinal_position
-	`
-	rows, err := dbPool.Query(ctx, query, actualTableNameForSchema)
+	columnNames, err := getCachedColumns(ctx, dbPool, tableSQLName)
 	if err != nil {
-		return "", fmt.Errorf("failed to query columns for table %s: %w", actualTableNameForSchema, err)
+		return "", err
 	}
-	defer rows.Close()
 
 	var cols []string
-	for rows.Next() {
-		var colName string
-		if err := rows.Scan(&colName); err != nil {
-			return "", fmt.Errorf("scanning column name for table %s: %w", actualTableNameForSchema, err)
-		}
-
+	for _, colName := range columnNames {
 		var selectAlias string
 		if groupRelatedFieldsByPrefix {
 			if isBaseTable {
@@ -115,9 +140,6 @@ func getColumnsForSelect(
 		cols = append(cols, fmt.Sprintf("%s.%s AS %s", tableIdentifierInQuery, colName, selectAlias))
 	}
 
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("rows error after querying columns for %s: %w", actualTableNameForSchema, err)
-	}
 	return strings.Join(cols, ", "), nil
 }
 
@@ -265,7 +287,6 @@ func FetchDataAndCount(ctx context.Context, dbPool *pgxpool.Pool, params Params)
 		return nil, 0, fmt.Errorf("ToSql for data query ('%s'): %w", selectColumns, err)
 	}
 
-	fmt.Printf("QUERY: %s \n\n", sqlQuery)
 	rows, err := dbPool.Query(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("db.Query failed for SQL: '%s' with args %v: %w", sqlQuery, args, err)

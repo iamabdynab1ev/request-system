@@ -136,12 +136,8 @@ func (r *PriorityRepository) CreatePriority(ctx context.Context, dto dto.CreateP
 	var dbRow dbPriority
 	err := r.storage.QueryRow(ctx, query, dto.Name, dto.Rate, dto.Code).Scan(&dbRow.ID, &dbRow.Name, &dbRow.Rate, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // UNIQUE constraint
-			return nil, apperrors.ErrConflict
-		}
 		r.logger.Error("Ошибка при создании приоритета в БД", zap.Error(err))
-		return nil, err
+		return nil, apperrors.WrapDBError(err)
 	}
 	createdDTO := dbRow.toDTO()
 	return &createdDTO, nil
@@ -185,11 +181,7 @@ func (r *PriorityRepository) UpdatePriority(ctx context.Context, id uint64, dto 
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound
 		}
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return nil, apperrors.ErrConflict
-		}
-		return nil, err
+		return nil, apperrors.WrapDBError(err)
 	}
 	updatedDTO := dbRow.toDTO()
 	return &updatedDTO, nil
@@ -204,7 +196,7 @@ func (r *PriorityRepository) DeletePriority(ctx context.Context, id uint64) erro
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" { // foreign_key_violation
 			return apperrors.ErrPriorityInUse
 		}
-		return err
+		return apperrors.WrapDBError(err)
 	}
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound

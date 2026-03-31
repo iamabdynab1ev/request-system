@@ -4,7 +4,7 @@ package dto
 type LoginDTO struct {
 	Login      string `json:"login" validate:"required"`
 	Password   string `json:"password" validate:"required,min=6"`
-	RememberMe bool   `json:"rememberMe"` 
+	RememberMe bool   `json:"rememberMe"`
 }
 
 type ResetPasswordRequestDTO struct {
@@ -31,20 +31,20 @@ type AuthResponseDTO struct {
 }
 
 type UserProfileDTO struct {
-	ID          uint64  `json:"id"`
-	Email       string  `json:"email"`
-	Phone       string  `json:"phone_number,omitempty"`
-	FIO         string  `json:"fio"`
-	Username    *string `json:"username"` 
-	IsHead      bool    `json:"is_head"`  
-	PhotoURL    *string `json:"photo_url,omitempty"`
-	
-	DepartmentID *uint64 `json:"department_id"` 
+	ID       uint64  `json:"id"`
+	Email    string  `json:"email"`
+	Phone    string  `json:"phone_number,omitempty"`
+	FIO      string  `json:"fio"`
+	Username *string `json:"username"`
+	IsHead   bool    `json:"is_head"`
+	PhotoURL *string `json:"photo_url,omitempty"`
+
+	DepartmentID *uint64 `json:"department_id"`
 	OtdelID      *uint64 `json:"otdel_id"`
 	BranchID     *uint64 `json:"branch_id"`
 	OfficeID     *uint64 `json:"office_id"`
 	PositionID   *uint64 `json:"position_id"`
-	StatusID     uint64  `json:"status_id"` 
+	StatusID     uint64  `json:"status_id"`
 
 	DepartmentName string  `json:"department_name"`
 	OtdelName      *string `json:"otdel_name,omitempty"`
@@ -65,5 +65,5 @@ type UpdateMyProfileDTO struct {
 	Fio         *string `json:"fio" validate:"omitempty,min=2"`
 	PhoneNumber *string `json:"phone_number" validate:"omitempty"`
 	Email       *string `json:"email" validate:"omitempty,email"`
-	PhotoURL    *string `json:"photo_url,omitempty"` 
+	PhotoURL    *string `json:"photo_url,omitempty"`
 }

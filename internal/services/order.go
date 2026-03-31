@@ -338,9 +338,9 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 
 		// 6. DB Create
 		newID, err := s.orderRepo.Create(ctx, tx, orderEntity)
-if err != nil {
-    return err
-}
+		if err != nil {
+			return err
+		}
 		createdID = newID
 		orderEntity.ID = newID
 

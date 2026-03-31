@@ -1,21 +1,22 @@
 package apperrors
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// HttpError - структура для кастомных HTTP-ошибок.
 type HttpError struct {
 	Code    int                    `json:"-"`
-	Message string                 `json:"message"`           // Сообщение для пользователя
-	Details interface{}            `json:"details,omitempty"` // Поле для доп. данных в JSON-ответе
-	Err     error                  `json:"-"`                 // Внутреннее сообщение для логов
-	Context map[string]interface{} `json:"-"`                 // Доп. данные для логов
+	Message string                 `json:"message"`
+	Details interface{}            `json:"details,omitempty"`
+	Err     error                  `json:"-"`
+	Context map[string]interface{} `json:"-"`
 }
 
-// Error - реализация интерфейса error
 func (e *HttpError) Error() string {
 	if e.Err != nil {
 		return fmt.Sprintf("code: %d, message: %s, internal: %v", e.Code, e.Message, e.Err)
@@ -23,25 +24,22 @@ func (e *HttpError) Error() string {
 	return fmt.Sprintf("code: %d, message: %s", e.Code, e.Message)
 }
 
-// Конструктор
 func NewHttpError(code int, message string, err error, context map[string]interface{}) *HttpError {
 	return &HttpError{
 		Code:    code,
 		Message: message,
 		Err:     err,
 		Context: context,
-		// Details по умолчанию nil, устанавливается при необходимости
 	}
 }
 
-// NewHttpErrorWithDetails - новый конструктор для ошибок с деталями в ответе.
 func NewHttpErrorWithDetails(code int, message string, err error, context map[string]interface{}, details interface{}) *HttpError {
 	return &HttpError{
 		Code:    code,
 		Message: message,
 		Err:     err,
 		Context: context,
-		Details: details, // Устанавливаем details
+		Details: details,
 	}
 }
 
@@ -52,7 +50,6 @@ func NewBadRequestError(message string) *HttpError {
 	return NewHttpError(http.StatusBadRequest, message, nil, nil)
 }
 
-// Предопределенные ошибки
 var (
 	ErrBadRequest           = NewHttpError(http.StatusBadRequest, "Неверный запрос", nil, nil)
 	ErrValidation           = NewHttpError(http.StatusBadRequest, "Ошибка валидации данных", nil, nil)
@@ -79,6 +76,68 @@ var (
 	ErrNoChanges               = NewHttpError(http.StatusBadRequest, "Нет изменений в запросе", nil, nil)
 )
 
+const (
+	sqlStateUniqueViolation           = "23505"
+	sqlStateForeignKeyViolation       = "23503"
+	sqlStateNotNullViolation          = "23502"
+	sqlStateStringDataRightTruncation = "22001"
+)
+
+type dbConstraintSpec struct {
+	statusCode int
+	message    string
+}
+
+var exactConstraintSpecs = map[string]dbConstraintSpec{
+	"fk_orders_status_id":                       {statusCode: http.StatusBadRequest, message: "Выбранный статус был удалён. Обновите страницу."},
+	"fk_orders_priority_id":                     {statusCode: http.StatusBadRequest, message: "Выбранный приоритет был удалён. Обновите страницу."},
+	"fk_orders_executor_id":                     {statusCode: http.StatusBadRequest, message: "Выбранный исполнитель не найден. Обновите страницу."},
+	"fk_orders_department_id":                   {statusCode: http.StatusBadRequest, message: "Выбранный департамент не найден. Обновите страницу."},
+	"fk_orders_branch_id":                       {statusCode: http.StatusBadRequest, message: "Выбранный филиал не найден. Обновите страницу."},
+	"fk_orders_otdel_id":                        {statusCode: http.StatusBadRequest, message: "Выбранный отдел не найден. Обновите страницу."},
+	"fk_orders_office_id":                       {statusCode: http.StatusBadRequest, message: "Выбранный офис не найден. Обновите страницу."},
+	"fk_orders_order_type_id":                   {statusCode: http.StatusBadRequest, message: "Выбранный тип заявки не найден. Обновите страницу."},
+	"fk_orders_equipment_id":                    {statusCode: http.StatusBadRequest, message: "Выбранное оборудование не найдено. Обновите страницу."},
+	"fk_orders_user_id":                         {statusCode: http.StatusBadRequest, message: "Пользователь не найден. Обновите страницу."},
+	"fk_status_id":                              {statusCode: http.StatusBadRequest, message: "Выбранный статус не найден. Обновите страницу."},
+	"fk_position_id":                            {statusCode: http.StatusBadRequest, message: "Выбранная должность не найдена. Обновите страницу."},
+	"fk_users_position_id":                      {statusCode: http.StatusBadRequest, message: "Выбранная должность не найдена. Обновите страницу."},
+	"fk_branches_id":                            {statusCode: http.StatusBadRequest, message: "Выбранный филиал не найден. Обновите страницу."},
+	"fk_departments_id":                         {statusCode: http.StatusBadRequest, message: "Выбранный департамент не найден. Обновите страницу."},
+	"fk_offices_id":                             {statusCode: http.StatusBadRequest, message: "Выбранный офис не найден. Обновите страницу."},
+	"fk_otdels_id":                              {statusCode: http.StatusBadRequest, message: "Выбранный отдел не найден. Обновите страницу."},
+	"fk_role_permissions_role_id":               {statusCode: http.StatusBadRequest, message: "Выбранная роль не найдена."},
+	"fk_role_permissions_permission_id":         {statusCode: http.StatusBadRequest, message: "Выбранное право не найдено."},
+	"fk_user_roles_role_id":                     {statusCode: http.StatusBadRequest, message: "Выбранная роль не найдена."},
+	"fk_roles_status_id":                        {statusCode: http.StatusBadRequest, message: "Выбранный статус роли не найден."},
+	"fk_equipment_status_id":                    {statusCode: http.StatusBadRequest, message: "Выбранный статус оборудования не найден."},
+	"fk_equipment_equipment_type_id":            {statusCode: http.StatusBadRequest, message: "Выбранный тип оборудования не найден."},
+	"fk_equipment_branch_id":                    {statusCode: http.StatusBadRequest, message: "Выбранный филиал оборудования не найден."},
+	"fk_equipment_office_id":                    {statusCode: http.StatusBadRequest, message: "Выбранный офис оборудования не найден."},
+	"branches_name_unique":                      {statusCode: http.StatusBadRequest, message: "Филиал с таким названием уже существует."},
+	"departments_name_unique":                   {statusCode: http.StatusBadRequest, message: "Департамент с таким названием уже существует."},
+	"equipment_types_name_unique":               {statusCode: http.StatusBadRequest, message: "Тип оборудования с таким названием уже существует."},
+	"order_types_name_unique":                   {statusCode: http.StatusBadRequest, message: "Тип заявки с таким названием или кодом уже существует."},
+	"order_types_code_unique":                   {statusCode: http.StatusBadRequest, message: "Тип заявки с таким названием или кодом уже существует."},
+	"otdels_name_department_id_unique":          {statusCode: http.StatusBadRequest, message: "Отдел с таким названием уже существует в этом департаменте."},
+	"permissions_name_key":                      {statusCode: http.StatusBadRequest, message: "Право с таким названием уже существует."},
+	"priorities_code_unique":                    {statusCode: http.StatusBadRequest, message: "Приоритет с таким кодом уже существует."},
+	"roles_name_key":                            {statusCode: http.StatusBadRequest, message: "Роль с таким названием уже существует."},
+	"statuses_code_unique":                      {statusCode: http.StatusBadRequest, message: "Статус с таким кодом уже существует."},
+	"positions_name_unique":                     {statusCode: http.StatusBadRequest, message: "Должность с таким названием уже существует."},
+	"users_email_key":                           {statusCode: http.StatusBadRequest, message: "Пользователь с таким email уже существует."},
+	"users_phone_number_key":                    {statusCode: http.StatusBadRequest, message: "Пользователь с таким номером телефона уже существует."},
+	"users_telegram_chat_id_unique":             {statusCode: http.StatusBadRequest, message: "Этот Telegram аккаунт уже привязан к другому пользователю."},
+	"unique_order_type_id_in_rules":             {statusCode: http.StatusBadRequest, message: "Правило маршрутизации для этого типа заявки уже существует."},
+	"ux_role_permissions_role_id_permission_id": {statusCode: http.StatusBadRequest, message: "Это право уже назначено данной роли."},
+	"idx_users_username_unique":                 {statusCode: http.StatusConflict, message: "Этот логин AD уже привязан к другому пользователю."},
+}
+
+var prefixConstraintSpecs = map[string]dbConstraintSpec{
+	"idx_users_username": {statusCode: http.StatusConflict, message: "Этот логин AD уже привязан к другому пользователю."},
+	"statuses_code":      {statusCode: http.StatusBadRequest, message: "Статус с таким кодом уже существует."},
+}
+
 func IsNotFound(err error) bool {
 	e, ok := err.(*HttpError)
 	return ok && e.Code == http.StatusNotFound
@@ -87,155 +146,88 @@ func IsNotFound(err error) bool {
 func NewInternalError(msg string) *HttpError {
 	return NewHttpError(http.StatusInternalServerError, msg, nil, nil)
 }
+
 func WrapDBError(err error) error {
-    if err == nil {
-        return nil
-    }
-    errMsg := err.Error()
+	if err == nil {
+		return nil
+	}
 
-    // ===== ВНЕШНИЕ КЛЮЧИ — ЗАЯВКИ =====
-    if strings.Contains(errMsg, "fk_orders_status_id") {
-        return NewBadRequestError("Выбранный статус был удалён. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_orders_priority_id") {
-        return NewBadRequestError("Выбранный приоритет был удалён. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_orders_executor_id") {
-        return NewBadRequestError("Выбранный исполнитель не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_orders_department_id") {
-        return NewBadRequestError("Выбранный департамент не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_orders_branch_id") {
-        return NewBadRequestError("Выбранный филиал не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_orders_otdel_id") {
-        return NewBadRequestError("Выбранный отдел не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_orders_office_id") {
-        return NewBadRequestError("Выбранный офис не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_orders_order_type_id") {
-        return NewBadRequestError("Выбранный тип заявки не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_orders_equipment_id") {
-        return NewBadRequestError("Выбранное оборудование не найдено. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_orders_user_id") {
-        return NewBadRequestError("Пользователь не найден. Обновите страницу.")
-    }
+	var httpErr *HttpError
+	if errors.As(err, &httpErr) {
+		return err
+	}
 
-    // ===== ВНЕШНИЕ КЛЮЧИ — ПОЛЬЗОВАТЕЛИ =====
-    if strings.Contains(errMsg, "fk_status_id") {
-        return NewBadRequestError("Выбранный статус не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_position_id") || strings.Contains(errMsg, "fk_users_position_id") {
-        return NewBadRequestError("Выбранная должность не найдена. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_branches_id") {
-        return NewBadRequestError("Выбранный филиал не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_departments_id") {
-        return NewBadRequestError("Выбранный департамент не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_offices_id") {
-        return NewBadRequestError("Выбранный офис не найден. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "fk_otdels_id") {
-        return NewBadRequestError("Выбранный отдел не найден. Обновите страницу.")
-    }
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		if mapped := mapPostgresError(pgErr, err); mapped != nil {
+			return mapped
+		}
+	}
 
-    // ===== ВНЕШНИЕ КЛЮЧИ — РОЛИ И ПРАВА =====
-    if strings.Contains(errMsg, "fk_role_permissions_role_id") {
-        return NewBadRequestError("Выбранная роль не найдена.")
-    }
-    if strings.Contains(errMsg, "fk_role_permissions_permission_id") {
-        return NewBadRequestError("Выбранное право не найдено.")
-    }
-    if strings.Contains(errMsg, "fk_user_roles_role_id") {
-        return NewBadRequestError("Выбранная роль не найдена.")
-    }
-    if strings.Contains(errMsg, "fk_roles_status_id") {
-        return NewBadRequestError("Выбранный статус роли не найден.")
-    }
+	if mapped := mapDBErrorByText(err); mapped != nil {
+		return mapped
+	}
 
-    // ===== ВНЕШНИЕ КЛЮЧИ — ОБОРУДОВАНИЕ =====
-    if strings.Contains(errMsg, "fk_equipment_status_id") {
-        return NewBadRequestError("Выбранный статус оборудования не найден.")
-    }
-    if strings.Contains(errMsg, "fk_equipment_equipment_type_id") {
-        return NewBadRequestError("Выбранный тип оборудования не найден.")
-    }
-    if strings.Contains(errMsg, "fk_equipment_branch_id") {
-        return NewBadRequestError("Выбранный филиал оборудования не найден.")
-    }
-    if strings.Contains(errMsg, "fk_equipment_office_id") {
-        return NewBadRequestError("Выбранный офис оборудования не найден.")
-    }
+	return err
+}
 
-    // ===== УНИКАЛЬНОСТЬ =====
-    if strings.Contains(errMsg, "branches_name_unique") {
-        return NewBadRequestError("Филиал с таким названием уже существует.")
-    }
-    if strings.Contains(errMsg, "departments_name_unique") {
-        return NewBadRequestError("Департамент с таким названием уже существует.")
-    }
-    if strings.Contains(errMsg, "equipment_types_name_unique") {
-        return NewBadRequestError("Тип оборудования с таким названием уже существует.")
-    }
-    if strings.Contains(errMsg, "order_types_name_unique") || strings.Contains(errMsg, "order_types_code_unique") {
-        return NewBadRequestError("Тип заявки с таким названием или кодом уже существует.")
-    }
-    if strings.Contains(errMsg, "otdels_name_department_id_unique") {
-        return NewBadRequestError("Отдел с таким названием уже существует в этом департаменте.")
-    }
-    if strings.Contains(errMsg, "permissions_name_key") {
-        return NewBadRequestError("Право с таким названием уже существует.")
-    }
-    if strings.Contains(errMsg, "priorities_code_unique") {
-        return NewBadRequestError("Приоритет с таким кодом уже существует.")
-    }
-    if strings.Contains(errMsg, "roles_name_key") {
-        return NewBadRequestError("Роль с таким названием уже существует.")
-    }
-    if strings.Contains(errMsg, "statuses_code_unique") {
-        return NewBadRequestError("Статус с таким кодом уже существует.")
-    }
-    if strings.Contains(errMsg, "positions_name_unique") {
-        return NewBadRequestError("Должность с таким названием уже существует.")
-    }
-    if strings.Contains(errMsg, "users_email_key") {
-        return NewBadRequestError("Пользователь с таким email уже существует.")
-    }
-    if strings.Contains(errMsg, "users_phone_number_key") {
-        return NewBadRequestError("Пользователь с таким номером телефона уже существует.")
-    }
-    if strings.Contains(errMsg, "users_telegram_chat_id_unique") {
-        return NewBadRequestError("Этот Telegram аккаунт уже привязан к другому пользователю.")
-    }
-    if strings.Contains(errMsg, "unique_order_type_id_in_rules") {
-        return NewBadRequestError("Правило маршрутизации для этого типа заявки уже существует.")
-    }
-    if strings.Contains(errMsg, "ux_role_permissions_role_id_permission_id") {
-        return NewBadRequestError("Это право уже назначено данной роли.")
-    }
+func mapPostgresError(pgErr *pgconn.PgError, original error) error {
+	if spec, ok := findConstraintSpec(pgErr.ConstraintName); ok {
+		return newDBHttpError(spec, original)
+	}
 
-    // ===== ОБЩИЕ ОШИБКИ БД =====
-    if strings.Contains(errMsg, "foreign key constraint") {
-        return NewBadRequestError("Один из выбранных элементов был удалён. Обновите страницу.")
-    }
-    if strings.Contains(errMsg, "unique constraint") || strings.Contains(errMsg, "23505") {
-        return NewBadRequestError("Такая запись уже существует.")
-    }
-    if strings.Contains(errMsg, "null value in column") || strings.Contains(errMsg, "23502") {
-        return NewBadRequestError("Не заполнено обязательное поле.")
-    }
-    if strings.Contains(errMsg, "value too long") || strings.Contains(errMsg, "22001") {
-        return NewBadRequestError("Одно из полей содержит слишком длинное значение.")
-    }
-    if strings.Contains(errMsg, "connection refused") || strings.Contains(errMsg, "no connection") {
-        return NewInternalError("Ошибка соединения с базой данных. Попробуйте позже.")
-    }
+	switch pgErr.Code {
+	case sqlStateNotNullViolation:
+		return newDBHttpError(dbConstraintSpec{statusCode: http.StatusBadRequest, message: "Не заполнено обязательное поле."}, original)
+	case sqlStateStringDataRightTruncation:
+		return newDBHttpError(dbConstraintSpec{statusCode: http.StatusBadRequest, message: "Одно из полей содержит слишком длинное значение."}, original)
+	case sqlStateForeignKeyViolation:
+		return newDBHttpError(dbConstraintSpec{statusCode: http.StatusBadRequest, message: "Один из выбранных элементов был удалён. Обновите страницу."}, original)
+	case sqlStateUniqueViolation:
+		return newDBHttpError(dbConstraintSpec{statusCode: http.StatusBadRequest, message: "Такая запись уже существует."}, original)
+	default:
+		return nil
+	}
+}
 
-    return err
+func findConstraintSpec(constraintName string) (dbConstraintSpec, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(constraintName))
+	if normalized == "" {
+		return dbConstraintSpec{}, false
+	}
+
+	if spec, ok := exactConstraintSpecs[normalized]; ok {
+		return spec, true
+	}
+
+	for prefix, spec := range prefixConstraintSpecs {
+		if strings.HasPrefix(normalized, prefix) {
+			return spec, true
+		}
+	}
+
+	return dbConstraintSpec{}, false
+}
+
+func mapDBErrorByText(err error) error {
+	errMsg := strings.ToLower(err.Error())
+
+	switch {
+	case strings.Contains(errMsg, "foreign key constraint"):
+		return NewHttpError(http.StatusBadRequest, "Один из выбранных элементов был удалён. Обновите страницу.", err, nil)
+	case strings.Contains(errMsg, "unique constraint") || strings.Contains(errMsg, sqlStateUniqueViolation):
+		return NewHttpError(http.StatusBadRequest, "Такая запись уже существует.", err, nil)
+	case strings.Contains(errMsg, "null value in column") || strings.Contains(errMsg, sqlStateNotNullViolation):
+		return NewHttpError(http.StatusBadRequest, "Не заполнено обязательное поле.", err, nil)
+	case strings.Contains(errMsg, "value too long") || strings.Contains(errMsg, sqlStateStringDataRightTruncation):
+		return NewHttpError(http.StatusBadRequest, "Одно из полей содержит слишком длинное значение.", err, nil)
+	case strings.Contains(errMsg, "connection refused") || strings.Contains(errMsg, "no connection"):
+		return NewHttpError(http.StatusInternalServerError, "Ошибка соединения с базой данных. Попробуйте позже.", err, nil)
+	default:
+		return nil
+	}
+}
+
+func newDBHttpError(spec dbConstraintSpec, err error) *HttpError {
+	return NewHttpError(spec.statusCode, spec.message, err, nil)
 }

@@ -61,11 +61,11 @@ func (db *dbStatus) ToEntity() entities.Status {
 		Name:      db.Name,
 		Code:      utils.NullToPtr(db.Code),
 		Type:      typeInt,
-		IconSmall: utils.NullToPtr(db.IconSmall), 
-		IconBig:   utils.NullToPtr(db.IconBig),   
+		IconSmall: utils.NullToPtr(db.IconSmall),
+		IconBig:   utils.NullToPtr(db.IconBig),
 
-		CreatedAt: createdAtStr, 
-		UpdatedAt: updatedAtStr, 
+		CreatedAt: createdAtStr,
+		UpdatedAt: updatedAtStr,
 	}
 }
 
@@ -249,14 +249,7 @@ func (r *statusRepository) CreateStatus(ctx context.Context, payload dto.CreateS
 	var dbRow dbStatus
 	err := r.storage.QueryRow(ctx, query, payload.Name, payload.Type, payload.Code, iconSmallPath, iconBigPath).Scan(&dbRow.ID, &dbRow.IconSmall, &dbRow.IconBig, &dbRow.Name, &dbRow.Type, &dbRow.Code, &dbRow.CreatedAt, &dbRow.UpdatedAt)
 	if err != nil {
-		var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-    if strings.Contains(pgErr.ConstraintName, "statuses_code") {
-        return nil, apperrors.NewBadRequestError("Статус с таким кодом уже существует.")
-    }
-    return nil, apperrors.NewBadRequestError("Статус с таким названием уже существует.")
-}
-		return nil, err
+		return nil, apperrors.WrapDBError(err)
 	}
 	statusDTO := dbRow.ToDTO()
 	return &statusDTO, nil
@@ -306,7 +299,7 @@ func (r *statusRepository) UpdateStatus(ctx context.Context, id uint64, dto dto.
 	row := r.storage.QueryRow(ctx, query, args...)
 	dbRow, err := r.scanRow(row)
 	if err != nil {
-		return nil, err
+		return nil, apperrors.WrapDBError(err)
 	}
 
 	statusDTO := dbRow.ToDTO()
@@ -321,7 +314,7 @@ func (r *statusRepository) DeleteStatus(ctx context.Context, id uint64) error {
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return apperrors.ErrStatusInUse
 		}
-		return err
+		return apperrors.WrapDBError(err)
 	}
 	if result.RowsAffected() == 0 {
 		return apperrors.ErrNotFound

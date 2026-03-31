@@ -4,9 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 	"fmt"
-  
+	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
@@ -16,7 +15,7 @@ import (
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	"request-system/internal/infrastructure/bd"
-	
+
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
 )
@@ -120,10 +119,9 @@ func (r *OfficeRepository) scanOfficeWithRelations(row pgx.Row) (*entities.Offic
 	return &o, nil
 }
 
-
 func (r *OfficeRepository) GetOffices(ctx context.Context, filter types.Filter) ([]entities.Office, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	
+
 	applySearch := func(b sq.SelectBuilder) sq.SelectBuilder {
 		if filter.Search != "" {
 			pat := "%" + filter.Search + "%"
@@ -137,7 +135,7 @@ func (r *OfficeRepository) GetOffices(ctx context.Context, filter types.Filter) 
 
 	// 1. COUNT
 	countBuilder := psql.Select("COUNT(o.id)").From(officeTable + " AS o")
-	
+
 	countBuilder = applySearch(countBuilder)
 
 	countFilter := filter
@@ -149,9 +147,9 @@ func (r *OfficeRepository) GetOffices(ctx context.Context, filter types.Filter) 
 
 	var total uint64
 	sqlCount, argsCount, err := countBuilder.ToSql()
-if err != nil {
-    return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
-}
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
+	}
 	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
@@ -172,7 +170,7 @@ if err != nil {
 		LeftJoin(officeTable + " p_o ON o.parent_id = p_o.id")
 
 	baseBuilder = applySearch(baseBuilder)
-	
+
 	// Дефолтная сортировка
 	if len(filter.Sort) == 0 {
 		baseBuilder = baseBuilder.OrderBy("o.id DESC")
@@ -311,7 +309,6 @@ func (r *OfficeRepository) DeleteOffice(ctx context.Context, id uint64) error {
 	}
 	return nil
 }
-
 
 func (r *OfficeRepository) findOneOffice(ctx context.Context, querier Querier, where sq.Eq) (*entities.Office, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)

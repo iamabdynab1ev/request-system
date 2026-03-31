@@ -10,7 +10,7 @@ type DashboardStatsDTO struct {
 	TimeByPriority  []types.DashboardTimeByGroup    `json:"time_by_priority"`
 	TimeByOrderType []types.DashboardTimeByGroup    `json:"time_by_order_type"`
 	CountByStatus   []types.DashboardCountByGroup   `json:"count_by_status"`
-	CountByExecutor []types.DashboardCountByGroup   `json:"count_by_executor"`
+	CountByExecutor []types.DashboardExecutorCount  `json:"count_by_executor"`
 	TopCategories   []types.DashboardCountByGroup   `json:"top_categories"`
 	Departments     []types.DashboardDepartmentStat `json:"departments"`
 	Branches        []types.DashboardDepartmentStat `json:"branches"`

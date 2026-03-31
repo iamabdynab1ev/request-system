@@ -60,12 +60,12 @@ func (r *EquipmentRepository) scanEquipment(row pgx.Row) (*entities.Equipment, e
 	var et entities.EquipmentType
 	var s entities.Status
 	var createdAt, updatedAt time.Time
-	
+
 	// ВАЖНО: Используем переменные-указатели для сканирования NULL значений
-	// Entity.BranchID и Entity.OfficeID у вас уже *uint64, поэтому &e.BranchID — это **uint64. 
-    // Драйверу проще, когда мы передаем адрес указателя напрямую.
+	// Entity.BranchID и Entity.OfficeID у вас уже *uint64, поэтому &e.BranchID — это **uint64.
+	// Драйверу проще, когда мы передаем адрес указателя напрямую.
 	err := row.Scan(
-		&e.ID, &e.Name, &e.Address, 
+		&e.ID, &e.Name, &e.Address,
 		&e.BranchID, &e.OfficeID, // Сканируем прямо в указатели структуры
 		&e.StatusID, &e.EquipmentTypeID, &createdAt, &updatedAt,
 		&b.ID, &b.Name, &b.ShortName,
@@ -83,9 +83,15 @@ func (r *EquipmentRepository) scanEquipment(row pgx.Row) (*entities.Equipment, e
 	e.CreatedAt = &createdAt
 	e.UpdatedAt = &updatedAt
 
-	if e.BranchID != nil && *e.BranchID > 0 { e.Branch = &b }
-	if e.OfficeID != nil && *e.OfficeID > 0 { e.Office = &o }
-	if e.EquipmentTypeID > 0 { e.EquipmentType = &et }
+	if e.BranchID != nil && *e.BranchID > 0 {
+		e.Branch = &b
+	}
+	if e.OfficeID != nil && *e.OfficeID > 0 {
+		e.Office = &o
+	}
+	if e.EquipmentTypeID > 0 {
+		e.EquipmentType = &et
+	}
 	e.Status = &s
 
 	return &e, nil
@@ -93,7 +99,7 @@ func (r *EquipmentRepository) scanEquipment(row pgx.Row) (*entities.Equipment, e
 
 func (r *EquipmentRepository) GetEquipments(ctx context.Context, filter types.Filter) ([]entities.Equipment, uint64, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	
+
 	// Функция для текстового поиска
 	applySearch := func(b sq.SelectBuilder) sq.SelectBuilder {
 		if filter.Search != "" {
@@ -118,7 +124,9 @@ func (r *EquipmentRepository) GetEquipments(ctx context.Context, filter types.Fi
 	countBuilder = bd.ApplyListParams(countBuilder, countFilter, equipmentMap)
 
 	countSql, countArgs, err := countBuilder.ToSql()
-	if err != nil { return nil, 0, err }
+	if err != nil {
+		return nil, 0, err
+	}
 
 	var total uint64
 	if err := r.storage.QueryRow(ctx, countSql, countArgs...).Scan(&total); err != nil {
@@ -153,16 +161,22 @@ func (r *EquipmentRepository) GetEquipments(ctx context.Context, filter types.Fi
 	baseBuilder = bd.ApplyListParams(baseBuilder, filter, equipmentMap)
 
 	query, args, err := baseBuilder.ToSql()
-	if err != nil { return nil, 0, err }
+	if err != nil {
+		return nil, 0, err
+	}
 
 	rows, err := r.storage.Query(ctx, query, args...)
-	if err != nil { return nil, 0, err }
+	if err != nil {
+		return nil, 0, err
+	}
 	defer rows.Close()
 
 	equipments := make([]entities.Equipment, 0)
 	for rows.Next() {
 		eq, err := r.scanEquipment(rows)
-		if err != nil { return nil, 0, err }
+		if err != nil {
+			return nil, 0, err
+		}
 		equipments = append(equipments, *eq)
 	}
 
@@ -186,23 +200,25 @@ func (r *EquipmentRepository) FindEquipment(ctx context.Context, id uint64) (*en
 		Where(sq.Eq{"e.id": id})
 
 	sqlStr, args, err := queryBuilder.ToSql()
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	return r.scanEquipment(r.storage.QueryRow(ctx, sqlStr, args...))
 }
 
-
-
 func (r *EquipmentRepository) CreateEquipment(ctx context.Context, eq entities.Equipment) (*entities.Equipment, error) {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	
+
 	query, args, err := psql.Insert(equipmentTable).
 		Columns("name", "address", "branch_id", "office_id", "status_id", "equipment_type_id").
 		Values(eq.Name, eq.Address, eq.BranchID, eq.OfficeID, eq.StatusID, eq.EquipmentTypeID).
 		Suffix("RETURNING id").
 		ToSql()
 
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	var createdID uint64
 	if err := r.storage.QueryRow(ctx, query, args...).Scan(&createdID); err != nil {
@@ -218,19 +234,25 @@ func (r *EquipmentRepository) UpdateEquipment(ctx context.Context, id uint64, eq
 		Set("name", eq.Name).
 		Set("address", eq.Address).
 		Set("branch_id", eq.BranchID).
-		Set("office_id", eq.OfficeID).   
+		Set("office_id", eq.OfficeID).
 		Set("status_id", eq.StatusID).
 		Set("equipment_type_id", eq.EquipmentTypeID).
 		Set("updated_at", sq.Expr("NOW()")).
 		Where(sq.Eq{"id": id}).
 		ToSql()
-	
-	if err != nil { return nil, err }
+
+	if err != nil {
+		return nil, err
+	}
 
 	result, err := r.storage.Exec(ctx, query, args...)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
-	if result.RowsAffected() == 0 { return nil, apperrors.ErrNotFound }
+	if result.RowsAffected() == 0 {
+		return nil, apperrors.ErrNotFound
+	}
 
 	return r.FindEquipment(ctx, id)
 }
@@ -238,17 +260,23 @@ func (r *EquipmentRepository) UpdateEquipment(ctx context.Context, id uint64, eq
 func (r *EquipmentRepository) DeleteEquipment(ctx context.Context, id uint64) error {
 	psql := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 	query, args, err := psql.Delete(equipmentTable).Where(sq.Eq{"id": id}).ToSql()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	result, err := r.storage.Exec(ctx, query, args...)
-	if err != nil { return err }
-	if result.RowsAffected() == 0 { return apperrors.ErrNotFound }
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
 	return nil
 }
 
 func (r *EquipmentRepository) CountOrdersByEquipmentID(ctx context.Context, id uint64) (int, error) {
 	var count int
-	err := r.storage.QueryRow(ctx, 
+	err := r.storage.QueryRow(ctx,
 		"SELECT COUNT(id) FROM orders WHERE equipment_id = $1 AND deleted_at IS NULL", id).Scan(&count)
 	if err != nil {
 		return 0, err

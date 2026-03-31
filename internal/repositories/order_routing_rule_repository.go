@@ -77,17 +77,13 @@ func (r *orderRoutingRuleRepository) Create(ctx context.Context, tx pgx.Tx, rule
 		rule.OrderTypeID,
 		rule.DepartmentID,
 		rule.OtdelID,
-		rule.BranchID, // !
-		rule.OfficeID, // !
+		rule.BranchID,
+		rule.OfficeID,
 		rule.PositionID,
 		rule.StatusID,
 	).Scan(&id)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // нарушение уникальности
-			return 0, apperrors.ErrConflict
-		}
-		return 0, fmt.Errorf("ошибка создания правила: %w", err)
+		return 0, apperrors.WrapDBError(err)
 	}
 	return id, nil
 }
@@ -117,7 +113,7 @@ func (r *orderRoutingRuleRepository) Update(ctx context.Context, tx pgx.Tx, rule
 		rule.ID,
 	)
 	if err != nil {
-		return err
+		return apperrors.WrapDBError(err)
 	}
 	if res.RowsAffected() == 0 {
 		return apperrors.ErrNotFound
@@ -133,7 +129,7 @@ func (r *orderRoutingRuleRepository) Delete(ctx context.Context, tx pgx.Tx, id u
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" { // FK violation
 			return apperrors.NewHttpError(http.StatusBadRequest, "Правило используется в заявках и не может быть удалено", err, nil)
 		}
-		return err
+		return apperrors.WrapDBError(err)
 	}
 	if res.RowsAffected() == 0 {
 		return apperrors.ErrNotFound

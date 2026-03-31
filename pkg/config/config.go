@@ -87,6 +87,7 @@ type LDAPConfig struct {
 
 	BindDN              string
 	BindPassword        string
+	Timeout             time.Duration
 	SearchBaseDN        string
 	SearchFilterPattern string
 	SearchAttributes    []string
@@ -100,7 +101,6 @@ type SeederConfig struct {
 }
 
 func New() *Config {
-
 	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️  Файл .env не найден или не может быть загружен. Используются системные переменные окружения.")
 	} else {
@@ -164,6 +164,7 @@ func New() *Config {
 			Domain:              getEnv("LDAP_DOMAIN", ""),
 			BindDN:              getEnv("LDAP_BIND_DN", ""),
 			BindPassword:        getEnv("LDAP_BIND_PASSWORD", ""),
+			Timeout:             time.Duration(getEnvAsInt("LDAP_TIMEOUT_SECONDS", 10)) * time.Second,
 			SearchBaseDN:        getEnv("LDAP_SEARCH_BASE_DN", ""),
 			SearchFilterPattern: getEnv("LDAP_SEARCH_FILTER_PATTERN", "(&(objectClass=person)(sAMAccountName=%s))"),
 			SearchAttributes:    parseList(getEnv("LDAP_SEARCH_ATTRIBUTES", "sAMAccountName,displayName,mail")),

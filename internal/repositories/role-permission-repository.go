@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-
 const rolePermissionTable = "role_permissions"
 const rolePermissionFields = "id, role_id, permission_id, created_at, updated_at"
 

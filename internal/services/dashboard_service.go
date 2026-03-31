@@ -2,17 +2,21 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
-	"encoding/json"  
 
 	sq "github.com/Masterminds/squirrel"
 	"go.uber.org/zap"
 
 	"request-system/internal/authz"
 	"request-system/internal/dto"
+	"request-system/internal/entities"
 	"request-system/internal/repositories"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/types"
@@ -21,10 +25,10 @@ import (
 
 // СТАЛО:
 type DashboardService struct {
-	repo      repositories.DashboardRepositoryInterface
-	userRepo  repositories.UserRepositoryInterface
-	cache     repositories.CacheRepositoryInterface
-	logger    *zap.Logger
+	repo     repositories.DashboardRepositoryInterface
+	userRepo repositories.UserRepositoryInterface
+	cache    repositories.CacheRepositoryInterface
+	logger   *zap.Logger
 }
 
 func NewDashboardService(
@@ -37,35 +41,40 @@ func NewDashboardService(
 }
 
 func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.Filter) (*dto.DashboardStatsDTO, error) {
-	
+
 	// Шаг 1 — получаем userID с проверкой
 	userID, err := utils.GetUserIDFromCtx(ctx)
 	if err != nil {
 		return nil, apperrors.ErrUnauthorized
 	}
 
-	// Шаг 2 — кэш
-	cacheKey := "dashboard:stats:global"
-	if cached, err := s.cache.Get(ctx, cacheKey); err == nil {
-		var result dto.DashboardStatsDTO
-		if jsonErr := json.Unmarshal([]byte(cached), &result); jsonErr == nil {
-			s.logger.Debug("Dashboard served from cache", zap.Uint64("userID", userID))
-			return &result, nil
-		}
-	}
-
-	// Шаг 3 — permissions с проверкой
+	// Шаг 2 — permissions с проверкой
 	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
 	if err != nil {
 		return nil, apperrors.ErrUnauthorized
 	}
 
-	// Шаг 4 — актор
+	// Шаг 3 — актор
 	actor, err := s.userRepo.FindUserByID(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
 	authContext := authz.Context{Actor: actor, Permissions: permissionsMap}
+
+	cacheKey, cacheKeyErr := buildDashboardCacheKey(userID, actor, permissionsMap, filter)
+	if cacheKeyErr != nil {
+		s.logger.Warn("Dashboard cache key build failed", zap.Uint64("userID", userID), zap.Error(cacheKeyErr))
+	}
+
+	if cacheKeyErr == nil {
+		if cached, err := s.cache.Get(ctx, cacheKey); err == nil {
+			var result dto.DashboardStatsDTO
+			if jsonErr := json.Unmarshal([]byte(cached), &result); jsonErr == nil {
+				s.logger.Debug("Dashboard served from cache", zap.Uint64("userID", userID), zap.String("cache_key", cacheKey))
+				return &result, nil
+			}
+		}
+	}
 
 	var securityBuilder sq.Sqlizer = nil
 	var preds []sq.Sqlizer
@@ -114,7 +123,7 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 		timePrior []types.DashboardTimeByGroup
 		timeType  []types.DashboardTimeByGroup
 		cntStatus []types.DashboardCountByGroup
-		cntExec   []types.DashboardCountByGroup
+		cntExec   []types.DashboardExecutorCount
 		weekly    []types.DashboardChartData
 		topCat    []types.DashboardCountByGroup
 		lastAct   []types.DashboardActivityItem
@@ -154,12 +163,12 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter types.F
 
 	wg.Wait()
 
-if len(errs) > 0 {
-    for i, e := range errs {
-        s.logger.Error("Ошибка запроса дашборда", zap.Int("номер_запроса", i), zap.Error(e))
-    }
-    return nil, apperrors.NewInternalError("Ошибка загрузки дашборда")
-}
+	if len(errs) > 0 {
+		for i, e := range errs {
+			s.logger.Error("Ошибка запроса дашборда", zap.Int("номер_запроса", i), zap.Error(e))
+		}
+		return nil, apperrors.NewInternalError("Ошибка загрузки дашборда")
+	}
 
 	// 1. Заполняем пропуски в графике нулями
 	weekly = fillMissingDays(weekly)
@@ -252,16 +261,60 @@ if len(errs) > 0 {
 		Branches:        branches,
 	}
 
-	
-	if data, err := json.Marshal(finalResult); err == nil {
-		if err := s.cache.Set(ctx, cacheKey, string(data), 3*time.Minute); err != nil {
-			s.logger.Warn("Failed to cache dashboard", zap.Error(err))
+	if cacheKeyErr == nil {
+		if data, err := json.Marshal(finalResult); err == nil {
+			if err := s.cache.Set(ctx, cacheKey, string(data), 3*time.Minute); err != nil {
+				s.logger.Warn("Failed to cache dashboard", zap.Uint64("userID", userID), zap.String("cache_key", cacheKey), zap.Error(err))
+			}
 		}
 	}
 
 	return finalResult, nil
 }
 
+type dashboardCacheKeyPayload struct {
+	UserID       uint64       `json:"user_id"`
+	BranchID     *uint64      `json:"branch_id,omitempty"`
+	OfficeID     *uint64      `json:"office_id,omitempty"`
+	DepartmentID *uint64      `json:"department_id,omitempty"`
+	OtdelID      *uint64      `json:"otdel_id,omitempty"`
+	Permissions  []string     `json:"permissions,omitempty"`
+	Filter       types.Filter `json:"filter"`
+}
+
+func buildDashboardCacheKey(userID uint64, actor *entities.User, permissions map[string]bool, filter types.Filter) (string, error) {
+	payload := dashboardCacheKeyPayload{
+		UserID:      userID,
+		Permissions: enabledPermissionNames(permissions),
+		Filter:      filter,
+	}
+
+	if actor != nil {
+		payload.BranchID = actor.BranchID
+		payload.OfficeID = actor.OfficeID
+		payload.DepartmentID = actor.DepartmentID
+		payload.OtdelID = actor.OtdelID
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	sum := sha256.Sum256(raw)
+	return "dashboard:stats:" + hex.EncodeToString(sum[:]), nil
+}
+
+func enabledPermissionNames(permissions map[string]bool) []string {
+	names := make([]string, 0, len(permissions))
+	for name, allowed := range permissions {
+		if allowed {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
 func fillMissingDays(data []types.DashboardChartData) []types.DashboardChartData {
 	dataMap := make(map[string]int64)
 	for _, item := range data {

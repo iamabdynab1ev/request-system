@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
-"request-system/internal/infrastructure/bd"
+
+	"request-system/internal/infrastructure/bd"
+
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
@@ -35,23 +35,22 @@ var allowedUserFilters = map[string]string{
 	"fio":           "u.fio",
 }
 var userMap = map[string]string{
-	"id":            "u.id",
-	"fio":           "u.fio",
-	"email":         "u.email",
-	"username":      "u.username",
-	"phone_number":  "u.phone_number",
-	"status_id":     "u.status_id",
-	"position_id":   "u.position_id",
-	
+	"id":           "u.id",
+	"fio":          "u.fio",
+	"email":        "u.email",
+	"username":     "u.username",
+	"phone_number": "u.phone_number",
+	"status_id":    "u.status_id",
+	"position_id":  "u.position_id",
 
-	"department_id": "u.department_id",
-	"departments_id": "u.department_id", 
-	"otdel_id":      "u.otdel_id",
-	"branch_id":     "u.branch_id",
-	"office_id":     "u.office_id",
-	
-	"created_at":    "u.created_at",
-	"is_head":       "u.is_head",
+	"department_id":  "u.department_id",
+	"departments_id": "u.department_id",
+	"otdel_id":       "u.otdel_id",
+	"branch_id":      "u.branch_id",
+	"office_id":      "u.office_id",
+
+	"created_at": "u.created_at",
+	"is_head":    "u.is_head",
 }
 
 type UserRepositoryInterface interface {
@@ -74,7 +73,12 @@ type UserRepositoryInterface interface {
 	FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error)
 	FindUserByUsername(ctx context.Context, username string) (*entities.User, error)
 	FindAnyUserByUsername(ctx context.Context, username string) (*entities.User, error)
+	FindAnyUserByUsernameInTx(ctx context.Context, tx pgx.Tx, username string) (*entities.User, error)
+	FindAnyUserByEmailInTx(ctx context.Context, tx pgx.Tx, email string) (*entities.User, error)
+	FindAnyUserByPhoneInTx(ctx context.Context, tx pgx.Tx, phone string) (*entities.User, error)
 	FindUserByPhone(ctx context.Context, phone string) (*entities.User, error)
+	ReleaseEmailForSync(ctx context.Context, tx pgx.Tx, userID uint64) error
+	ReleasePhoneForSync(ctx context.Context, tx pgx.Tx, userID uint64) error
 	UpdatePassword(ctx context.Context, userID uint64, newPasswordHash string) error
 	UpdatePasswordAndClearFlag(ctx context.Context, userID uint64, newPasswordHash string) error
 
@@ -243,10 +247,10 @@ func (r *UserRepository) GetUsers(ctx context.Context, filter types.Filter) ([]e
 
 	var totalCount uint64
 	sqlCount, argsCount, err := countBuilder.ToSql()
-if err != nil {
-    return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
-}
-	
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
+	}
+
 	// Выполняем запрос
 	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&totalCount); err != nil {
 		return nil, 0, err
@@ -257,7 +261,7 @@ if err != nil {
 
 	// --- 2. SELECT (Получаем данные) ---
 	// buildBaseSelect - это твой метод, который уже был в репозитории (с JOIN-ами)
-	selectBuilder := r.buildBaseSelect(). 
+	selectBuilder := r.buildBaseSelect().
 		Where(sq.Eq{"u.deleted_at": nil}).
 		PlaceholderFormat(sq.Dollar)
 
@@ -310,20 +314,20 @@ func (r *UserRepository) CreateUser(ctx context.Context, tx pgx.Tx, u *entities.
 	err := tx.QueryRow(ctx, q,
 		u.Fio, u.Email, u.PhoneNumber, u.Password, u.PositionID,
 		u.StatusID, u.BranchID, u.DepartmentID, u.OfficeID,
-		u.OtdelID, 
+		u.OtdelID,
 		u.PhotoURL, u.MustChangePassword, u.IsHead, u.Username,
 	).Scan(&id)
-	
+
 	if err != nil {
 		return 0, r.handlePgError(err)
 	}
-	
+
 	if len(u.PositionIDs) > 0 {
 		if err := r.SyncUserPositions(ctx, tx, id, u.PositionIDs); err != nil {
 			return 0, err
 		}
 	} else if u.PositionID != nil {
-	
+
 		r.SyncUserPositions(ctx, tx, id, []uint64{*u.PositionID})
 	}
 
@@ -362,7 +366,9 @@ func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, u *entities.
 	}
 
 	sqlStr, args, err := b.ToSql()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec(ctx, sqlStr, args...); err != nil {
 		return r.handlePgError(err)
@@ -371,13 +377,13 @@ func (r *UserRepository) UpdateUser(ctx context.Context, tx pgx.Tx, u *entities.
 	// --- Сохранение списков ---
 
 	// Должности
-	if u.PositionIDs != nil { 
+	if u.PositionIDs != nil {
 		if err := r.SyncUserPositions(ctx, tx, u.ID, u.PositionIDs); err != nil {
 			return err
 		}
 	}
 
-	if u.OtdelIDs != nil { 
+	if u.OtdelIDs != nil {
 		if err := r.SyncUserOtdels(ctx, tx, u.ID, u.OtdelIDs); err != nil {
 			return err
 		}
@@ -420,21 +426,7 @@ func (r *UserRepository) UpdateUsernameDirect(ctx context.Context, userID uint64
 }
 
 func (r *UserRepository) handlePgError(err error) error {
-	if pgErr, ok := err.(*pgconn.PgError); ok {
-		switch pgErr.Code {
-		case "23505": // unique_violation
-			if strings.Contains(pgErr.ConstraintName, "email") {
-				return apperrors.NewHttpError(http.StatusConflict, "Email уже используется", err, nil)
-			}
-			if strings.Contains(pgErr.ConstraintName, "phone") {
-				return apperrors.NewHttpError(http.StatusConflict, "Номер телефона уже используется", err, nil)
-			}
-			if strings.Contains(pgErr.ConstraintName, "username") {
-				return apperrors.NewHttpError(http.StatusConflict, "Этот логин AD уже привязан к другому пользователю", err, nil)
-			}
-		}
-	}
-	return err
+	return apperrors.WrapDBError(err)
 }
 
 func (r *UserRepository) FindUserByID(ctx context.Context, id uint64) (*entities.User, error) {
@@ -474,7 +466,6 @@ func (r *UserRepository) UpdateFromSync(ctx context.Context, tx pgx.Tx, id uint6
 	return err
 }
 
-
 func (r *UserRepository) FindUserByEmailOrLogin(ctx context.Context, login string) (*entities.User, error) {
 	whereClause := sq.And{
 		sq.Or{
@@ -501,12 +492,47 @@ func (r *UserRepository) FindAnyUserByUsername(ctx context.Context, username str
 	return r.findOneUser(ctx, r.storage, whereClause)
 }
 
+func (r *UserRepository) FindAnyUserByUsernameInTx(ctx context.Context, tx pgx.Tx, username string) (*entities.User, error) {
+	whereClause := sq.Eq{"LOWER(u.username)": strings.ToLower(username)}
+	return r.findOneUser(ctx, r.getQuerier(tx), whereClause)
+}
+
+func (r *UserRepository) FindAnyUserByEmailInTx(ctx context.Context, tx pgx.Tx, email string) (*entities.User, error) {
+	return r.findOneUser(ctx, r.getQuerier(tx), sq.Eq{"LOWER(u.email)": strings.ToLower(email)})
+}
+
+func (r *UserRepository) FindAnyUserByPhoneInTx(ctx context.Context, tx pgx.Tx, phone string) (*entities.User, error) {
+	return r.findOneUser(ctx, r.getQuerier(tx), sq.Eq{"u.phone_number": phone})
+}
+
 func (r *UserRepository) FindByExternalID(ctx context.Context, tx pgx.Tx, externalID, source string) (*entities.User, error) {
 	return r.findOneUser(ctx, r.getQuerier(tx), sq.Eq{"u.external_id": externalID, "u.source_system": source})
 }
 
 func (r *UserRepository) FindUserByPhone(ctx context.Context, phone string) (*entities.User, error) {
 	return r.findOneUser(ctx, r.storage, sq.Eq{"u.phone_number": phone, "u.deleted_at": nil})
+}
+
+func (r *UserRepository) ReleaseEmailForSync(ctx context.Context, tx pgx.Tx, userID uint64) error {
+	tag, err := tx.Exec(ctx, "UPDATE users SET email = 'old_' || id || '@trash.local', updated_at = NOW() WHERE id = $1 AND deleted_at IS NOT NULL", userID)
+	if err != nil {
+		return r.handlePgError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) ReleasePhoneForSync(ctx context.Context, tx pgx.Tx, userID uint64) error {
+	tag, err := tx.Exec(ctx, "UPDATE users SET phone_number = 'D_' || id::text, updated_at = NOW() WHERE id = $1 AND deleted_at IS NOT NULL", userID)
+	if err != nil {
+		return r.handlePgError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }
 
 func (r *UserRepository) UpdatePassword(ctx context.Context, userID uint64, hash string) error {
@@ -563,9 +589,9 @@ func (r *UserRepository) FindUserIDsByRoleID(ctx context.Context, roleID uint64)
 	var ids []uint64
 	for rows.Next() {
 		var id uint64
-	if err := rows.Scan(&id); err == nil {
-    ids = append(ids, id)
-}
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
 	}
 	return ids, nil
 }
@@ -612,13 +638,13 @@ func (r *UserRepository) FindUsersByIDs(ctx context.Context, userIDs []uint64) (
 		return map[uint64]entities.User{}, nil
 	}
 	q := r.buildBaseSelect().
-        Where(sq.Eq{"u.id": userIDs, "u.deleted_at": nil}).
-        PlaceholderFormat(sq.Dollar)
+		Where(sq.Eq{"u.id": userIDs, "u.deleted_at": nil}).
+		PlaceholderFormat(sq.Dollar)
 
 	sqlStr, args, err := q.ToSql()
-    if err != nil {
-        return nil, err
-    }
+	if err != nil {
+		return nil, err
+	}
 
 	rows, err := r.storage.Query(ctx, sqlStr, args...)
 	if err != nil {
@@ -627,9 +653,9 @@ func (r *UserRepository) FindUsersByIDs(ctx context.Context, userIDs []uint64) (
 	defer rows.Close()
 
 	users, err := pgx.CollectRows(rows, pgx.RowToStructByName[entities.User])
-    if err != nil {
-        return nil, err
-    }
+	if err != nil {
+		return nil, err
+	}
 
 	m := make(map[uint64]entities.User)
 	for _, u := range users {
@@ -667,10 +693,10 @@ func (r *UserRepository) FindActiveUsersByBranch(ctx context.Context, tx pgx.Tx,
 		q = q.Where(sq.Eq{"u.office_id": *offID})
 	}
 
-sqlStr, args, err := q.ToSql()
-if err != nil {
-    return nil, fmt.Errorf("ошибка построения запроса: %w", err)
-}
+	sqlStr, args, err := q.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("ошибка построения запроса: %w", err)
+	}
 
 	rows, err := tx.Query(ctx, sqlStr, args...)
 	if err != nil {
@@ -799,7 +825,7 @@ func (r *UserRepository) UserExistsByOrgAndType(ctx context.Context, tx pgx.Tx,
             WHERE s.code = 'ACTIVE'
               AND u.deleted_at IS NULL
     `
-	
+
 	// [FIX START] >>>
 	if isLeadershipPosition(posTypeName) {
 		query += " AND (p.type = $1 OR p.type = 'MANAGER')"
@@ -909,7 +935,7 @@ func (r *UserRepository) GetPositionIDsByUserIDs(ctx context.Context, userIDs []
 	}
 
 	query := `SELECT user_id, position_id FROM user_positions WHERE user_id = ANY($1)`
-	
+
 	rows, err := r.storage.Query(ctx, query, userIDs)
 	if err != nil {
 		return nil, err
@@ -927,30 +953,44 @@ func (r *UserRepository) GetPositionIDsByUserIDs(ctx context.Context, userIDs []
 }
 func (r *UserRepository) SyncUserOtdels(ctx context.Context, tx pgx.Tx, userID uint64, otdelIDs []uint64) error {
 	// 1. Очистка старых (для надежности при update)
-	if _, err := tx.Exec(ctx, "DELETE FROM user_otdels WHERE user_id=$1", userID); err != nil { return err }
-	if len(otdelIDs) == 0 { return nil }
+	if _, err := tx.Exec(ctx, "DELETE FROM user_otdels WHERE user_id=$1", userID); err != nil {
+		return err
+	}
+	if len(otdelIDs) == 0 {
+		return nil
+	}
 
 	// 2. Дедупликация (убираем повторы)
-	uniq := make(map[uint64]bool); list := []uint64{}
+	uniq := make(map[uint64]bool)
+	list := []uint64{}
 	for _, id := range otdelIDs {
-		if !uniq[id] { uniq[id] = true; list = append(list, id) }
+		if !uniq[id] {
+			uniq[id] = true
+			list = append(list, id)
+		}
 	}
 
 	// 3. Запись
 	rows := make([][]interface{}, len(list))
-	for i, id := range list { rows[i] = []interface{}{userID, id} }
-	
+	for i, id := range list {
+		rows[i] = []interface{}{userID, id}
+	}
+
 	_, err := tx.CopyFrom(ctx, pgx.Identifier{"user_otdels"}, []string{"user_id", "otdel_id"}, pgx.CopyFromRows(rows))
 	return err
 }
 func (r *UserRepository) GetOtdelIDsByUserID(ctx context.Context, userID uint64) ([]uint64, error) {
 	rows, err := r.storage.Query(ctx, "SELECT otdel_id FROM user_otdels WHERE user_id=$1", userID)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var ids []uint64
 	for rows.Next() {
 		var id uint64
-		if err := rows.Scan(&id); err == nil { ids = append(ids, id) }
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
 	}
 	return ids, nil
 }
@@ -978,10 +1018,10 @@ func (r *UserRepository) GetOtdelIDsByUserIDs(ctx context.Context, userIDs []uin
 func isLeadershipPosition(posType string) bool {
 	switch constants.PositionType(posType) {
 	case constants.PositionTypeHeadOfOtdel,
-		 constants.PositionTypeHeadOfDepartment,
-		 constants.PositionTypeDeputyHeadOfDepartment, 
-		 constants.PositionTypeBranchDirector,
-		 constants.PositionTypeHeadOfOffice:
+		constants.PositionTypeHeadOfDepartment,
+		constants.PositionTypeDeputyHeadOfDepartment,
+		constants.PositionTypeBranchDirector,
+		constants.PositionTypeHeadOfOffice:
 		return true
 	default:
 		return false

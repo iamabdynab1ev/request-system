@@ -45,13 +45,13 @@ func (s *AuthPermissionService) GetAllUserPermissions(ctx context.Context, userI
 	if err == nil {
 		var permissions []string
 		if err := json.Unmarshal([]byte(cachedData), &permissions); err == nil {
-			// s.logger.Debug("Привилегии из кэша", zap.Uint64("userID", userID)) 
+			// s.logger.Debug("Привилегии из кэша", zap.Uint64("userID", userID))
 			return permissions, nil
 		}
 		s.logger.Warn("Не удалось распарсить кэш привилегий", zap.Error(err))
 	}
 
-	// s.logger.Debug("Загружаем привилегии из БД", zap.Uint64("userID", userID)) 
+	// s.logger.Debug("Загружаем привилегии из БД", zap.Uint64("userID", userID))
 
 	permissions, err := s.permissionRepo.GetAllUserPermissionsNames(ctx, userID)
 	if err != nil {

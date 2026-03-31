@@ -123,4 +123,3 @@ func (s *RolePermissionService) invalidateAffectedUsersCache(ctx context.Context
 		}
 	}
 }
-																																																																																																												

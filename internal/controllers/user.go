@@ -76,39 +76,39 @@ func (c *UserController) BindADUsernamesByEmail(ctx echo.Context) error {
 		return c.errorResponse(ctx, err)
 	}
 
-	type failedBind struct {
-		UserID   uint64      `json:"user_id"`
-		Email    string      `json:"email"`
-		Username string      `json:"username,omitempty"`
-		Reason   string      `json:"reason"`
-		Details  interface{} `json:"details,omitempty"`
-	}
-
 	type bindCandidate struct {
 		UserID          uint64
+		FIO             string
 		Email           string
 		LocalPart       string
 		CurrentUsername *string
 	}
 
-	result := struct {
-		TotalUsers         int          `json:"total_users"`
-		Updated            int          `json:"updated"`
-		AlreadyMatched     int          `json:"already_matched"`
-		NotFoundExactMatch []string     `json:"not_found_exact_match_emails"`
-		InvalidEmails      []string     `json:"invalid_emails"`
-		Failed             []failedBind `json:"failed"`
-	}{
+	result := dto.ADUsernameBindingResultDTO{
 		TotalUsers: len(users),
 	}
 
 	candidates := make([]bindCandidate, 0, len(users))
-	uniqueLocalParts := make(map[string]string, len(users))
+	uniqueLocalParts := make(map[string]struct{}, len(users))
+	localParts := make([]string, 0, len(users))
+	appendManualReview := func(item dto.ADUsernameBindingManualReviewDTO) {
+		result.ManualReview = append(result.ManualReview, item)
+		result.ManualReviewCount = len(result.ManualReview)
+	}
 
 	for _, user := range users {
 		email := strings.TrimSpace(user.Email)
 		if email == "" || !strings.Contains(email, "@") {
 			result.InvalidEmails = append(result.InvalidEmails, email)
+			appendManualReview(dto.ADUsernameBindingManualReviewDTO{
+				UserID:          user.ID,
+				FIO:             user.Fio,
+				Email:           email,
+				CurrentUsername: user.Username,
+				ReasonCode:      "invalid_email",
+				Reason:          "Некорректный email",
+				SuggestedSearch: buildSuggestedADSearch(user.Fio, ""),
+			})
 			c.logger.Warn("BindADUsernames: invalid email format", zap.Uint64("user_id", user.ID), zap.String("email", email))
 			continue
 		}
@@ -116,26 +116,33 @@ func (c *UserController) BindADUsernamesByEmail(ctx echo.Context) error {
 		localPart := strings.TrimSpace(strings.SplitN(email, "@", 2)[0])
 		if localPart == "" {
 			result.InvalidEmails = append(result.InvalidEmails, email)
+			appendManualReview(dto.ADUsernameBindingManualReviewDTO{
+				UserID:          user.ID,
+				FIO:             user.Fio,
+				Email:           email,
+				CurrentUsername: user.Username,
+				ReasonCode:      "invalid_email",
+				Reason:          "Некорректный email",
+				SuggestedSearch: buildSuggestedADSearch(user.Fio, ""),
+			})
 			c.logger.Warn("BindADUsernames: empty local part in email", zap.Uint64("user_id", user.ID), zap.String("email", email))
 			continue
 		}
 
-		candidates = append(candidates, bindCandidate{
+		candidate := bindCandidate{
 			UserID:          user.ID,
+			FIO:             user.Fio,
 			Email:           email,
 			LocalPart:       localPart,
 			CurrentUsername: user.Username,
-		})
+		}
+		candidates = append(candidates, candidate)
 
 		localPartLower := strings.ToLower(localPart)
 		if _, exists := uniqueLocalParts[localPartLower]; !exists {
-			uniqueLocalParts[localPartLower] = localPart
+			uniqueLocalParts[localPartLower] = struct{}{}
+			localParts = append(localParts, localPart)
 		}
-	}
-
-	localParts := make([]string, 0, len(uniqueLocalParts))
-	for _, localPart := range uniqueLocalParts {
-		localParts = append(localParts, localPart)
 	}
 
 	exactMatches, err := c.adService.FindExactUsernames(localParts)
@@ -144,12 +151,21 @@ func (c *UserController) BindADUsernamesByEmail(ctx echo.Context) error {
 	}
 
 	updates := make(map[uint64]string, len(candidates))
-	emailByUserID := make(map[uint64]string, len(candidates))
 
 	for _, candidate := range candidates {
 		matchedUsername, found := exactMatches[strings.ToLower(candidate.LocalPart)]
 		if !found || strings.TrimSpace(matchedUsername) == "" {
 			result.NotFoundExactMatch = append(result.NotFoundExactMatch, candidate.Email)
+			appendManualReview(dto.ADUsernameBindingManualReviewDTO{
+				UserID:          candidate.UserID,
+				FIO:             candidate.FIO,
+				Email:           candidate.Email,
+				LocalPart:       candidate.LocalPart,
+				CurrentUsername: candidate.CurrentUsername,
+				ReasonCode:      "not_found_exact_match",
+				Reason:          "Точный username в AD не найден",
+				SuggestedSearch: buildSuggestedADSearch(candidate.FIO, candidate.LocalPart),
+			})
 			c.logger.Warn("BindADUsernames: exact AD username not found", zap.Uint64("user_id", candidate.UserID), zap.String("email", candidate.Email), zap.String("search", candidate.LocalPart))
 			continue
 		}
@@ -160,36 +176,53 @@ func (c *UserController) BindADUsernamesByEmail(ctx echo.Context) error {
 		}
 
 		updates[candidate.UserID] = strings.TrimSpace(matchedUsername)
-		emailByUserID[candidate.UserID] = candidate.Email
 	}
 
 	if len(updates) > 0 {
 		failedUpdates := c.userService.SetUsernamesForADBinding(reqCtx, updates)
-		for userID, username := range updates {
-			if updateErr, failed := failedUpdates[userID]; failed {
-				failure := failedBind{
-					UserID: userID,
-					Email:  emailByUserID[userID],
+		for _, candidate := range candidates {
+			username, scheduled := updates[candidate.UserID]
+			if !scheduled {
+				continue
+			}
+
+			if updateErr, failed := failedUpdates[candidate.UserID]; failed {
+				failure := dto.ADUsernameBindingFailedDTO{
+					UserID:   candidate.UserID,
+					FIO:      candidate.FIO,
+					Email:    candidate.Email,
 					Username: username,
-					Reason: updateErr.Error(),
+					Reason:   updateErr.Error(),
+				}
+				manualReview := dto.ADUsernameBindingManualReviewDTO{
+					UserID:          candidate.UserID,
+					FIO:             candidate.FIO,
+					Email:           candidate.Email,
+					LocalPart:       candidate.LocalPart,
+					CurrentUsername: candidate.CurrentUsername,
+					ReasonCode:      "bind_failed",
+					Reason:          updateErr.Error(),
+					SuggestedSearch: buildSuggestedADSearch(candidate.FIO, candidate.LocalPart),
 				}
 
 				var httpErr *apperrors.HttpError
 				if errors.As(updateErr, &httpErr) && httpErr.Details != nil {
 					failure.Details = httpErr.Details
+					manualReview.Details = httpErr.Details
 					c.logger.Warn(
 						"BindADUsernames: failed to update user username",
-						zap.Uint64("user_id", userID),
-						zap.String("email", emailByUserID[userID]),
+						zap.Uint64("user_id", candidate.UserID),
+						zap.String("email", candidate.Email),
 						zap.String("username", username),
 						zap.Error(updateErr),
 						zap.Any("details", httpErr.Details),
 					)
 				} else {
-					c.logger.Warn("BindADUsernames: failed to update user username", zap.Uint64("user_id", userID), zap.String("email", emailByUserID[userID]), zap.String("username", username), zap.Error(updateErr))
+					c.logger.Warn("BindADUsernames: failed to update user username", zap.Uint64("user_id", candidate.UserID), zap.String("email", candidate.Email), zap.String("username", username), zap.Error(updateErr))
 				}
 
 				result.Failed = append(result.Failed, failure)
+				appendManualReview(manualReview)
 				continue
 			}
 
@@ -198,6 +231,15 @@ func (c *UserController) BindADUsernamesByEmail(ctx echo.Context) error {
 	}
 
 	return utils.SuccessResponse(ctx, result, "Массовая привязка username из AD завершена", http.StatusOK)
+}
+
+func buildSuggestedADSearch(fio, localPart string) string {
+	cleanFIO := strings.TrimSpace(fio)
+	if cleanFIO != "" {
+		return cleanFIO
+	}
+
+	return strings.TrimSpace(localPart)
 }
 
 func (c *UserController) errorResponse(ctx echo.Context, err error) error {

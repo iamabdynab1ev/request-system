@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"net/http"
-	"request-system/pkg/constants"   
+	"os"
 	"request-system/internal/entities"
 	"request-system/internal/repositories"
+	"request-system/pkg/constants"
 	apperrors "request-system/pkg/errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
@@ -64,7 +64,9 @@ func (s *RuleEngineService) ResolveExecutor(ctx context.Context, tx pgx.Tx, orde
 	// 1. Если исполнитель выбран вручную — берем его (тут без изменений)
 	if explicitExecutorID != nil {
 		user, err := s.userRepo.FindUserByIDInTx(ctx, tx, *explicitExecutorID)
-		if err != nil { return nil, apperrors.NewHttpError(http.StatusBadRequest, "Исполнитель не найден", err, nil) }
+		if err != nil {
+			return nil, apperrors.NewHttpError(http.StatusBadRequest, "Исполнитель не найден", err, nil)
+		}
 		return &RoutingResult{Executor: *user, StatusID: 0, RuleFound: false}, nil
 	}
 
@@ -97,7 +99,7 @@ func (s *RuleEngineService) ResolveExecutor(ctx context.Context, tx pgx.Tx, orde
 
 	// 4. ПРАВИЛО ЕСТЬ — пробуем найти по нему конкретного человека
 	foundUser, err := s.findUserByPositionAndStructure(ctx, tx, *targetPositionID, orderCtx)
-	
+
 	if err == nil {
 		return &RoutingResult{Executor: *foundUser, StatusID: targetStatusID, RuleFound: true}, nil
 	}
@@ -105,12 +107,20 @@ func (s *RuleEngineService) ResolveExecutor(ctx context.Context, tx pgx.Tx, orde
 	// 5. 🔥 САМОЕ ВАЖНОЕ: Если по правилу человека НЕ НАШЛИ (позиция пуста),
 	// мы НЕ выдаем ошибку, а отдаем заявку в Waterfall, но с учетом структуры из правила!
 	s.logger.Info("Человек по должности из правила не найден, использую запасной поиск (Hierarchy Fallback)")
-	
+
 	// Подменяем контекст данными из правила, если они там указаны
-	if ruleDept != nil { orderCtx.DepartmentID = *ruleDept }
-	if ruleOtdel != nil { orderCtx.OtdelID = ruleOtdel }
-	if ruleBranch != nil { orderCtx.BranchID = ruleBranch }
-	if ruleOffice != nil { orderCtx.OfficeID = ruleOffice }
+	if ruleDept != nil {
+		orderCtx.DepartmentID = *ruleDept
+	}
+	if ruleOtdel != nil {
+		orderCtx.OtdelID = ruleOtdel
+	}
+	if ruleBranch != nil {
+		orderCtx.BranchID = ruleBranch
+	}
+	if ruleOffice != nil {
+		orderCtx.OfficeID = ruleOffice
+	}
 
 	return s.resolveByHierarchy(ctx, tx, orderCtx)
 }
@@ -124,14 +134,14 @@ func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d
 	isHeadBranch := false
 	if d.BranchID != nil {
 		currentBranchName := ""
-if err := tx.QueryRow(ctx, "SELECT name FROM branches WHERE id = $1", *d.BranchID).Scan(&currentBranchName); err != nil {
-    s.logger.Warn("Не удалось получить название филиала", zap.Uint64("branchID", *d.BranchID), zap.Error(err))
-}
+		if err := tx.QueryRow(ctx, "SELECT name FROM branches WHERE id = $1", *d.BranchID).Scan(&currentBranchName); err != nil {
+			s.logger.Warn("Не удалось получить название филиала", zap.Uint64("branchID", *d.BranchID), zap.Error(err))
+		}
 
 		// Читаем эталон из настроек
 		headBranchNames := os.Getenv("HEAD_BRANCH_NAMES")
 		if headBranchNames == "" {
-			headBranchNames = "Саридора" 
+			headBranchNames = "Саридора"
 		}
 
 		// Сравниваем
@@ -148,7 +158,8 @@ if err := tx.QueryRow(ctx, "SELECT name FROM branches WHERE id = $1", *d.BranchI
 		// Департамент (Высший уровень)
 		searchScopeName = "Департамент"
 		targetRoles = []string{"HEAD_OF_DEPARTMENT", "DEPUTY_HEAD_OF_DEPARTMENT"}
-		id := d.DepartmentID; deptID = &id
+		id := d.DepartmentID
+		deptID = &id
 
 	} else if isHeadBranch && d.OfficeID != nil {
 		// Служба в Саридоре (Трактуем как Департамент)
@@ -161,7 +172,9 @@ if err := tx.QueryRow(ctx, "SELECT name FROM branches WHERE id = $1", *d.BranchI
 		searchScopeName = "Отдел"
 		targetRoles = []string{"HEAD_OF_OTDEL", "DEPUTY_HEAD_OF_OTDEL", "MANAGER"}
 		otdelID = d.OtdelID
-		if d.BranchID != nil { branchID = d.BranchID }
+		if d.BranchID != nil {
+			branchID = d.BranchID
+		}
 
 	} else if d.BranchID != nil {
 		// Филиал (Региональный)
@@ -195,10 +208,26 @@ if err := tx.QueryRow(ctx, "SELECT name FROM branches WHERE id = $1", *d.BranchI
 		argIdx := 2
 
 		// Подставляем только непустые фильтры
-		if deptID != nil { query += fmt.Sprintf(" AND u.department_id = $%d", argIdx); args = append(args, *deptID); argIdx++ }
-		if otdelID != nil { query += fmt.Sprintf(" AND u.otdel_id = $%d", argIdx); args = append(args, *otdelID); argIdx++ }
-		if branchID != nil { query += fmt.Sprintf(" AND u.branch_id = $%d", argIdx); args = append(args, *branchID); argIdx++ }
-		if officeID != nil { query += fmt.Sprintf(" AND u.office_id = $%d", argIdx); args = append(args, *officeID); argIdx++ }
+		if deptID != nil {
+			query += fmt.Sprintf(" AND u.department_id = $%d", argIdx)
+			args = append(args, *deptID)
+			argIdx++
+		}
+		if otdelID != nil {
+			query += fmt.Sprintf(" AND u.otdel_id = $%d", argIdx)
+			args = append(args, *otdelID)
+			argIdx++
+		}
+		if branchID != nil {
+			query += fmt.Sprintf(" AND u.branch_id = $%d", argIdx)
+			args = append(args, *branchID)
+			argIdx++
+		}
+		if officeID != nil {
+			query += fmt.Sprintf(" AND u.office_id = $%d", argIdx)
+			args = append(args, *officeID)
+			argIdx++
+		}
 
 		query += " LIMIT 1"
 
@@ -208,27 +237,30 @@ if err := tx.QueryRow(ctx, "SELECT name FROM branches WHERE id = $1", *d.BranchI
 		)
 
 		if err == nil {
-	
+
 			s.logger.Info("Ответственный найден автоматически", zap.String("role", role), zap.String("fio", u.Fio))
 			return &RoutingResult{Executor: u, RuleFound: false}, nil
 		}
-	
+
 	}
 
-	
-roleName1 := ""
-roleName2 := ""
-if len(targetRoles) > 0 {
-    roleName1 = constants.PositionTypeNames[constants.PositionType(targetRoles[0])]
-    if roleName1 == "" { roleName1 = targetRoles[0] }
-}
-if len(targetRoles) > 1 {
-    roleName2 = constants.PositionTypeNames[constants.PositionType(targetRoles[1])]
-    if roleName2 == "" { roleName2 = targetRoles[1] }
-}
+	roleName1 := ""
+	roleName2 := ""
+	if len(targetRoles) > 0 {
+		roleName1 = constants.PositionTypeNames[constants.PositionType(targetRoles[0])]
+		if roleName1 == "" {
+			roleName1 = targetRoles[0]
+		}
+	}
+	if len(targetRoles) > 1 {
+		roleName2 = constants.PositionTypeNames[constants.PositionType(targetRoles[1])]
+		if roleName2 == "" {
+			roleName2 = targetRoles[1]
+		}
+	}
 
-return nil, apperrors.NewHttpError(http.StatusBadRequest,
-    fmt.Sprintf("В подразделении '%s' не найден ни '%s', ни '%s'.", searchScopeName, roleName1, roleName2), nil, nil)
+	return nil, apperrors.NewHttpError(http.StatusBadRequest,
+		fmt.Sprintf("В подразделении '%s' не найден ни '%s', ни '%s'.", searchScopeName, roleName1, roleName2), nil, nil)
 }
 func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, tx pgx.Tx, posID int, ctxData OrderContext) (*entities.User, error) {
 	positionID := uint64(posID)
@@ -245,18 +277,21 @@ func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, 
 	`
 	args := []interface{}{positionID}
 	argIdx := 2
-	
+
 	if ctxData.DepartmentID != 0 {
 		query += fmt.Sprintf(" AND (u.department_id = $%d OR u.department_id IS NULL)", argIdx)
-		args = append(args, ctxData.DepartmentID); argIdx++
+		args = append(args, ctxData.DepartmentID)
+		argIdx++
 	}
 	if ctxData.OtdelID != nil {
 		query += fmt.Sprintf(" AND (u.otdel_id = $%d OR u.otdel_id IS NULL)", argIdx)
-		args = append(args, *ctxData.OtdelID); argIdx++
+		args = append(args, *ctxData.OtdelID)
+		argIdx++
 	}
 	if !shouldIgnoreBranch && ctxData.BranchID != nil {
 		query += fmt.Sprintf(" AND (u.branch_id = $%d OR u.branch_id IS NULL)", argIdx)
-		args = append(args, *ctxData.BranchID); argIdx++
+		args = append(args, *ctxData.BranchID)
+		argIdx++
 	}
 
 	query += " ORDER BY u.id ASC LIMIT 1"
@@ -264,7 +299,7 @@ func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, 
 	var u entities.User
 	err := tx.QueryRow(ctx, query, args...).Scan(&u.ID, &u.Fio, &u.Email, &u.PositionID, &u.DepartmentID, &u.BranchID)
 	if err != nil {
-		return nil, err 
+		return nil, err
 	}
 	return &u, nil
 }

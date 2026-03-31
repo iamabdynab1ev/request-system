@@ -2,23 +2,24 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-
 	"request-system/internal/dto"
 	"request-system/internal/entities"
 	"request-system/internal/repositories"
 
-	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 
 	"request-system/pkg/config"
 	"request-system/pkg/constants"
@@ -32,7 +33,7 @@ var emailRegex = regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`
 type AuthServiceInterface interface {
 	Login(ctx context.Context, payload dto.LoginDTO) (*entities.User, error)
 	// Метод для получения своего профиля (/auth/me)
-	GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error) 
+	GetUserByID(ctx context.Context, userID uint64) (*dto.UserProfileDTO, error)
 	RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error
 	VerifyResetCode(ctx context.Context, payload dto.VerifyCodeDTO) (*dto.VerifyCodeResponseDTO, error)
 	ResetPassword(ctx context.Context, payload dto.ResetPasswordDTO) error
@@ -40,14 +41,14 @@ type AuthServiceInterface interface {
 }
 
 type AuthService struct {
-	txManager         repositories.TxManagerInterface
-	userRepo          repositories.UserRepositoryInterface
-	cacheRepo         repositories.CacheRepositoryInterface
-	fileStorage       filestorage.FileStorageInterface
-	logger            *zap.Logger
-	cfg               *config.AuthConfig
-	ldapCfg           *config.LDAPConfig
-	notifySvc         NotificationServiceInterface
+	txManager   repositories.TxManagerInterface
+	userRepo    repositories.UserRepositoryInterface
+	cacheRepo   repositories.CacheRepositoryInterface
+	fileStorage filestorage.FileStorageInterface
+	logger      *zap.Logger
+	cfg         *config.AuthConfig
+	ldapCfg     *config.LDAPConfig
+	notifySvc   NotificationServiceInterface
 }
 
 func NewAuthService(
@@ -60,11 +61,11 @@ func NewAuthService(
 	ldapCfg *config.LDAPConfig,
 	notifySvc NotificationServiceInterface,
 
-	_ PositionServiceInterface,   
-	_ BranchServiceInterface,    
-	_ DepartmentServiceInterface, 
-	_ OtdelServiceInterface,      
-	_ OfficeServiceInterface,    
+	_ PositionServiceInterface,
+	_ BranchServiceInterface,
+	_ DepartmentServiceInterface,
+	_ OtdelServiceInterface,
+	_ OfficeServiceInterface,
 ) AuthServiceInterface {
 	return &AuthService{
 		txManager:   txManager,
@@ -80,9 +81,13 @@ func NewAuthService(
 
 // ... метод authenticateInAD остается без изменений ...
 func (s *AuthService) authenticateInAD(username, password string) error {
-	l, err := ldap.DialURL(fmt.Sprintf("ldap://%s:%d", s.ldapCfg.Host, s.ldapCfg.Port))
+	dialer := &net.Dialer{Timeout: s.ldapCfg.Timeout}
+	l, err := ldap.DialURL(
+		fmt.Sprintf("ldap://%s:%d", s.ldapCfg.Host, s.ldapCfg.Port),
+		ldap.DialWithDialer(dialer),
+	)
 	if err != nil {
-		s.logger.Error("Не удалось подключиться к LDAP-серверу", zap.Error(err))
+		s.logger.Error("Не удалось подключиться к LDAP-серверу", zap.Error(err), zap.Duration("timeout", s.ldapCfg.Timeout))
 		return apperrors.NewHttpError(http.StatusInternalServerError, "Ошибка подключения к сервису аутентификации", err, nil)
 	}
 	defer l.Close()
@@ -93,9 +98,18 @@ func (s *AuthService) authenticateInAD(username, password string) error {
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
 			return apperrors.ErrInvalidCredentials
 		}
+		s.logger.Error("LDAP bind failed", zap.String("username", username), zap.Error(err))
 		return apperrors.NewHttpError(http.StatusInternalServerError, "Системная ошибка аутентификации", err, nil)
 	}
 	return nil
+}
+
+func isInvalidCredentialsError(err error) bool {
+	var httpErr *apperrors.HttpError
+	if errors.As(err, &httpErr) {
+		return httpErr.Code == http.StatusUnauthorized && httpErr.Message == apperrors.ErrInvalidCredentials.Message
+	}
+	return false
 }
 
 // ... Login остается без изменений ...
@@ -105,10 +119,10 @@ func (s *AuthService) Login(ctx context.Context, payload dto.LoginDTO) (*entitie
 
 	user, err := s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
 	if err != nil {
-		s.logger.Error("Ошибка при поиске пользователя (FindUserByEmailOrLogin)", 
-zap.String("login", loginInput),
+		s.logger.Error("Ошибка при поиске пользователя (FindUserByEmailOrLogin)",
+			zap.String("login", loginInput),
 			zap.Error(err),
-	)
+		)
 		return nil, apperrors.ErrInvalidCredentials
 	}
 
@@ -130,6 +144,9 @@ zap.String("login", loginInput),
 			}
 			if err := s.authenticateInAD(adUsername, payload.Password); err == nil {
 				authenticated = true
+			} else if !isInvalidCredentialsError(err) {
+				s.logger.Error("LDAP authentication system error", zap.String("login", loginInput), zap.String("ad_username", adUsername), zap.Error(err))
+				return nil, err
 			}
 		} else {
 			if err := utils.ComparePasswords(user.Password, payload.Password); err == nil {
@@ -164,32 +181,36 @@ func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*dto.User
 
 	// 2. Получаем доп. списки (Роли, Отделы, Должности)
 	roles, err := s.userRepo.GetRolesByUserID(ctx, userID)
-	if err != nil { s.logger.Error("GetUserByID: Roles failed", zap.Error(err)) }
+	if err != nil {
+		s.logger.Error("GetUserByID: Roles failed", zap.Error(err))
+	}
 	roleIDs := make([]uint64, 0, len(roles))
-	for _, r := range roles { roleIDs = append(roleIDs, r.ID) }
+	for _, r := range roles {
+		roleIDs = append(roleIDs, r.ID)
+	}
 
 	positionIDs, err := s.userRepo.GetPositionIDsByUserID(ctx, userID)
-	if err != nil { 
-        s.logger.Error("GetUserByID: Positions failed", zap.Error(err)) 
-        positionIDs = []uint64{}
-    }
+	if err != nil {
+		s.logger.Error("GetUserByID: Positions failed", zap.Error(err))
+		positionIDs = []uint64{}
+	}
 
 	otdelIDs, err := s.userRepo.GetOtdelIDsByUserID(ctx, userID)
-	if err != nil { 
-        s.logger.Error("GetUserByID: Otdels failed", zap.Error(err)) 
-        otdelIDs = []uint64{}
-    }
+	if err != nil {
+		s.logger.Error("GetUserByID: Otdels failed", zap.Error(err))
+		otdelIDs = []uint64{}
+	}
 
 	// 3. Формируем ответ
 	res := &dto.UserProfileDTO{
-		ID:          user.ID,
-		FIO:         user.Fio,
-		Email:       user.Email,
-		Phone:       user.PhoneNumber,
-		Username:    user.Username,
-		PhotoURL:    user.PhotoURL,
-		StatusID:    user.StatusID,
-		IsHead:      safeBool(user.IsHead),
+		ID:       user.ID,
+		FIO:      user.Fio,
+		Email:    user.Email,
+		Phone:    user.PhoneNumber,
+		Username: user.Username,
+		PhotoURL: user.PhotoURL,
+		StatusID: user.StatusID,
+		IsHead:   safeBool(user.IsHead),
 
 		// Основные ID
 		BranchID:     user.BranchID,
@@ -217,36 +238,95 @@ func (s *AuthService) GetUserByID(ctx context.Context, userID uint64) (*dto.User
 
 func (s *AuthService) UpdateMyProfile(ctx context.Context, payload dto.UpdateMyProfileDTO) (*dto.UserDTO, error) {
 	userID, err := utils.GetUserIDFromCtx(ctx)
-	if err != nil { return nil, err }
-
-	userEntity, err := s.userRepo.FindUserByID(ctx, userID)
-	if err != nil { return nil, err }
-
-	if payload.PhotoURL != nil {
-		if userEntity.PhotoURL != nil { _ = s.fileStorage.Delete(*userEntity.PhotoURL) }
-		if *payload.PhotoURL == "SET_NULL" { userEntity.PhotoURL = nil } else { userEntity.PhotoURL = payload.PhotoURL }
+	if err != nil {
+		return nil, err
 	}
-	if payload.Fio != nil { userEntity.Fio = *payload.Fio }
-	if payload.PhoneNumber != nil { userEntity.PhoneNumber = *payload.PhoneNumber }
-	if payload.Email != nil { userEntity.Email = *payload.Email }
 
-	if err := s.userRepo.UpdateUserFull(ctx, userEntity); err != nil { return nil, err } // Используй UpdateUser (full мб устаревший)
-
-	// Формируем DTO (простой) для возврата
-	d := &dto.UserDTO{
-		ID: userEntity.ID, 
-		Fio: userEntity.Fio, 
-		Email: userEntity.Email, 
-		PhoneNumber: userEntity.PhoneNumber, 
-		PhotoURL: userEntity.PhotoURL,
+	currentUser, err := s.userRepo.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
 	}
-	return d, nil
+
+	var oldPhotoURL *string
+	if currentUser.PhotoURL != nil {
+		photoCopy := *currentUser.PhotoURL
+		oldPhotoURL = &photoCopy
+	}
+
+	updatedUser := currentUser
+	err = s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		userEntity, err := s.userRepo.FindUserByIDInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+
+		if payload.PhotoURL != nil {
+			if *payload.PhotoURL == "SET_NULL" {
+				userEntity.PhotoURL = nil
+			} else {
+				userEntity.PhotoURL = payload.PhotoURL
+			}
+		}
+		if payload.Fio != nil {
+			userEntity.Fio = *payload.Fio
+		}
+		if payload.PhoneNumber != nil {
+			userEntity.PhoneNumber = *payload.PhoneNumber
+		}
+		if payload.Email != nil {
+			userEntity.Email = *payload.Email
+		}
+
+		if err := s.userRepo.UpdateUser(ctx, tx, userEntity); err != nil {
+			return err
+		}
+
+		updatedUser = userEntity
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if shouldDeleteOldPhoto(oldPhotoURL, updatedUser.PhotoURL) {
+		if err := s.fileStorage.Delete(*oldPhotoURL); err != nil {
+			s.logger.Warn("Не удалось удалить старое фото профиля", zap.Uint64("user_id", userID), zap.String("photo_url", *oldPhotoURL), zap.Error(err))
+		}
+	}
+
+	return &dto.UserDTO{
+		ID:           updatedUser.ID,
+		Fio:          updatedUser.Fio,
+		Email:        updatedUser.Email,
+		PhoneNumber:  updatedUser.PhoneNumber,
+		Username:     updatedUser.Username,
+		StatusID:     updatedUser.StatusID,
+		PositionID:   updatedUser.PositionID,
+		BranchID:     updatedUser.BranchID,
+		DepartmentID: updatedUser.DepartmentID,
+		OfficeID:     updatedUser.OfficeID,
+		OtdelID:      updatedUser.OtdelID,
+		PhotoURL:     updatedUser.PhotoURL,
+		IsHead:       safeBool(updatedUser.IsHead),
+	}, nil
+}
+
+func shouldDeleteOldPhoto(oldPhotoURL *string, newPhotoURL *string) bool {
+	if oldPhotoURL == nil || *oldPhotoURL == "" {
+		return false
+	}
+	if newPhotoURL == nil {
+		return true
+	}
+	return *oldPhotoURL != *newPhotoURL
 }
 
 func (s *AuthService) RequestPasswordReset(ctx context.Context, payload dto.ResetPasswordRequestDTO) error {
 	loginInput := strings.ToLower(payload.Login)
 	user, _ := s.userRepo.FindUserByEmailOrLogin(ctx, loginInput)
-	if user == nil { return nil }
+	if user == nil {
+		return nil
+	}
 
 	resetCode := fmt.Sprintf("%04d", rand.Intn(10000))
 	s.cacheRepo.Set(ctx, fmt.Sprintf(constants.CacheKeyResetPhoneCode, loginInput), resetCode, time.Minute*15)
@@ -277,19 +357,23 @@ func (s *AuthService) ResetPassword(ctx context.Context, payload dto.ResetPasswo
 	userIDStr, err = s.cacheRepo.Get(ctx, fmt.Sprintf(constants.CacheKeyVerifyPhone, payload.Token))
 	if err != nil {
 		userIDStr, err = s.cacheRepo.Get(ctx, fmt.Sprintf(constants.CacheKeyForceChangeToken, payload.Token))
-		if err == nil { isForceChange = true }
+		if err == nil {
+			isForceChange = true
+		}
 	}
-	if err != nil { return apperrors.ErrInvalidCredentials }
+	if err != nil {
+		return apperrors.ErrInvalidCredentials
+	}
 
 	parsedID, err := strconv.ParseUint(userIDStr, 10, 64)
-if err != nil {
-    return apperrors.ErrInvalidCredentials
-}
-hashedPassword, err := utils.HashPassword(payload.NewPassword)
-if err != nil {
-    return apperrors.ErrInternal
-}
-	
+	if err != nil {
+		return apperrors.ErrInvalidCredentials
+	}
+	hashedPassword, err := utils.HashPassword(payload.NewPassword)
+	if err != nil {
+		return apperrors.ErrInternal
+	}
+
 	if isForceChange {
 		err = s.userRepo.UpdatePasswordAndClearFlag(ctx, parsedID, hashedPassword)
 		s.cacheRepo.Del(ctx, fmt.Sprintf(constants.CacheKeyForceChangeToken, payload.Token))
@@ -300,12 +384,15 @@ if err != nil {
 	return err
 }
 
-
 func safeString(ptr *string) string {
-	if ptr == nil { return "" }
+	if ptr == nil {
+		return ""
+	}
 	return *ptr
 }
 func safeBool(ptr *bool) bool {
-	if ptr == nil { return false }
+	if ptr == nil {
+		return false
+	}
 	return *ptr
 }

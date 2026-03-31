@@ -76,7 +76,7 @@ func main() {
 			seeders.SeedRolesAndAdmin(dbPool, cfg)
 		}
 
-		svc := services.NewEquipImportService(dbPool)
+		svc := services.NewEquipImportService(dbPool, zap.NewNop())
 
 		if *importAtms != "" {
 			log.Printf("📄 Файл АТМ: %s", *importAtms)

@@ -102,7 +102,6 @@ func (c *StatusController) CreateStatus(ctx echo.Context) error {
 		}
 	}
 
-	
 	if dto.Code == "" && dto.Name != "" {
 		dto.Code = strings.ToUpper(strings.ReplaceAll(dto.Name, " ", "_"))
 	}

@@ -44,6 +44,12 @@ type DashboardCountByGroup struct {
 	Count     int64  `json:"count" db:"count"`
 }
 
+type DashboardExecutorCount struct {
+	GroupName string  `json:"group_name" db:"group_name"`
+	Count     int64   `json:"count" db:"count"`
+	UserID    *uint64 `json:"user_id,omitempty" db:"user_id"`
+}
+
 type DashboardChartData struct {
 	Label string `json:"label" db:"label"`
 	Value int64  `json:"value" db:"value"`

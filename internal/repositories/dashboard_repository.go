@@ -20,7 +20,7 @@ type DashboardRepositoryInterface interface {
 	GetAvgTimeByPriority(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardTimeByGroup, error)
 	GetAvgTimeByOrderType(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardTimeByGroup, error)
 	GetCountByStatus(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardCountByGroup, error)
-	GetCountByExecutor(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardCountByGroup, error)
+	GetCountByExecutor(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardExecutorCount, error)
 	GetWeeklyVolume(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardChartData, error)
 	GetTopCategories(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardCountByGroup, error)
 	GetDepartmentStats(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardDepartmentStat, error)
@@ -291,14 +291,15 @@ func (r *DashboardRepository) GetCountByStatus(ctx context.Context, securityCond
 }
 
 // 7. Executor
-func (r *DashboardRepository) GetCountByExecutor(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardCountByGroup, error) {
+func (r *DashboardRepository) GetCountByExecutor(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardExecutorCount, error) {
 	b := sq.Select("COALESCE(u.fio, 'Не назначен') as group_name", "COUNT(o.id) as count").
 		From("orders o").
 		LeftJoin("users u ON o.executor_id = u.id").
 		LeftJoin("statuses s ON o.status_id = s.id").
 		Where(sq.Eq{"o.deleted_at": nil}).
 		Where(sqlOpenCheck).
-		GroupBy("u.fio").
+		Column("u.id as user_id").
+		GroupBy("u.id", "u.fio").
 		OrderBy("count DESC").Limit(15)
 	b = applySecurity(b, securityCondition)
 	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
@@ -310,7 +311,7 @@ func (r *DashboardRepository) GetCountByExecutor(ctx context.Context, securityCo
 		return nil, err
 	}
 	defer rows.Close()
-	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardCountByGroup])
+	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardExecutorCount])
 }
 
 // 8. Weekly
