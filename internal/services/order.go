@@ -22,6 +22,7 @@ import (
 	"request-system/internal/events"
 	"request-system/internal/repositories"
 
+	pkgconstants "request-system/pkg/constants"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/eventbus"
 	"request-system/pkg/filestorage"
@@ -75,6 +76,7 @@ type OrderService struct {
 	logger                *zap.Logger
 	authPermissionService AuthPermissionServiceInterface
 	notificationService   NotificationServiceInterface
+	cacheRepo             repositories.CacheRepositoryInterface
 }
 
 func NewOrderService(
@@ -92,6 +94,7 @@ func NewOrderService(
 	orderTypeRepo repositories.OrderTypeRepositoryInterface,
 	authPermissionService AuthPermissionServiceInterface,
 	notificationService NotificationServiceInterface,
+	cacheRepo repositories.CacheRepositoryInterface,
 ) OrderServiceInterface {
 	return &OrderService{
 		txManager:             txManager,
@@ -108,6 +111,7 @@ func NewOrderService(
 		orderTypeRepo:         orderTypeRepo,
 		authPermissionService: authPermissionService,
 		notificationService:   notificationService,
+		cacheRepo:             cacheRepo,
 	}
 }
 
@@ -386,6 +390,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, createDTO dto.CreateOrde
 	if err != nil {
 		return nil, err
 	}
+	s.invalidateDashboardCache(ctx)
 
 	return s.FindOrderByID(ctx, createdID)
 }
@@ -552,6 +557,7 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 		}
 		return nil, err
 	}
+	s.invalidateDashboardCache(ctx)
 	return s.FindOrderByID(ctx, orderID)
 }
 
@@ -709,7 +715,11 @@ func (s *OrderService) DeleteOrder(ctx context.Context, orderID uint64) error {
 	if !authz.CanDo(authz.OrdersDelete, *authCtx) {
 		return apperrors.ErrForbidden
 	}
-	return s.orderRepo.DeleteOrder(ctx, orderID)
+	if err := s.orderRepo.DeleteOrder(ctx, orderID); err != nil {
+		return err
+	}
+	s.invalidateDashboardCache(ctx)
+	return nil
 }
 
 func (s *OrderService) GetStatusByID(ctx context.Context, id uint64) (*entities.Status, error) {
@@ -950,45 +960,61 @@ func (s *OrderService) calculateMetrics(ctx context.Context, newOrder, oldOrder 
 	}
 
 	// --- 2. ВРЕМЯ РЕШЕНИЯ (Resolution Time) ---
-	if newCode == "CLOSED" {
-		if oldOrder.ResolutionTimeSeconds == nil || *oldOrder.ResolutionTimeSeconds == 0 {
-			newOrder.CompletedAt = &now
-			newOrder.ResolutionTimeSeconds = &val
-
-			// SLA FCR: Решено за 10 минут (600 секунд)
-			if val <= 600 {
-				t := true
-				newOrder.IsFirstContactResolution = &t
-			} else {
-				f := false
-				newOrder.IsFirstContactResolution = &f
-			}
-
-			// Если закрыли сразу без отклика, то отклик = решению
-			if newOrder.FirstResponseTimeSeconds == nil || *newOrder.FirstResponseTimeSeconds == 0 {
-				newOrder.FirstResponseTimeSeconds = &val
-				s.logger.Info("📝 Первый отклик установлен равным времени решения",
-					zap.Uint64("order_id", newOrder.ID),
-					zap.Uint64("seconds", val))
-			}
-
-			s.logger.Info("✅ Заявка закрыта - записано время решения",
-				zap.Uint64("order_id", newOrder.ID),
-				zap.Uint64("resolution_seconds", val),
-				zap.Bool("is_fcr", val <= 600))
-		}
+	if newCode == pkgconstants.StatusCompleted && oldCode != pkgconstants.StatusCompleted {
+		s.applyResolutionMetrics(newOrder, now, val)
 	}
 
-	// --- 3. ПЕРЕОТКРЫТИЕ (Reopen) ---
-	if oldCode == "CLOSED" && newCode != "CLOSED" {
-		s.logger.Info("🔄 Переоткрытие заявки - сброс метрик",
+	// --- 3. АННУЛИРОВАНИЕ РЕШЕНИЯ ПРИ ДОРАБОТКЕ/ПЕРЕОТКРЫТИИ ---
+	if oldCode == pkgconstants.StatusCompleted && newCode == pkgconstants.StatusRefinement {
+		s.logger.Info("🔁 Заявка отправлена на доработку после выполнения - метрики решения сброшены",
 			zap.Uint64("order_id", newOrder.ID),
 			zap.String("old_status", oldCode),
 			zap.String("new_status", newCode))
+		s.resetResolutionMetrics(newOrder)
+	}
 
-		newOrder.CompletedAt = nil
-		newOrder.ResolutionTimeSeconds = nil
-		newOrder.IsFirstContactResolution = nil
+	if oldCode == pkgconstants.StatusClosed && newCode != pkgconstants.StatusClosed {
+		s.logger.Info("🔄 Переоткрытие закрытой заявки - сброс метрик решения",
+			zap.Uint64("order_id", newOrder.ID),
+			zap.String("old_status", oldCode),
+			zap.String("new_status", newCode))
+		s.resetResolutionMetrics(newOrder)
+	}
+}
+
+func (s *OrderService) applyResolutionMetrics(newOrder *entities.Order, now time.Time, resolutionSeconds uint64) {
+	newOrder.CompletedAt = &now
+	newOrder.ResolutionTimeSeconds = &resolutionSeconds
+
+	isFCR := resolutionSeconds <= 600
+	newOrder.IsFirstContactResolution = &isFCR
+
+	// Если исполнитель решил заявку до первого отдельного отклика, считаем решение первым откликом.
+	if newOrder.FirstResponseTimeSeconds == nil || *newOrder.FirstResponseTimeSeconds == 0 {
+		newOrder.FirstResponseTimeSeconds = &resolutionSeconds
+		s.logger.Info("📝 Первый отклик установлен равным времени выполнения",
+			zap.Uint64("order_id", newOrder.ID),
+			zap.Uint64("seconds", resolutionSeconds))
+	}
+
+	s.logger.Info("✅ Заявка переведена в COMPLETED - записано время решения",
+		zap.Uint64("order_id", newOrder.ID),
+		zap.Uint64("resolution_seconds", resolutionSeconds),
+		zap.Bool("is_fcr", isFCR))
+}
+
+func (s *OrderService) resetResolutionMetrics(newOrder *entities.Order) {
+	newOrder.CompletedAt = nil
+	newOrder.ResolutionTimeSeconds = nil
+	newOrder.IsFirstContactResolution = nil
+}
+
+func (s *OrderService) invalidateDashboardCache(ctx context.Context) {
+	if s.cacheRepo == nil {
+		return
+	}
+	if _, err := s.cacheRepo.Incr(ctx, pkgconstants.DashboardCacheVersionKey); err != nil {
+		s.logger.Warn("не удалось обновить версию кеша дашборда", zap.Error(err))
 	}
 }
 

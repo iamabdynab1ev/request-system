@@ -2,19 +2,18 @@ package controllers
 
 import (
 	"net/http"
-	"time"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 
+	"request-system/internal/dto"
 	"request-system/internal/services"
-	"request-system/pkg/types"
 	"request-system/pkg/utils"
 )
 
-// DashboardController использует НОВЫЙ сервис
 type DashboardController struct {
-	dashboardService *services.DashboardService // Изменился тип сервиса
+	dashboardService *services.DashboardService
 	logger           *zap.Logger
 }
 
@@ -26,22 +25,35 @@ func NewDashboardController(ds *services.DashboardService, logger *zap.Logger) *
 }
 
 func (ctrl *DashboardController) GetDashboardStats(c echo.Context) error {
-	var filter types.Filter
-	// Простая логика фильтрации дат, если прилетит с фронта
-	if dateFromStr := c.QueryParam("dateFrom"); dateFromStr != "" {
-		if t, err := time.Parse(time.RFC3339, dateFromStr); err == nil {
-			filter.DateFrom = &t
+	filter := dto.DashboardFilterDTO{}
+	filter.Period = strings.TrimSpace(c.QueryParam("period"))
+	filter.Granularity = strings.TrimSpace(c.QueryParam("granularity"))
+
+	if widgets := strings.TrimSpace(c.QueryParam("widgets")); widgets != "" {
+		for _, widget := range strings.Split(widgets, ",") {
+			widget = strings.TrimSpace(widget)
+			if widget != "" {
+				filter.Widgets = append(filter.Widgets, widget)
+			}
 		}
 	}
-	if dateToStr := c.QueryParam("dateTo"); dateToStr != "" {
-		if t, err := time.Parse(time.RFC3339, dateToStr); err == nil {
-			filter.DateTo = &t
-		}
+
+	if dateFrom, ok := parseDashboardDate(c.QueryParam("dateFrom")); ok {
+		filter.DateFrom = dateFrom
+	} else if dateFrom, ok := parseDashboardDate(c.QueryParam("date_from")); ok {
+		filter.DateFrom = dateFrom
+	}
+
+	if dateTo, ok := parseDashboardDate(c.QueryParam("dateTo")); ok {
+		filter.DateTo = dateTo
+	} else if dateTo, ok := parseDashboardDate(c.QueryParam("date_to")); ok {
+		filter.DateTo = dateTo
 	}
 
 	stats, err := ctrl.dashboardService.GetDashboardStats(c.Request().Context(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, err, ctrl.logger)
 	}
-	return utils.SuccessResponse(c, stats, "Статистика для дашборда получена (DashboardService)", http.StatusOK)
+
+	return utils.SuccessResponse(c, stats, "Статистика для дашборда получена", http.StatusOK)
 }

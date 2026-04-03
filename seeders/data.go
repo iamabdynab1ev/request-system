@@ -106,6 +106,7 @@ var permissionsData = []struct {
 	{"order_rule:update", "Обновление правила маршрутизации"},
 	{"order_rule:delete", "Удаление правила маршрутизации"},
 	{"report:view", "Просмотр отчета"},
+	{"dashboard:view", "Просмотр дашборда"},
 	{"order:create:order_type_id", "Создание заявки: Поле 'Тип заявки'"},
 	{"order:create:status_id", "Создание заявки: Поле 'Статус'"},
 	{"integration:view", "Позволяет просматривать статус и информацию по интеграциям"},
@@ -169,7 +170,6 @@ type equipmentData struct {
 	EquipmentName string
 	Address       string
 }
-
 
 var orderTypesData = []struct {
 	Name string

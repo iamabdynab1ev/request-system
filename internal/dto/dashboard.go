@@ -3,6 +3,7 @@ package dto
 import "request-system/pkg/types"
 
 type DashboardStatsDTO struct {
+	Meta            *types.DashboardMeta            `json:"meta,omitempty"`
 	Alerts          *types.DashboardAlerts          `json:"alerts"`
 	KPIs            *types.DashboardKPIs            `json:"kpis"`
 	SLA             *types.DashboardSLAStats        `json:"sla"`

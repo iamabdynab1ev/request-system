@@ -1,5 +1,49 @@
 package types
 
+import "time"
+
+const (
+	DashboardPeriodToday  = "today"
+	DashboardPeriod7Days  = "7d"
+	DashboardPeriod14Days = "14d"
+	DashboardPeriod30Days = "30d"
+	DashboardPeriodMonth  = "month"
+	DashboardPeriodCustom = "custom"
+
+	DashboardGranularityDay   = "day"
+	DashboardGranularityWeek  = "week"
+	DashboardGranularityMonth = "month"
+
+	DashboardScopeOwn        = "own"
+	DashboardScopeOffice     = "office"
+	DashboardScopeOtdel      = "otdel"
+	DashboardScopeBranch     = "branch"
+	DashboardScopeDepartment = "department"
+	DashboardScopeAll        = "all"
+)
+
+type DashboardDateRange struct {
+	From time.Time
+	To   time.Time
+}
+
+type DashboardQuery struct {
+	Range         DashboardDateRange
+	PreviousRange DashboardDateRange
+	Granularity   string
+	UserID        uint64
+}
+
+type DashboardMeta struct {
+	GeneratedAt    string `json:"generated_at"`
+	Timezone       string `json:"timezone"`
+	EffectiveScope string `json:"effective_scope"`
+	Period         string `json:"period"`
+	DateFrom       string `json:"date_from"`
+	DateTo         string `json:"date_to"`
+	Granularity    string `json:"granularity"`
+}
+
 // Alerts
 type DashboardAlerts struct {
 	CriticalCount int64 `json:"critical_count"`

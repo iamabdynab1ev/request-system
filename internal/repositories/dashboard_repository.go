@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
@@ -10,22 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	pkgconstants "request-system/pkg/constants"
 	"request-system/pkg/types"
+)
+
+const (
+	dashboardResolvedCheck = "s.code = 'COMPLETED'"
+	dashboardOpenCheck     = "s.code <> 'CLOSED'"
 )
 
 type DashboardRepositoryInterface interface {
 	GetAlerts(ctx context.Context, securityCondition sq.Sqlizer) (*types.DashboardAlerts, error)
-	GetKPIsWithUser(ctx context.Context, securityCondition sq.Sqlizer, userID uint64) (*types.DashboardKPIs, error)
-	GetSLAStats(ctx context.Context, securityCondition sq.Sqlizer) (*types.DashboardSLAStats, error)
-	GetAvgTimeByPriority(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardTimeByGroup, error)
-	GetAvgTimeByOrderType(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardTimeByGroup, error)
-	GetCountByStatus(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardCountByGroup, error)
-	GetCountByExecutor(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardExecutorCount, error)
-	GetWeeklyVolume(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardChartData, error)
-	GetTopCategories(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardCountByGroup, error)
-	GetDepartmentStats(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardDepartmentStat, error)
-	GetLastActivity(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardActivityItem, error)
-	GetBranchStats(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardDepartmentStat, error)
+	GetKPIsWithUser(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) (*types.DashboardKPIs, error)
+	GetSLAStats(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) (*types.DashboardSLAStats, error)
+	GetAvgTimeByPriority(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) ([]types.DashboardTimeByGroup, error)
+	GetAvgTimeByOrderType(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) ([]types.DashboardTimeByGroup, error)
+	GetCountByStatus(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) ([]types.DashboardCountByGroup, error)
+	GetCountByExecutor(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) ([]types.DashboardExecutorCount, error)
+	GetWeeklyVolume(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) ([]types.DashboardChartData, error)
+	GetTopCategories(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) ([]types.DashboardCountByGroup, error)
+	GetDepartmentStats(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) ([]types.DashboardDepartmentStat, error)
+	GetLastActivity(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) ([]types.DashboardActivityItem, error)
+	GetBranchStats(ctx context.Context, securityCondition sq.Sqlizer, query types.DashboardQuery) ([]types.DashboardDepartmentStat, error)
 }
 
 type DashboardRepository struct {
@@ -37,293 +44,305 @@ func NewDashboardRepository(storage *pgxpool.Pool, logger *zap.Logger) Dashboard
 	return &DashboardRepository{storage: storage, logger: logger}
 }
 
-func applySecurity(b sq.SelectBuilder, securityCondition sq.Sqlizer) sq.SelectBuilder {
-	if securityCondition == nil {
-		return b
-	}
-
-	switch v := securityCondition.(type) {
-	case sq.And:
-		if len(v) == 0 {
-			return b
-		}
-	case sq.Or:
-		if len(v) == 0 {
-			return b
-		}
-	}
-	return b.Where(securityCondition)
-}
-func startOfMonth() time.Time {
-	loc, _ := time.LoadLocation("Asia/Dushanbe")
-	if loc == nil {
-		loc = time.Local
-	}
-	now := time.Now().In(loc)
-	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
-}
-
-const (
-	sqlResolvedCheck = "s.code IN ('CLOSED')"
-	sqlSuccessCheck  = "s.code IN ('CLOSED')"
-	sqlOpenCheck     = "s.code NOT IN ('CLOSED')"
-)
-
-// 1. Alerts
 func (r *DashboardRepository) GetAlerts(ctx context.Context, securityCondition sq.Sqlizer) (*types.DashboardAlerts, error) {
-	// Critical = 1 (в твоих данных)
-	base := sq.Select(
-		"COUNT(CASE WHEN p.code = 'CRITICAL' AND "+sqlOpenCheck+" THEN 1 END)",
-		"COUNT(CASE WHEN o.duration IS NOT NULL AND o.duration < NOW() AND "+sqlOpenCheck+" THEN 1 END)",
-	).From("orders o").
+	builder := sq.Select(
+		"COUNT(CASE WHEN p.code = 'CRITICAL' AND "+dashboardOpenCheck+" THEN 1 END)",
+		"COUNT(CASE WHEN o.duration IS NOT NULL AND o.duration < NOW() AND "+dashboardOpenCheck+" THEN 1 END)",
+	).
+		From("orders o").
 		LeftJoin("statuses s ON o.status_id = s.id").
 		LeftJoin("priorities p ON o.priority_id = p.id").
 		Where(sq.Eq{"o.deleted_at": nil})
 
-	base = applySecurity(base, securityCondition)
-	query, args, err := base.PlaceholderFormat(sq.Dollar).ToSql()
+	builder = applyDashboardSecurity(builder, securityCondition)
+	query, args, err := builder.PlaceholderFormat(sq.Dollar).ToSql()
 	if err != nil {
 		return nil, err
 	}
 
-	stats := &types.DashboardAlerts{}
-	err = r.storage.QueryRow(ctx, query, args...).Scan(&stats.CriticalCount, &stats.OverdueCount)
-	return stats, err
+	result := &types.DashboardAlerts{}
+	err = r.storage.QueryRow(ctx, query, args...).Scan(&result.CriticalCount, &result.OverdueCount)
+	return result, err
 }
 
-// 2. KPI
-func (r *DashboardRepository) GetKPIsWithUser(ctx context.Context, securityCondition sq.Sqlizer, userID uint64) (*types.DashboardKPIs, error) {
-	currStart := startOfMonth()
-	prevStart := currStart.AddDate(0, -1, 0)
-
-	base := sq.Select("o.id", "o.created_at", "o.completed_at", "o.status_id", "o.duration",
-		"o.first_response_time_seconds", "o.resolution_time_seconds",
-		"o.is_first_contact_resolution", "o.executor_id", "o.user_id").
+func (r *DashboardRepository) GetKPIsWithUser(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) (*types.DashboardKPIs, error) {
+	base := sq.Select(
+		"o.id",
+		"o.created_at",
+		"o.completed_at",
+		"o.duration",
+		"o.first_response_time_seconds",
+		"o.resolution_time_seconds",
+		"o.is_first_contact_resolution",
+		"o.executor_id",
+		"o.user_id",
+		"s.code AS status_code",
+	).
 		From("orders o").
+		LeftJoin("statuses s ON o.status_id = s.id").
 		Where(sq.Eq{"o.deleted_at": nil})
+	base = applyDashboardSecurity(base, securityCondition)
 
-	base = applySecurity(base, securityCondition)
-	subSQL, subArgs, err := base.PlaceholderFormat(sq.Dollar).ToSql()
+	baseSQL, baseArgs, err := base.PlaceholderFormat(sq.Dollar).ToSql()
 	if err != nil {
 		return nil, err
 	}
 
-	// --- ИСПРАВЛЕНИЕ: Используем плейсхолдеры вместо fmt.Sprintf ---
-	// 1. Определяем индексы для плейсхолдеров, начиная после аргументов из Squirrel
-	idx := len(subArgs)
-	cDateIdx := idx + 1
-	pDateIdx := idx + 2
-	userIDIdx := idx + 3
+	idx := len(baseArgs)
+	currFromIdx := idx + 1
+	currToIdx := idx + 2
+	prevFromIdx := idx + 3
+	prevToIdx := idx + 4
+	userIDIdx := idx + 5
 
-	// 2. Формируем итоговый SQL
-	// Я переписал его через простую структуру без хитрой интерполяции индексов %[n]
 	sqlRaw := fmt.Sprintf(`
 		WITH orders_filtered AS (%s)
 		SELECT
-			-- TOTAL
-			COUNT(*) FILTER (WHERE created_at >= $%d) as ct,
-			COUNT(*) FILTER (WHERE created_at >= $%d AND created_at < $%d) as pt,
-			COUNT(*) FILTER (WHERE created_at >= $%d AND user_id = $%d) as mt,
+			COUNT(*) FILTER (WHERE created_at >= $%d AND created_at < $%d) AS total_current,
+			COUNT(*) FILTER (WHERE created_at >= $%d AND created_at < $%d) AS total_previous,
+			COUNT(*) FILTER (WHERE created_at >= $%d AND created_at < $%d AND (user_id = $%d OR executor_id = $%d)) AS total_personal,
 
-			-- RESOLVED (Closed)
-			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= $%d) as cr,
-			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= $%d AND completed_at < $%d) as pr,
-			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= $%d AND executor_id = $%d) as mr,
+			COUNT(*) FILTER (WHERE status_code = '%s' AND completed_at >= $%d AND completed_at < $%d) AS resolved_current,
+			COUNT(*) FILTER (WHERE status_code = '%s' AND completed_at >= $%d AND completed_at < $%d) AS resolved_previous,
+			COUNT(*) FILTER (WHERE status_code = '%s' AND completed_at >= $%d AND completed_at < $%d AND (user_id = $%d OR executor_id = $%d)) AS resolved_personal,
 
-			-- OPEN
-			COUNT(*) FILTER (WHERE status_id NOT IN (SELECT id FROM statuses WHERE code IN ('CLOSED', 'REJECTED'))) as co,
-			COUNT(*) FILTER (WHERE status_id NOT IN (SELECT id FROM statuses WHERE code IN ('CLOSED', 'REJECTED')) AND executor_id = $%d) as mo,
+			COUNT(*) FILTER (WHERE status_code <> '%s') AS open_current,
+			COUNT(*) FILTER (WHERE status_code <> '%s' AND (user_id = $%d OR executor_id = $%d)) AS open_personal,
 
-			-- SLA & METRICS (убрали фильтр > 0 для коротких заявок)
-			COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= $%d AND (duration IS NULL OR completed_at <= duration)) as s1,
-			COALESCE(AVG(first_response_time_seconds) FILTER (WHERE created_at >= $%d AND first_response_time_seconds >= 0), 0) as r1,
-			COALESCE(AVG(resolution_time_seconds) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= $%d AND resolution_time_seconds >= 0), 0) as v1,
-			
-			COUNT(DISTINCT executor_id) FILTER (WHERE status_id NOT IN (SELECT id FROM statuses WHERE code IN ('CLOSED', 'REJECTED'))) as ag,
+			COUNT(*) FILTER (WHERE status_code = '%s' AND completed_at >= $%d AND completed_at < $%d AND (duration IS NULL OR completed_at <= duration)) AS sla_current_ontime,
+			COUNT(*) FILTER (WHERE status_code = '%s' AND completed_at >= $%d AND completed_at < $%d AND (duration IS NULL OR completed_at <= duration)) AS sla_previous_ontime,
 
--- FCR (First Contact Resolution)
-COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= $%d AND is_first_contact_resolution = true) as fcr_curr,
-COUNT(*) FILTER (WHERE status_id IN (SELECT id FROM statuses WHERE code = 'CLOSED') AND completed_at >= $%d AND completed_at < $%d AND is_first_contact_resolution = true) as fcr_prev
-FROM orders_filtered
+			COALESCE(AVG(first_response_time_seconds) FILTER (WHERE created_at >= $%d AND created_at < $%d AND first_response_time_seconds >= 0), 0) AS avg_response_current,
+			COALESCE(AVG(first_response_time_seconds) FILTER (WHERE created_at >= $%d AND created_at < $%d AND first_response_time_seconds >= 0), 0) AS avg_response_previous,
+
+			COALESCE(AVG(resolution_time_seconds) FILTER (WHERE status_code = '%s' AND completed_at >= $%d AND completed_at < $%d AND resolution_time_seconds >= 0), 0) AS avg_resolve_current,
+			COALESCE(AVG(resolution_time_seconds) FILTER (WHERE status_code = '%s' AND completed_at >= $%d AND completed_at < $%d AND resolution_time_seconds >= 0), 0) AS avg_resolve_previous,
+
+			COUNT(DISTINCT executor_id) FILTER (WHERE status_code <> '%s' AND executor_id IS NOT NULL) AS active_agents,
+
+			COUNT(*) FILTER (WHERE status_code = '%s' AND completed_at >= $%d AND completed_at < $%d AND is_first_contact_resolution = true) AS fcr_current,
+			COUNT(*) FILTER (WHERE status_code = '%s' AND completed_at >= $%d AND completed_at < $%d AND is_first_contact_resolution = true) AS fcr_previous
+		FROM orders_filtered
 	`,
-		subSQL,
-		cDateIdx,           // ct
-		pDateIdx, cDateIdx, // pt
-		cDateIdx, userIDIdx, // mt
-		cDateIdx,           // cr
-		pDateIdx, cDateIdx, // pr
-		cDateIdx, userIDIdx, // mr
-		userIDIdx,          // mo
-		cDateIdx,           // s1
-		cDateIdx,           // r1
-		cDateIdx,           // v1
-		cDateIdx,           // fcr_curr
-		pDateIdx, cDateIdx, // fcr_prev
+		baseSQL,
+		currFromIdx, currToIdx,
+		prevFromIdx, prevToIdx,
+		currFromIdx, currToIdx, userIDIdx, userIDIdx,
+
+		pkgconstants.StatusCompleted, currFromIdx, currToIdx,
+		pkgconstants.StatusCompleted, prevFromIdx, prevToIdx,
+		pkgconstants.StatusCompleted, currFromIdx, currToIdx, userIDIdx, userIDIdx,
+
+		pkgconstants.StatusClosed,
+		pkgconstants.StatusClosed, userIDIdx, userIDIdx,
+
+		pkgconstants.StatusCompleted, currFromIdx, currToIdx,
+		pkgconstants.StatusCompleted, prevFromIdx, prevToIdx,
+
+		currFromIdx, currToIdx,
+		prevFromIdx, prevToIdx,
+
+		pkgconstants.StatusCompleted, currFromIdx, currToIdx,
+		pkgconstants.StatusCompleted, prevFromIdx, prevToIdx,
+
+		pkgconstants.StatusClosed,
+
+		pkgconstants.StatusCompleted, currFromIdx, currToIdx,
+		pkgconstants.StatusCompleted, prevFromIdx, prevToIdx,
 	)
 
-	// 3. Сливаем все аргументы в правильном порядке
-	fullArgs := append(subArgs, currStart, prevStart, userID)
+	args := append(
+		baseArgs,
+		queryOptions.Range.From,
+		queryOptions.Range.To,
+		queryOptions.PreviousRange.From,
+		queryOptions.PreviousRange.To,
+		queryOptions.UserID,
+	)
 
 	var (
-		ct, pt, mt, cr, pr, mr, co, mo, s1, ag, fcr_curr, fcr_prev int64
-		r1, v1                                                     float64
+		totalCurrent      int64
+		totalPrevious     int64
+		totalPersonal     int64
+		resolvedCurrent   int64
+		resolvedPrevious  int64
+		resolvedPersonal  int64
+		openCurrent       int64
+		openPersonal      int64
+		slaCurrentOnTime  int64
+		slaPreviousOnTime int64
+		avgRespCurrent    float64
+		avgRespPrevious   float64
+		avgResCurrent     float64
+		avgResPrevious    float64
+		activeAgents      int64
+		fcrCurrent        int64
+		fcrPrevious       int64
 	)
 
-	// Теперь ровно 13 полей в SELECT и 13 переменных в Scan
-	err = r.storage.QueryRow(ctx, sqlRaw, fullArgs...).Scan(
-		&ct, &pt, &mt, // 3
-		&cr, &pr, &mr, // 6
-		&co, &mo, // 8
-		&s1,      // 9
-		&r1, &v1, // 11
-		&ag,                  // 12
-		&fcr_curr, &fcr_prev, // 14
-	)
-	if err != nil {
-		r.logger.Error("SQL Execution Error", zap.Error(err), zap.String("query", sqlRaw))
+	if err := r.storage.QueryRow(ctx, sqlRaw, args...).Scan(
+		&totalCurrent,
+		&totalPrevious,
+		&totalPersonal,
+		&resolvedCurrent,
+		&resolvedPrevious,
+		&resolvedPersonal,
+		&openCurrent,
+		&openPersonal,
+		&slaCurrentOnTime,
+		&slaPreviousOnTime,
+		&avgRespCurrent,
+		&avgRespPrevious,
+		&avgResCurrent,
+		&avgResPrevious,
+		&activeAgents,
+		&fcrCurrent,
+		&fcrPrevious,
+	); err != nil {
 		return nil, err
 	}
 
-	// 3. Заполняем результат (res)
-	res := &types.DashboardKPIs{}
-	res.TotalTickets = types.DashboardKPIMetric{Current: float64(ct), Previous: float64(pt), Personal: float64(mt)}
-	res.ResolvedTickets = types.DashboardKPIMetric{Current: float64(cr), Previous: float64(pr), Personal: float64(mr)}
-	res.OpenTickets = types.DashboardKPIMetric{Current: float64(co), Personal: float64(mo)}
-	res.AvgResponseTime = types.DashboardKPIMetric{Current: r1}
-	res.AvgResolveTime = types.DashboardKPIMetric{Current: v1}
-	res.ActiveAgents = ag
-
-	if cr > 0 {
-		res.SLACompliance.Current = (float64(s1) / float64(cr)) * 100
-		res.FCRRate.Current = (float64(fcr_curr) / float64(cr)) * 100
+	result := &types.DashboardKPIs{
+		TotalTickets: types.DashboardKPIMetric{
+			Current:  float64(totalCurrent),
+			Previous: float64(totalPrevious),
+			Personal: float64(totalPersonal),
+		},
+		OpenTickets: types.DashboardKPIMetric{
+			Current:  float64(openCurrent),
+			Personal: float64(openPersonal),
+		},
+		ResolvedTickets: types.DashboardKPIMetric{
+			Current:  float64(resolvedCurrent),
+			Previous: float64(resolvedPrevious),
+			Personal: float64(resolvedPersonal),
+		},
+		SLACompliance: types.DashboardKPIMetric{},
+		AvgResponseTime: types.DashboardKPIMetric{
+			Current:  avgRespCurrent,
+			Previous: avgRespPrevious,
+		},
+		AvgResolveTime: types.DashboardKPIMetric{
+			Current:  avgResCurrent,
+			Previous: avgResPrevious,
+		},
+		FCRRate:      types.DashboardKPIMetric{},
+		ActiveAgents: activeAgents,
 	}
-	if pr > 0 {
-		res.FCRRate.Previous = (float64(fcr_prev) / float64(pr)) * 100
+
+	if resolvedCurrent > 0 {
+		result.SLACompliance.Current = (float64(slaCurrentOnTime) / float64(resolvedCurrent)) * 100
+		result.FCRRate.Current = (float64(fcrCurrent) / float64(resolvedCurrent)) * 100
+	}
+	if resolvedPrevious > 0 {
+		result.SLACompliance.Previous = (float64(slaPreviousOnTime) / float64(resolvedPrevious)) * 100
+		result.FCRRate.Previous = (float64(fcrPrevious) / float64(resolvedPrevious)) * 100
 	}
 
-	return res, nil
+	return result, nil
 }
 
-// 3. SLA Stats
-func (r *DashboardRepository) GetSLAStats(ctx context.Context, securityCondition sq.Sqlizer) (*types.DashboardSLAStats, error) {
-	b := sq.Select(
+func (r *DashboardRepository) GetSLAStats(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) (*types.DashboardSLAStats, error) {
+	builder := sq.Select(
 		"COUNT(*)",
-		"COUNT(CASE WHEN completed_at <= duration THEN 1 END)").
-		From("orders o").Join("statuses s ON o.status_id = s.id").
+		"COUNT(CASE WHEN o.duration IS NULL OR o.completed_at <= o.duration THEN 1 END)",
+	).
+		From("orders o").
+		Join("statuses s ON o.status_id = s.id").
 		Where(sq.Eq{"o.deleted_at": nil}).
-		Where(sqlSuccessCheck).
-		Where(sq.GtOrEq{"o.completed_at": startOfMonth()})
+		Where(dashboardResolvedCheck)
+	builder = applyDashboardSecurity(builder, securityCondition)
+	builder = applyDashboardRange(builder, "o.completed_at", queryOptions.Range)
 
-	b = applySecurity(b, securityCondition)
-	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
+	query, args, err := builder.PlaceholderFormat(sq.Dollar).ToSql()
 	if err != nil {
 		return nil, err
 	}
-	stats := &types.DashboardSLAStats{}
-	err = r.storage.QueryRow(ctx, sqlStr, args...).Scan(&stats.TotalCompleted, &stats.OnTime)
-	return stats, err
+
+	result := &types.DashboardSLAStats{}
+	err = r.storage.QueryRow(ctx, query, args...).Scan(&result.TotalCompleted, &result.OnTime)
+	return result, err
 }
 
-func (r *DashboardRepository) GetAvgTimeByPriority(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardTimeByGroup, error) {
-	b := sq.Select("p.name as group_name", "COALESCE(AVG(o.resolution_time_seconds), 0) as avg_seconds").
+func (r *DashboardRepository) GetAvgTimeByPriority(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) ([]types.DashboardTimeByGroup, error) {
+	builder := sq.Select(
+		"p.name AS group_name",
+		"COALESCE(AVG(o.resolution_time_seconds), 0) AS avg_seconds",
+	).
 		From("orders o").
 		Join("priorities p ON o.priority_id = p.id").
 		Join("statuses s ON o.status_id = s.id").
-		Where(sqlSuccessCheck).
-		Where(sq.GtOrEq{"o.completed_at": startOfMonth()}).
+		Where(dashboardResolvedCheck).
 		Where(sq.Eq{"o.deleted_at": nil}).
 		GroupBy("p.name")
-
-	b = applySecurity(b, securityCondition)
-	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка построения запроса: %w", err)
-	}
-	rows, err := r.storage.Query(ctx, sqlStr, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardTimeByGroup])
+	builder = applyDashboardSecurity(builder, securityCondition)
+	builder = applyDashboardRange(builder, "o.completed_at", queryOptions.Range)
+	return collectDashboardTimeGroups(ctx, r.storage, builder)
 }
 
-// 5. AvgTime Type
-func (r *DashboardRepository) GetAvgTimeByOrderType(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardTimeByGroup, error) {
-	b := sq.Select("ot.name as group_name", "COALESCE(AVG(o.resolution_time_seconds), 0) as avg_seconds").
+func (r *DashboardRepository) GetAvgTimeByOrderType(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) ([]types.DashboardTimeByGroup, error) {
+	builder := sq.Select(
+		"ot.name AS group_name",
+		"COALESCE(AVG(o.resolution_time_seconds), 0) AS avg_seconds",
+	).
 		From("orders o").
 		Join("order_types ot ON o.order_type_id = ot.id").
 		Join("statuses s ON o.status_id = s.id").
-		Where(sqlSuccessCheck).
-		Where(sq.GtOrEq{"o.completed_at": startOfMonth()}).
+		Where(dashboardResolvedCheck).
 		Where(sq.Eq{"o.deleted_at": nil}).
 		GroupBy("ot.name")
-	b = applySecurity(b, securityCondition)
-	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка построения запроса: %w", err)
-	}
-	rows, err := r.storage.Query(ctx, sqlStr, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardTimeByGroup])
+	builder = applyDashboardSecurity(builder, securityCondition)
+	builder = applyDashboardRange(builder, "o.completed_at", queryOptions.Range)
+	return collectDashboardTimeGroups(ctx, r.storage, builder)
 }
 
-// 6. Count Status (Всего в системе)
-func (r *DashboardRepository) GetCountByStatus(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardCountByGroup, error) {
-	b := sq.Select("s.name as group_name", "COUNT(o.id) as count").
+func (r *DashboardRepository) GetCountByStatus(ctx context.Context, securityCondition sq.Sqlizer, _ types.DashboardQuery) ([]types.DashboardCountByGroup, error) {
+	builder := sq.Select("s.name AS group_name", "COUNT(o.id) AS count").
 		From("orders o").
 		Join("statuses s ON o.status_id = s.id").
 		Where(sq.Eq{"o.deleted_at": nil}).
-		GroupBy("s.name").OrderBy("count DESC") // добавил сортировку
-	b = applySecurity(b, securityCondition)
-	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка построения запроса: %w", err)
-	}
-	rows, err := r.storage.Query(ctx, sqlStr, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardCountByGroup])
+		GroupBy("s.name").
+		OrderBy("count DESC")
+	builder = applyDashboardSecurity(builder, securityCondition)
+	return collectDashboardCountGroups(ctx, r.storage, builder)
 }
 
-// 7. Executor
-func (r *DashboardRepository) GetCountByExecutor(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardExecutorCount, error) {
-	b := sq.Select("COALESCE(u.fio, 'Не назначен') as group_name", "COUNT(o.id) as count").
+func (r *DashboardRepository) GetCountByExecutor(ctx context.Context, securityCondition sq.Sqlizer, _ types.DashboardQuery) ([]types.DashboardExecutorCount, error) {
+	builder := sq.Select(
+		"COALESCE(u.fio, 'Не назначен') AS group_name",
+		"COUNT(o.id) AS count",
+		"u.id AS user_id",
+	).
 		From("orders o").
 		LeftJoin("users u ON o.executor_id = u.id").
 		LeftJoin("statuses s ON o.status_id = s.id").
 		Where(sq.Eq{"o.deleted_at": nil}).
-		Where(sqlOpenCheck).
-		Column("u.id as user_id").
+		Where(dashboardOpenCheck).
 		GroupBy("u.id", "u.fio").
-		OrderBy("count DESC").Limit(15)
-	b = applySecurity(b, securityCondition)
-	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка построения запроса: %w", err)
-	}
-	rows, err := r.storage.Query(ctx, sqlStr, args...)
+		OrderBy("count DESC").
+		Limit(15)
+	builder = applyDashboardSecurity(builder, securityCondition)
+	return collectDashboardExecutorCounts(ctx, r.storage, builder)
+}
+
+func (r *DashboardRepository) GetWeeklyVolume(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) ([]types.DashboardChartData, error) {
+	bucketExpr := dashboardBucketExpression(queryOptions.Granularity)
+	builder := sq.Select(
+		fmt.Sprintf("to_char(%s, 'YYYY-MM-DD') AS label", bucketExpr),
+		"COUNT(*) AS value",
+	).
+		From("orders o").
+		Where(sq.Eq{"o.deleted_at": nil}).
+		GroupBy(bucketExpr).
+		OrderBy(bucketExpr + " ASC")
+	builder = applyDashboardSecurity(builder, securityCondition)
+	builder = applyDashboardRange(builder, "o.created_at", queryOptions.Range)
+
+	query, args, err := builder.PlaceholderFormat(sq.Dollar).ToSql()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardExecutorCount])
-}
-
-// 8. Weekly
-func (r *DashboardRepository) GetWeeklyVolume(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardChartData, error) {
-	b := sq.Select("to_char(created_at, 'DD.MM') as label", "COUNT(*) as value").
-		From("orders o").
-		Where("created_at >= (CURRENT_DATE - INTERVAL '14 days')").
-		Where(sq.Eq{"o.deleted_at": nil})
-	b = applySecurity(b, securityCondition)
-	sqlStr, args, _ := b.GroupBy("to_char(created_at, 'DD.MM')", "date_trunc('day', created_at)").
-		OrderBy("date_trunc('day', created_at) ASC").PlaceholderFormat(sq.Dollar).ToSql()
-	rows, err := r.storage.Query(ctx, sqlStr, args...)
+	rows, err := r.storage.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -331,21 +350,149 @@ func (r *DashboardRepository) GetWeeklyVolume(ctx context.Context, securityCondi
 	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardChartData])
 }
 
-// 9. Top Categories
-func (r *DashboardRepository) GetTopCategories(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardCountByGroup, error) {
-	b := sq.Select("ot.name as group_name", "COUNT(o.id) as count").
+func (r *DashboardRepository) GetTopCategories(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) ([]types.DashboardCountByGroup, error) {
+	builder := sq.Select(
+		"ot.name AS group_name",
+		"COUNT(o.id) AS count",
+	).
 		From("orders o").
 		Join("order_types ot ON o.order_type_id = ot.id").
 		Where(sq.Eq{"o.deleted_at": nil}).
-		Where(sq.GtOrEq{"o.created_at": startOfMonth()}).
 		GroupBy("ot.name").
-		OrderBy("count DESC").Limit(5)
-	b = applySecurity(b, securityCondition)
-	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
+		OrderBy("count DESC").
+		Limit(5)
+	builder = applyDashboardSecurity(builder, securityCondition)
+	builder = applyDashboardRange(builder, "o.created_at", queryOptions.Range)
+	return collectDashboardCountGroups(ctx, r.storage, builder)
+}
+
+func (r *DashboardRepository) GetDepartmentStats(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) ([]types.DashboardDepartmentStat, error) {
+	builder := buildDashboardOrgStatsBuilder("d.name", "departments d ON o.department_id = d.id", queryOptions)
+	builder = applyDashboardSecurity(builder, securityCondition)
+	return collectDashboardDepartmentStats(ctx, r.storage, builder)
+}
+
+func (r *DashboardRepository) GetLastActivity(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) ([]types.DashboardActivityItem, error) {
+	builder := sq.Select(
+		"h.id",
+		"h.created_at",
+		"h.event_type",
+		"h.comment",
+		"h.new_value",
+		"COALESCE(u.fio, 'Система')",
+		"o.name",
+	).
+		From("order_history h").
+		Join("orders o ON h.order_id = o.id").
+		LeftJoin("users u ON h.user_id = u.id").
+		Where(sq.Eq{"o.deleted_at": nil}).
+		OrderBy("h.created_at DESC").
+		Limit(10)
+	builder = applyDashboardSecurity(builder, securityCondition)
+	builder = applyDashboardRange(builder, "h.created_at", queryOptions.Range)
+
+	query, args, err := builder.PlaceholderFormat(sq.Dollar).ToSql()
 	if err != nil {
-		return nil, fmt.Errorf("ошибка построения запроса: %w", err)
+		return nil, err
 	}
-	rows, err := r.storage.Query(ctx, sqlStr, args...)
+	rows, err := r.storage.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]types.DashboardActivityItem, 0, 10)
+	for rows.Next() {
+		var item types.DashboardActivityItem
+		var createdAt time.Time
+		var eventType, comment, newValue *string
+
+		if err := rows.Scan(&item.ID, &createdAt, &eventType, &comment, &newValue, &item.AuthorName, &item.OrderName); err != nil {
+			return nil, err
+		}
+
+		item.Date = createdAt.Format("02.01 15:04")
+		switch {
+		case comment != nil && strings.TrimSpace(*comment) != "":
+			item.Text = *comment
+		case eventType != nil:
+			item.Text = mapDashboardEventText(*eventType)
+		default:
+			item.Text = "Обновил заявку"
+		}
+
+		items = append(items, item)
+	}
+
+	return items, rows.Err()
+}
+
+func (r *DashboardRepository) GetBranchStats(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) ([]types.DashboardDepartmentStat, error) {
+	builder := buildDashboardOrgStatsBuilder("b.name", "branches b ON o.branch_id = b.id", queryOptions).
+		Where(sq.Eq{"o.department_id": nil})
+	builder = applyDashboardSecurity(builder, securityCondition)
+	return collectDashboardDepartmentStats(ctx, r.storage, builder)
+}
+
+func applyDashboardSecurity(builder sq.SelectBuilder, securityCondition sq.Sqlizer) sq.SelectBuilder {
+	if securityCondition == nil {
+		return builder
+	}
+	return builder.Where(securityCondition)
+}
+
+func applyDashboardRange(builder sq.SelectBuilder, column string, dateRange types.DashboardDateRange) sq.SelectBuilder {
+	return builder.Where(sq.GtOrEq{column: dateRange.From}).Where(sq.Lt{column: dateRange.To})
+}
+
+func dashboardBucketExpression(granularity string) string {
+	switch granularity {
+	case types.DashboardGranularityMonth:
+		return "date_trunc('month', o.created_at)"
+	case types.DashboardGranularityWeek:
+		return "date_trunc('week', o.created_at)"
+	default:
+		return "date_trunc('day', o.created_at)"
+	}
+}
+
+func buildDashboardOrgStatsBuilder(groupColumn, joinClause string, queryOptions types.DashboardQuery) sq.SelectBuilder {
+	builder := sq.Select(
+		groupColumn,
+		"COUNT(CASE WHEN "+dashboardOpenCheck+" THEN 1 END) AS open_count",
+		"COUNT(CASE WHEN "+dashboardResolvedCheck+" THEN 1 END) AS resolved_count",
+		"COUNT(CASE WHEN p.code = 'CRITICAL' AND "+dashboardOpenCheck+" THEN 1 END) AS critical_count",
+		"COUNT(*) AS total_count",
+	).
+		From("orders o").
+		Join(joinClause).
+		LeftJoin("statuses s ON o.status_id = s.id").
+		LeftJoin("priorities p ON o.priority_id = p.id").
+		Where(sq.Eq{"o.deleted_at": nil}).
+		GroupBy(groupColumn)
+
+	return applyDashboardRange(builder, "o.created_at", queryOptions.Range)
+}
+
+func collectDashboardTimeGroups(ctx context.Context, storage *pgxpool.Pool, builder sq.SelectBuilder) ([]types.DashboardTimeByGroup, error) {
+	query, args, err := builder.PlaceholderFormat(sq.Dollar).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := storage.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardTimeByGroup])
+}
+
+func collectDashboardCountGroups(ctx context.Context, storage *pgxpool.Pool, builder sq.SelectBuilder) ([]types.DashboardCountByGroup, error) {
+	query, args, err := builder.PlaceholderFormat(sq.Dollar).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := storage.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -353,27 +500,25 @@ func (r *DashboardRepository) GetTopCategories(ctx context.Context, securityCond
 	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardCountByGroup])
 }
 
-// 10. Department
-func (r *DashboardRepository) GetDepartmentStats(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardDepartmentStat, error) {
-	b := sq.Select("d.name",
-		// Open: все что не Закрыто, Выполнено или Отменено
-		"COUNT(CASE WHEN "+sqlOpenCheck+" THEN 1 END) as open_count",
-		// Resolved: Успешно выполнено
-		"COUNT(CASE WHEN "+sqlSuccessCheck+" THEN 1 END) as resolved_count",
-		"COUNT(CASE WHEN p.code='CRITICAL' AND "+sqlOpenCheck+" THEN 1 END) as critical_count",
-		"COUNT(*) as total_count").
-		From("orders o").
-		Join("departments d ON o.department_id = d.id").
-		LeftJoin("statuses s ON o.status_id = s.id").
-		LeftJoin("priorities p ON o.priority_id = p.id").
-		Where(sq.Eq{"o.deleted_at": nil}).
-		GroupBy("d.name")
-	b = applySecurity(b, securityCondition)
-	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
+func collectDashboardExecutorCounts(ctx context.Context, storage *pgxpool.Pool, builder sq.SelectBuilder) ([]types.DashboardExecutorCount, error) {
+	query, args, err := builder.PlaceholderFormat(sq.Dollar).ToSql()
 	if err != nil {
-		return nil, fmt.Errorf("ошибка построения запроса: %w", err)
+		return nil, err
 	}
-	rows, err := r.storage.Query(ctx, sqlStr, args...)
+	rows, err := storage.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardExecutorCount])
+}
+
+func collectDashboardDepartmentStats(ctx context.Context, storage *pgxpool.Pool, builder sq.SelectBuilder) ([]types.DashboardDepartmentStat, error) {
+	query, args, err := builder.PlaceholderFormat(sq.Dollar).ToSql()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := storage.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -381,78 +526,15 @@ func (r *DashboardRepository) GetDepartmentStats(ctx context.Context, securityCo
 	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardDepartmentStat])
 }
 
-// 11. Activity (тут норм)
-func (r *DashboardRepository) GetLastActivity(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardActivityItem, error) {
-	// ... Код Activity оставить без изменений, он хорош ...
-	// Просто скопируй то, что у тебя уже было выше в GetLastActivity
-	b := sq.Select("h.id", "h.created_at", "h.event_type", "h.comment", "h.new_value", "COALESCE(u.fio, 'Система')", "o.name").
-		From("order_history h").Join("orders o ON h.order_id = o.id").LeftJoin("users u ON h.user_id = u.id").
-		Where(sq.Eq{"o.deleted_at": nil}).OrderBy("h.created_at DESC").Limit(10)
-	b = applySecurity(b, securityCondition)
-	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка построения запроса: %w", err)
+func mapDashboardEventText(eventType string) string {
+	switch eventType {
+	case "CREATE":
+		return "Создал новую заявку"
+	case "STATUS_CHANGE":
+		return "Изменил статус заявки"
+	case "DELEGATION":
+		return "Изменил исполнителя заявки"
+	default:
+		return "Обновил заявку"
 	}
-	rows, err := r.storage.Query(ctx, sqlStr, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []types.DashboardActivityItem
-	for rows.Next() {
-		var i types.DashboardActivityItem
-		var ts time.Time
-		var ev, cm, nv *string
-		if err := rows.Scan(&i.ID, &ts, &ev, &cm, &nv, &i.AuthorName, &i.OrderName); err != nil {
-			r.logger.Error("Ошибка чтения строки активности", zap.Error(err))
-			continue
-		}
-		i.Date = ts.Format("02.01 15:04")
-		if cm != nil && *cm != "" {
-			i.Text = *cm
-		} else {
-			if ev == nil {
-				continue
-			}
-			switch *ev {
-			case "CREATE":
-				i.Text = "Создал новую заявку"
-			case "STATUS_CHANGE":
-				i.Text = "Изменил статус заявки"
-			default:
-				i.Text = "Обновил заявку"
-			}
-		}
-		items = append(items, i)
-	}
-	return items, nil
-}
-
-func (r *DashboardRepository) GetBranchStats(ctx context.Context, securityCondition sq.Sqlizer) ([]types.DashboardDepartmentStat, error) {
-	b := sq.Select("b.name",
-		"COUNT(CASE WHEN s.code != 'CLOSED' THEN 1 END) as open_count",
-		"COUNT(CASE WHEN s.code = 'CLOSED' THEN 1 END) as resolved_count",
-		"COUNT(CASE WHEN p.code='CRITICAL' AND s.code != 'CLOSED' THEN 1 END) as critical_count",
-		"COUNT(*) as total_count",
-	).
-		From("orders o").
-		Join("branches b ON o.branch_id = b.id").
-		LeftJoin("statuses s ON o.status_id = s.id").
-		LeftJoin("priorities p ON o.priority_id = p.id").
-		Where(sq.Eq{"o.deleted_at": nil}).
-		Where(sq.Eq{"o.department_id": nil}).
-		GroupBy("b.name")
-
-	b = applySecurity(b, securityCondition)
-
-	sqlStr, args, err := b.PlaceholderFormat(sq.Dollar).ToSql()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка построения запроса: %w", err)
-	}
-	rows, err := r.storage.Query(ctx, sqlStr, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return pgx.CollectRows(rows, pgx.RowToStructByName[types.DashboardDepartmentStat])
 }
