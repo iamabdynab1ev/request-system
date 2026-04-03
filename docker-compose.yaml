@@ -34,17 +34,15 @@ services:
   postgresql:
     image: postgres:17
     container_name: postgres
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: otabek
+    env_file:
+      - .env.docker
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres -d request-system" ]
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -55,9 +53,8 @@ services:
   pgadmin:
     image: dpage/pgadmin4
     container_name: pgadmin
-    environment:
-      PGADMIN_DEFAULT_EMAIL: "2M8bP@example.com"
-      PGADMIN_DEFAULT_PASSWORD: "pasword"
+    env_file:
+      - .env.docker
     ports:
       - "5050:80"
     volumes:
