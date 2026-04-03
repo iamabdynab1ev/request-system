@@ -137,6 +137,9 @@ const (
 	// ОТЧЕТЫ
 	ReportView = "report:view"
 
+	// DASHBOARD
+	DashboardView = "dashboard:view"
+
 	// ИНТЕГРАЦИИ
 	IntegrationsView = "integration:view"
 

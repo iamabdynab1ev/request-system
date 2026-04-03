@@ -36,7 +36,8 @@ import (
 )
 
 func main() {
-	loc, err := time.LoadLocation("Asia/Dushanbe")
+	cfgPreview := config.New()
+	loc, err := time.LoadLocation(cfgPreview.Server.Timezone)
 	if err != nil {
 		log.Printf("⚠️ Не удалось загрузить Asia/Tashkent: %v", err)
 		loc = time.Local
@@ -60,7 +61,7 @@ func main() {
 	flag.Parse()
 
 	// Загружаем настройки (.env)
-	cfg := config.New()
+	cfg := cfgPreview
 
 	// 3. БЛОК СИДЕРОВ И ИМПОРТА (Работает как сидер, если есть хоть один флаг)
 	if *runCore || *runRoles || *runAll || *importAtms != "" || *importTerms != "" || *importPos != "" {
@@ -137,12 +138,12 @@ func main() {
 	}
 	defer dbGoose.Close()
 
-	if err := goose.SetDialect("postgres"); err == nil {
-		if err := goose.Up(dbGoose, "./database/migrations"); err != nil {
-			mainLogger.Error("Внимание: ошибка миграций (возможно они уже накатаны)", zap.Error(err))
-		}
+	if err := goose.SetDialect("postgres"); err != nil {
+		mainLogger.Fatal("Goose dialect setup failed", zap.Error(err))
 	}
-
+	if err := goose.Up(dbGoose, "./database/migrations"); err != nil {
+		mainLogger.Fatal("Goose migrations failed", zap.Error(err))
+	}
 	authLogger, _ := logger.CreateLogger(logLevel, "auth")
 	orderLogger, _ := logger.CreateLogger(logLevel, "orders")
 	userLogger, _ := logger.CreateLogger(logLevel, "users")
@@ -154,6 +155,9 @@ func main() {
 	e := echo.New()
 	e.HideBanner = true
 	e.Use(middleware.Recover())
+	e.GET("/ping", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
 
 	// CORS: Разрешаем куки и заголовки
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{

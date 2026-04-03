@@ -29,6 +29,7 @@ type ServerConfig struct {
 	AllowedOrigins []string
 	CertFile       string
 	KeyFile        string
+	Timezone       string
 }
 
 type PostgresConfig struct {
@@ -69,8 +70,10 @@ type OnlineBankConfig struct {
 }
 
 type TelegramConfig struct {
-	BotToken     string
-	AdvancedMode bool
+	BotToken           string
+	BotUsername        string
+	WebhookSecretToken string
+	AdvancedMode       bool
 }
 
 type FrontendConfig struct {
@@ -110,10 +113,11 @@ func New() *Config {
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:           getEnv("SERVER_PORT", "8091"),
-			BaseURL:        getEnv("SERVER_BASE_URL", "https://localhost:8091"),
-			AllowedOrigins: strings.Split(getEnv("ALLOWED_ORIGINS", "*"), ","),
+			BaseURL:        getEnvNormalized("SERVER_BASE_URL", "https://localhost:8091"),
+			AllowedOrigins: parseList(getEnvNormalized("ALLOWED_ORIGINS", "*")),
 			CertFile:       getEnv("SSL_CERT_PATH", "./certs/server.crt"),
 			KeyFile:        getEnv("SSL_KEY_PATH", "./certs/server.key"),
+			Timezone:       getEnv("APP_TIMEZONE", "Asia/Tashkent"),
 		},
 		Postgres: PostgresConfig{
 			DSN: getRequiredEnv("DATABASE_URL"),
@@ -150,11 +154,13 @@ func New() *Config {
 			},
 		},
 		Telegram: TelegramConfig{
-			BotToken:     getEnv("TELEGRAM_BOT_TOKEN", ""),
-			AdvancedMode: getEnvAsBool("TELEGRAM_ADVANCED_MODE_ENABLED", false),
+			BotToken:           getEnvNormalized("TELEGRAM_BOT_TOKEN", ""),
+			BotUsername:        strings.TrimPrefix(getEnvNormalized("TELEGRAM_BOT_USERNAME", ""), "@"),
+			WebhookSecretToken: getEnvNormalized("TELEGRAM_WEBHOOK_SECRET_TOKEN", ""),
+			AdvancedMode:       getEnvAsBool("TELEGRAM_ADVANCED_MODE_ENABLED", false),
 		},
 		Frontend: FrontendConfig{
-			BaseURL: getEnv("FRONTEND_BASE_URL", "http://localhost:3000"),
+			BaseURL: getEnvNormalized("FRONTEND_BASE_URL", "http://localhost:3000"),
 		},
 		LDAP: LDAPConfig{
 			Enabled:             getEnvAsBool("LDAP_ENABLED", false),
@@ -181,6 +187,10 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getEnvNormalized(key, fallback string) string {
+	return normalizeConfigValue(getEnv(key, fallback))
 }
 
 func getRequiredEnv(key string) string {
@@ -222,7 +232,17 @@ func parseList(s string) []string {
 	}
 	parts := strings.Split(s, ",")
 	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
+		parts[i] = normalizeConfigValue(parts[i])
 	}
 	return parts
+}
+
+func normalizeConfigValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) >= 2 {
+		if (trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"') || (trimmed[0] == '\'' && trimmed[len(trimmed)-1] == '\'') {
+			trimmed = trimmed[1 : len(trimmed)-1]
+		}
+	}
+	return strings.TrimSpace(trimmed)
 }

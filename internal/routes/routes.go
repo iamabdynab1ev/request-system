@@ -8,6 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 
+	"request-system/internal/authz"
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
@@ -84,23 +85,21 @@ func InitRouter(
 	departmentService := services.NewDepartmentService(txManager, departmentRepo, userRepo, loggers.Main)
 	otdelService := services.NewOtdelService(txManager, otdelRepo, userRepo, loggers.Main)
 	orderRuleService := services.NewOrderRoutingRuleService(ruleRepo, userRepo, positionRepo, txManager, loggers.Main, orderTypeRepo)
+	tgService := telegram.NewService(cfg.Telegram.BotToken)
+	notificationService := services.NewTelegramNotificationService(tgService, loggers.Main)
 	orderService := services.NewOrderService(txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo, ruleEngineService,
-		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService, nil)
+		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService, notificationService, cacheRepo)
 	historyService := services.NewOrderHistoryService(historyRepo, userRepo, departmentService, otdelService, statusRepo, priorityRepo, loggers.OrderHistory)
 	reportService := services.NewReportService(reportRepo, userRepo, loggers.Main)
 	_ = reportService
 	branchService := services.NewBranchService(txManager, branchRepo, userRepo, loggers.Main)
 	officeService := services.NewOfficeService(officeRepo, userRepo, txManager, loggers.Main)
-	tgService := telegram.NewService(cfg.Telegram.BotToken)
-	notificationService := services.NewTelegramNotificationService(tgService, loggers.Main)
-	orderService = services.NewOrderService(txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo, ruleEngineService,
-		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService, notificationService)
 	dashboardService := services.NewDashboardService(dashboardRepo, userRepo, cacheRepo, loggers.Main)
 
 	// --- 3. КОНТРОЛЛЕРЫ ---
 	userController := controllers.NewUserController(userService, adService, fileStorage, loggers.User)
 	historyController := controllers.NewOrderHistoryController(historyService, orderService, loggers.OrderHistory)
-	wsController := controllers.NewWebSocketController(wsHub, jwtSvc, loggers.Main)
+	wsController := controllers.NewWebSocketController(wsHub, jwtSvc, loggers.Main, cfg.Server.AllowedOrigins)
 	dashboardController := controllers.NewDashboardController(dashboardService, loggers.Main.Named("Dashboard"))
 
 	// --- 4. РОУТЕРЫ ---
@@ -121,15 +120,13 @@ func InitRouter(
 	runOrderTypeRouter(secureGroup, orderTypeService, loggers.Main, authMW)
 	runPositionRouter(secureGroup, positionService, loggers.Main, authMW)
 	runOrderRoutingRuleRouter(secureGroup, orderRuleService, loggers.Main, authMW)
-	runAttachmentRouter(secureGroup, dbConn, fileStorage, loggers.Main)
+	runAttachmentRouter(secureGroup, dbConn, fileStorage, loggers.Main, authMW)
 	runStatusRouter(secureGroup, dbConn, loggers.Main, authMW, fileStorage)
 	runOrderHistoryRouter(secureGroup, historyController, authMW)
 	RunPriorityRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runDepartmentRouter(secureGroup, dbConn, loggers.Main, authMW, txManager)
 	runOtdelRouter(secureGroup, dbConn, loggers.Main, authMW, txManager)
 	runEquipmentTypeRouter(secureGroup, dbConn, loggers.Main, authMW)
-	runEquipmentRouter(secureGroup, dbConn, loggers.Main, authMW)
-
 	runBranchRouter(secureGroup, dbConn, loggers.Main, txManager, authMW)
 	runOfficeRouter(secureGroup, officeService, loggers.Main, authMW)
 	runTelegramRouter(e, userService, orderService, tgService, cacheRepo, statusRepo, userRepo, historyRepo, authPermissionService, orderTypeRepo, authMW, cfg, loggers.Main, appCtx)
@@ -137,7 +134,7 @@ func InitRouter(
 	// для интеграции
 	runSyncRouter(api, dbConn, cfg, loggers)
 	// Dashboard
-	secureGroup.GET("/dashboard", dashboardController.GetDashboardStats)
+	secureGroup.GET("/dashboard", dashboardController.GetDashboardStats, authMW.AuthorizeAny(authz.DashboardView))
 
 	loggers.Main.Info("INIT_ROUTER: Создание маршрутов завершено")
 }

@@ -92,9 +92,9 @@ func (r *attachmentRepository) FindAllByOrderID(ctx context.Context, orderID uin
 }
 
 func (r *attachmentRepository) FindByID(ctx context.Context, id uint64) (*entities.Attachment, error) {
-	query := `SELECT id, file_path FROM attachments WHERE id = $1`
+	query := `SELECT id, order_id, file_path FROM attachments WHERE id = $1`
 	var attachment entities.Attachment
-	err := r.storage.QueryRow(ctx, query, id).Scan(&attachment.ID, &attachment.FilePath)
+	err := r.storage.QueryRow(ctx, query, id).Scan(&attachment.ID, &attachment.OrderID, &attachment.FilePath)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperrors.ErrNotFound

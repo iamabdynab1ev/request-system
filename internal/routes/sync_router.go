@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"strings"
+
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
@@ -48,15 +50,15 @@ func runSyncRouter(
 	syncController := controllers.NewSyncController(syncService, loggers.Main)
 
 	syncGroup := apiGroup.Group("/sync")
-
-	apiKey := cfg.Integrations.OneCApiKey
-	if apiKey == "" {
-		loggers.Main.Warn("API-ключ для синхронизации с 1С (ONE_C_API_KEY) не установлен! Эндпоинт не защищен.")
-	} else {
-		syncGroup.Use(middleware.KeyAuth(func(key string, c echo.Context) (bool, error) {
-			return key == apiKey, nil
-		}))
+	if strings.TrimSpace(cfg.Integrations.OneCApiKey) == "" {
+		loggers.Main.Error("ONE_C_API_KEY не установлен: роут /api/sync/1c отключен")
+		return
 	}
+
+	apiKey := strings.TrimSpace(cfg.Integrations.OneCApiKey)
+	syncGroup.Use(middleware.KeyAuth(func(key string, c echo.Context) (bool, error) {
+		return key == apiKey, nil
+	}))
 
 	syncGroup.POST("/1c", syncController.HandleSyncFrom1C)
 }
