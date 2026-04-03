@@ -1,53 +1,89 @@
-# Request System Backend
+﻿# Request System Backend
 
-Это скомпилированная версия backend-сервиса для Request System.  
-Фронтенд может запустить его локально и тестировать API.
+Backend service for HelpDesk / Request System.
 
----
+## Requirements
 
-## 🚀 Как запустить
+- Go 1.24+
+- PostgreSQL
+- Redis
+- `.env` file with required settings
 
-1. Распакуй архив в удобную папку.
-2. Убедись, что установлены PostgreSQL и Redis (если нужен полный функционал).
-3. Проверь настройки в `.env`. При необходимости измени данные доступа к базе и Redis.
-4. Запусти сервер:
-   - Дважды кликни `run.bat` или
-   - Запусти `backend.exe` напрямую.
-5. После запуска сервер будет доступен по адресу: http://localhost:8091
-6. Импортируй `postman_collection.json` в Postman и тестируй API.
+## Run
 
----
+Start the application:
 
-## 📂 Что внутри
+```powershell
+go run ./app
+```
 
-- `backend.exe` — скомпилированный Go-бэкенд
-- `.env` — настройки подключения к базе и Redis
-- `postman_collection.json` — экспорт Postman с запросами
-- `run.bat` — скрипт для быстрого запуска
-- `README.md` — эта инструкция
+## Seeders
 
----
+Core dictionaries:
 
-## ❗ Требования
+```powershell
+go run ./seeders/cmd/seed/main.go -core
+```
 
-- Windows x64
-- PostgreSQL и Redis для полноценной работы (опционально)
+Roles and admin:
 
----
+```powershell
+go run ./seeders/cmd/seed/main.go -roles
+```
 
-## 🛠️ Быстрый старт без БД
+All seeders:
 
-Если не нужна база, просто запусти `backend.exe`. Некоторые API могут не работать из-за отсутствия подключения к базе.
+```powershell
+go run ./seeders/cmd/seed/main.go -all
+```
 
----
+## Tests
 
-## 🐞 Отладка
+```powershell
+go test ./...
+```
 
-Если сервер не запускается, проверь:
+## Main Environment Variables
 
-- Работают ли PostgreSQL и Redis (если нужны)
-- Не блокирует ли фаервол порт 8091
+- `DATABASE_URL`
+- `REDIS_ADDRESS`
+- `JWT_SECRET_KEY`
+- `SERVER_PORT`
+- `SERVER_BASE_URL`
+- `FRONTEND_BASE_URL`
+- `ALLOWED_ORIGINS`
+- `APP_TIMEZONE`
+- `ONE_C_API_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_BOT_USERNAME`
+- `TELEGRAM_WEBHOOK_SECRET_TOKEN`
+- `TELEGRAM_ADVANCED_MODE_ENABLED`
+- `SSL_CERT_PATH`
+- `SSL_KEY_PATH`
 
----
+## Runtime Notes
 
-Спасибо!
+- Goose migrations run on startup. If migrations fail, the server does not start.
+- `GET /ping` is available as a simple health endpoint.
+- Dashboard access requires `dashboard:view`.
+- `/api/sync/1c` is disabled when `ONE_C_API_KEY` is empty.
+- WebSocket authentication uses `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: bearer, <token>`.
+- Telegram deep link can be built from `TELEGRAM_BOT_USERNAME` and is returned by `POST /api/profile/telegram/generate-token` as `bot_link`.
+- Telegram webhook registration requires `SERVER_BASE_URL` with `https://...`; optional request validation uses `TELEGRAM_WEBHOOK_SECRET_TOKEN`.
+
+## Project Structure
+
+- `app/` - application entrypoint
+- `internal/controllers/` - HTTP controllers
+- `internal/services/` - business logic
+- `internal/repositories/` - database access
+- `internal/routes/` - route wiring
+- `database/migrations/` - Goose migrations
+- `seeders/` - seed scripts
+- `pkg/` - shared infrastructure and utilities
+
+## Repository Rules
+
+- Do not commit `.env`, certificates, keys, archives, or uploaded files.
+- Keep migrations in `database/migrations/` under version control.
+- Do not store generated binaries in the repository.
