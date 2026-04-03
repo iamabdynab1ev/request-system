@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 
 	"request-system/internal/authz"
@@ -40,7 +41,9 @@ type UserServiceInterface interface {
 	GetPermissionDetailsForUser(ctx context.Context, userID uint64) (*dto.UIPermissionsResponseDTO, error)
 	UpdateUserPermissions(ctx context.Context, userID uint64, payload dto.UpdateUserPermissionsDTO) error
 
+	GetTelegramLinkStatus(ctx context.Context) (*dto.TelegramLinkStatusDTO, error)
 	GenerateTelegramLinkToken(ctx context.Context) (string, error)
+	UnlinkTelegram(ctx context.Context) error
 	ConfirmTelegramLink(ctx context.Context, token string, chatID int64) error
 	FindUserByTelegramChatID(ctx context.Context, chatID int64) (*entities.User, error)
 }
@@ -648,27 +651,149 @@ func (s *UserService) UpdateUserPermissions(ctx context.Context, userID uint64, 
 }
 
 func (s *UserService) GenerateTelegramLinkToken(ctx context.Context) (string, error) {
-	uid, _ := utils.GetUserIDFromCtx(ctx)
+	uid, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil || uid == 0 {
+		s.logger.Warn("Telegram link token generation rejected: missing user in context", zap.Error(err))
+		return "", apperrors.ErrUnauthorized
+	}
+
 	token := uuid.New().String()
 	key := fmt.Sprintf("telegram-link-token:%s", token)
 	if err := s.cacheRepository.Set(ctx, key, uid, telegramLinkTokenTTL); err != nil {
+		s.logger.Error("Failed to store telegram link token", zap.Uint64("user_id", uid), zap.Error(err))
 		return "", apperrors.ErrInternalServer
 	}
+
+	s.logger.Info("Telegram link token generated", zap.Uint64("user_id", uid))
 	return token, nil
 }
 
+func (s *UserService) GetTelegramLinkStatus(ctx context.Context) (*dto.TelegramLinkStatusDTO, error) {
+	uid, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil || uid == 0 {
+		return nil, apperrors.ErrUnauthorized
+	}
+
+	user, err := s.userRepository.FindUserByID(ctx, uid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || apperrors.IsNotFound(err) {
+			return nil, apperrors.ErrUserNotFound
+		}
+		return nil, err
+	}
+
+	result := &dto.TelegramLinkStatusDTO{
+		Linked: user.TelegramChatID.Valid,
+	}
+	if user.TelegramChatID.Valid {
+		chatID := user.TelegramChatID.Int64
+		result.TelegramChatID = &chatID
+	}
+
+	return result, nil
+}
+
+func (s *UserService) UnlinkTelegram(ctx context.Context) error {
+	uid, err := utils.GetUserIDFromCtx(ctx)
+	if err != nil || uid == 0 {
+		return apperrors.ErrUnauthorized
+	}
+
+	user, err := s.userRepository.FindUserByID(ctx, uid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || apperrors.IsNotFound(err) {
+			return apperrors.ErrUserNotFound
+		}
+		return err
+	}
+	if !user.TelegramChatID.Valid {
+		return nil
+	}
+
+	return s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+		return s.userRepository.ClearTelegramChatID(ctx, tx, uid)
+	})
+}
+
 func (s *UserService) ConfirmTelegramLink(ctx context.Context, token string, chatID int64) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return apperrors.NewBadRequestError("Код привязки не указан")
+	}
+
 	key := fmt.Sprintf("telegram-link-token:%s", token)
 	val, err := s.cacheRepository.Get(ctx, key)
 	if err != nil {
 		return apperrors.NewBadRequestError("Неверный код или истек")
 	}
 
-	uid, _ := strconv.ParseUint(val, 10, 64)
+	uid, err := strconv.ParseUint(strings.TrimSpace(val), 10, 64)
+	if err != nil || uid == 0 {
+		s.logger.Error("Telegram link token contains invalid user id",
+			zap.String("token", token),
+			zap.String("cached_value", val),
+			zap.Error(err))
+		return apperrors.NewBadRequestError("Код привязки повреждён. Получите новый код на сайте")
+	}
+
+	existingUser, err := s.userRepository.FindUserByTelegramChatID(ctx, chatID)
+	if err == nil && existingUser != nil {
+		if existingUser.ID == uid {
+			_ = s.cacheRepository.Del(ctx, key)
+			s.logger.Info("Telegram already linked to the same user",
+				zap.Uint64("user_id", uid),
+				zap.Int64("chat_id", chatID))
+			return nil
+		}
+
+		if err := s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
+			if err := s.userRepository.ClearTelegramChatID(ctx, tx, existingUser.ID); err != nil {
+				return err
+			}
+			return s.userRepository.UpdateTelegramChatIDTx(ctx, tx, uid, chatID)
+		}); err != nil {
+			s.logger.Error("Failed to reassign telegram chat id",
+				zap.Int64("chat_id", chatID),
+				zap.Uint64("from_user_id", existingUser.ID),
+				zap.Uint64("to_user_id", uid),
+				zap.Error(err))
+			return err
+		}
+
+		_ = s.cacheRepository.Del(ctx, key)
+		s.logger.Warn("Telegram chat reassigned to another user",
+			zap.Int64("chat_id", chatID),
+			zap.Uint64("from_user_id", existingUser.ID),
+			zap.Uint64("to_user_id", uid))
+		return nil
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		s.logger.Error("Failed to check existing telegram link",
+			zap.Int64("chat_id", chatID),
+			zap.Error(err))
+		return apperrors.ErrInternalServer
+	}
 	if err := s.userRepository.UpdateTelegramChatID(ctx, uid, chatID); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return apperrors.NewBadRequestError("Этот Telegram аккаунт уже привязан к другому пользователю")
+		}
+		if errors.Is(err, apperrors.ErrNotFound) {
+			s.logger.Warn("Telegram link target user not found",
+				zap.Uint64("user_id", uid),
+				zap.Int64("chat_id", chatID))
+			return apperrors.NewBadRequestError("Пользователь для этого кода не найден. Получите новый код на сайте")
+		}
+		s.logger.Error("Failed to update telegram chat id",
+			zap.Uint64("user_id", uid),
+			zap.Int64("chat_id", chatID),
+			zap.Error(err))
 		return err
 	}
 	_ = s.cacheRepository.Del(ctx, key)
+	s.logger.Info("Telegram account linked successfully",
+		zap.Uint64("user_id", uid),
+		zap.Int64("chat_id", chatID))
 	return nil
 }
 

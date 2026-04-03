@@ -93,6 +93,8 @@ type UserRepositoryInterface interface {
 	IsHeadExistsInDepartment(ctx context.Context, departmentID uint64, excludeUserID uint64) (bool, error)
 
 	UpdateTelegramChatID(ctx context.Context, userID uint64, chatID int64) error
+	UpdateTelegramChatIDTx(ctx context.Context, tx pgx.Tx, userID uint64, chatID int64) error
+	ClearTelegramChatID(ctx context.Context, tx pgx.Tx, userID uint64) error
 	FindUserByTelegramChatID(ctx context.Context, chatID int64) (*entities.User, error)
 	FindActiveUsersByBranch(ctx context.Context, tx pgx.Tx, posType string, branchID uint64, officeID *uint64) ([]entities.User, error)
 
@@ -676,6 +678,28 @@ func (r *UserRepository) UpdateTelegramChatID(ctx context.Context, userID uint64
 		return apperrors.ErrNotFound
 	}
 	return err
+}
+
+func (r *UserRepository) UpdateTelegramChatIDTx(ctx context.Context, tx pgx.Tx, userID uint64, chatID int64) error {
+	tag, err := tx.Exec(ctx, "UPDATE users SET telegram_chat_id=$1, updated_at=NOW() WHERE id=$2", chatID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) ClearTelegramChatID(ctx context.Context, tx pgx.Tx, userID uint64) error {
+	tag, err := tx.Exec(ctx, "UPDATE users SET telegram_chat_id=NULL, updated_at=NOW() WHERE id=$1", userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
 }
 
 func (r *UserRepository) FindUserByTelegramChatID(ctx context.Context, chatID int64) (*entities.User, error) {

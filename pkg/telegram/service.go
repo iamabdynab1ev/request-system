@@ -19,6 +19,7 @@ type ServiceInterface interface {
 	SendMessage(ctx context.Context, chatID int64, text string) error
 
 	SendMessageEx(ctx context.Context, chatID int64, text string, options ...MessageOption) error
+	SendMessageWithID(ctx context.Context, chatID int64, text string, options ...MessageOption) (int, error)
 
 	AnswerCallbackQuery(ctx context.Context, callbackQueryID string, text string) error
 
@@ -85,6 +86,10 @@ type editMessageTextRequest struct {
 	ReplyMarkup interface{} `json:"reply_markup,omitempty"`
 }
 
+type telegramMessageResult struct {
+	MessageID int `json:"message_id"`
+}
+
 type MessageOption func(*sendMessageRequest)
 
 func WithKeyboard(rows [][]InlineKeyboardButton) MessageOption {
@@ -118,6 +123,16 @@ func WithReplyKeyboard(rows [][]ReplyKeyboardButton) MessageOption {
 	}
 }
 
+func HasReplyKeyboard(options ...MessageOption) bool {
+	req := &sendMessageRequest{}
+	for _, opt := range options {
+		opt(req)
+	}
+
+	_, ok := req.ReplyMarkup.(replyKeyboardMarkup)
+	return ok
+}
+
 func (s *Service) EditMessageText(ctx context.Context, chatID int64, messageID int, text string, options ...MessageOption) error {
 	if messageID == 0 {
 		return s.SendMessageEx(ctx, chatID, text, options...)
@@ -140,7 +155,6 @@ func (s *Service) EditMessageText(ctx context.Context, chatID int64, messageID i
 	return s.sendRequest(ctx, "editMessageText", editReq)
 }
 
-
 func (s *Service) SendMessage(ctx context.Context, chatID int64, text string) error {
 	escapedText := EscapeTextForMarkdownV2(text)
 	return s.SendMessageEx(ctx, chatID, escapedText, WithMarkdownV2())
@@ -160,7 +174,11 @@ func (s *Service) SendMessageEx(ctx context.Context, chatID int64, text string, 
 		opt(reqPayload)
 	}
 
-	return s.sendRequest(ctx, "sendMessage", reqPayload)
+	var result telegramMessageResult
+	if err := s.sendRequestForResult(ctx, "sendMessage", reqPayload, &result); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Ответ на callback-кнопку
@@ -251,10 +269,11 @@ func (s *Service) DeleteMessage(ctx context.Context, chatID int64, messageID int
 		ChatID:    chatID,
 		MessageID: messageID,
 	}
-    // Мы намеренно игнорируем ошибку (если сообщение уже удалено, API вернет 400, это нормально)
+	// Мы намеренно игнорируем ошибку (если сообщение уже удалено, API вернет 400, это нормально)
 	_ = s.sendRequest(ctx, "deleteMessage", reqPayload)
 	return nil
 }
+
 type deleteMessageRequest struct {
 	ChatID    int64 `json:"chat_id"`
 	MessageID int   `json:"message_id"`
