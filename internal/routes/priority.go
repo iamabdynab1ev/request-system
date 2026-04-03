@@ -2,8 +2,6 @@
 package routes
 
 import (
-	"log"
-
 	"request-system/internal/authz"
 	"request-system/internal/controllers"
 	"request-system/internal/repositories"
@@ -26,9 +24,6 @@ func RunPriorityRouter(
 
 	// Внедряем FileStorage в сервис
 	priorityService := services.NewPriorityService(priorityRepository, userRepository, logger)
-	if priorityService == nil {
-		log.Fatal("Не удалось создать PriorityService")
-	}
 	priorityCtrl := controllers.NewPriorityController(priorityService, logger)
 
 	priorities := secureGroup.Group("/priority")
