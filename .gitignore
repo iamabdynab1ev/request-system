@@ -11,6 +11,12 @@
 /CLOUDE.md
 /file_list.txt
 /11.6.3
+/dbconf.yml
+/ngrok.yml
+/run.bat
+/fresh_install.bat
+/endpoints_.yaml
+/doc_2025-07-21_19-30-53.golangci.yaml
 
 # Файл с переменными окружения
 .env

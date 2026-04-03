@@ -1,6 +1,0 @@
-# Файл: dbconf.yml - Конфигурация для сервера
-
-production:
-  driver: postgres
- 
-  dsn: postgresql://postgres:postgres@192.168.10.79:5432/request-system?sslmode=disable
