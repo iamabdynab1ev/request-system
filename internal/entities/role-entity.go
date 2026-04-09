@@ -12,4 +12,3 @@ type Role struct {
 	types.BaseEntity
 	types.SoftDelete
 }
-

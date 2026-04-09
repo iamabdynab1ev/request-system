@@ -8,4 +8,5 @@ const (
 	UserRoleIDKey         contextKey = "UserRoleID"
 	RoleIDKey             contextKey = "RoleID"
 	UserPermissionsMapKey contextKey = "userPermissionsMap"
+	UserEntityKey         contextKey = "userEntity"
 )

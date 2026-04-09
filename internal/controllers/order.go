@@ -112,10 +112,11 @@ func (c *OrderController) UpdateOrder(ctx echo.Context) error {
 func (c *OrderController) GetOrders(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	filter := utils.ParseFilterFromQuery(ctx.Request().URL.Query())
-	onlyParticipant := ctx.QueryParam("participant") == "me"
+	onlyCreated := ctx.QueryParam("participant") == "me" || ctx.QueryParam("created") == "me"
 	onlyAssigned := ctx.QueryParam("assigned") == "me"
+	onlyInvolved := ctx.QueryParam("involved") == "me"
 
-	result, err := c.orderService.GetOrders(reqCtx, filter, onlyParticipant, onlyAssigned)
+	result, err := c.orderService.GetOrders(reqCtx, filter, onlyCreated, onlyAssigned, onlyInvolved)
 	if err != nil {
 		c.logger.Error("GetOrders failed", zap.Error(err))
 		return api.ErrorResponse(ctx, err)

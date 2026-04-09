@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware, txManager repositories.TxManagerInterface) { 
+func runDepartmentRouter(secureGroup *echo.Group, dbConn *pgxpool.Pool, logger *zap.Logger, authMW *middleware.AuthMiddleware, txManager repositories.TxManagerInterface) {
 	departmentRepo := repositories.NewDepartmentRepository(dbConn, logger)
 	userRepo := repositories.NewUserRepository(dbConn, logger)
 	departmentService := services.NewDepartmentService(txManager, departmentRepo, userRepo, logger)

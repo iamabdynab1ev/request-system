@@ -41,12 +41,12 @@ func ApplyListParams(builder sq.SelectBuilder, filter types.Filter, allowedMap m
 
 	// 3. Пагинация
 	if filter.WithPagination {
-    if filter.Limit > 0 {
-        builder = builder.Limit(uint64(filter.Limit))
-    }
-    if filter.Offset > 0 {
-        builder = builder.Offset(uint64(filter.Offset))
-    }
-}
+		if filter.Limit > 0 {
+			builder = builder.Limit(uint64(filter.Limit))
+		}
+		if filter.Offset > 0 {
+			builder = builder.Offset(uint64(filter.Offset))
+		}
+	}
 	return builder
 }

@@ -38,7 +38,7 @@ func (c *TelegramController) handleEditStatusStart(ctx context.Context, chatID i
 
 	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
-		return c.sendInternalError(ctx, chatID)
+		return c.handlePrepareUserContextError(ctx, chatID, err)
 	}
 
 	order, err := c.orderService.FindOrderByIDForTelegram(userCtx, user.ID, state.OrderID)
@@ -187,7 +187,7 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 
 	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
-		return c.sendInternalError(ctx, chatID)
+		return c.handlePrepareUserContextError(ctx, chatID, err)
 	}
 
 	order, err := c.orderService.FindOrderByIDForTelegram(userCtx, user.ID, state.OrderID)
@@ -202,7 +202,14 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 		)
 	}
 
-	filter := types.Filter{Filter: make(map[string]interface{}), WithPagination: false}
+	const maxDelegateCandidates = 9
+	filter := types.Filter{
+		Filter:         make(map[string]interface{}),
+		Limit:          maxDelegateCandidates,
+		Page:           1,
+		Offset:         0,
+		WithPagination: true,
+	}
 	text := ""
 	switch {
 	case user.OtdelID != nil:
@@ -221,8 +228,8 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 		text = "👤 *Все сотрудники:*"
 	}
 
-	users, _, err := c.userRepo.GetUsers(userCtx, filter)
-	showSearch := err != nil || len(users) == 0
+	users, totalUsers, err := c.userRepo.GetUsers(userCtx, filter)
+	showSearch := err != nil || totalUsers == 0
 
 	var rows [][]tgapi.InlineKeyboardButton
 	addedCount := 0
@@ -243,6 +250,9 @@ func (c *TelegramController) handleDelegateStart(ctx context.Context, chatID int
 			cb := fmt.Sprintf(`{"action":"set_executor","user_id":%d}`, candidate.ID)
 			rows = append(rows, []tgapi.InlineKeyboardButton{{Text: candidate.Fio, CallbackData: cb}})
 			addedCount++
+		}
+		if totalUsers > uint64(addedCount) {
+			showSearch = true
 		}
 	}
 
@@ -278,10 +288,10 @@ func (c *TelegramController) handleSetExecutorFromText(ctx context.Context, chat
 
 	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
-		return c.sendInternalError(ctx, chatID)
+		return c.handlePrepareUserContextError(ctx, chatID, err)
 	}
 
-	filterMap := map[string]interface{}{"fio_like": text}
+	filterMap := map[string]interface{}{}
 	switch {
 	case user.OtdelID != nil:
 		filterMap["otdel_id"] = *user.OtdelID
@@ -293,7 +303,14 @@ func (c *TelegramController) handleSetExecutorFromText(ctx context.Context, chat
 		filterMap["branch_id"] = *user.BranchID
 	}
 
-	users, _, err := c.userRepo.GetUsers(userCtx, types.Filter{Filter: filterMap, Limit: 10, Page: 1})
+	users, _, err := c.userRepo.GetUsers(userCtx, types.Filter{
+		Search:         text,
+		Filter:         filterMap,
+		Limit:          10,
+		Page:           1,
+		Offset:         0,
+		WithPagination: true,
+	})
 	if err != nil || len(users) == 0 {
 		return c.renderExecutorSelection(
 			ctx,
@@ -370,7 +387,7 @@ func (c *TelegramController) handleSetSomething(ctx context.Context, chatID int6
 
 	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
-		return c.sendInternalError(ctx, chatID)
+		return c.handlePrepareUserContextError(ctx, chatID, err)
 	}
 
 	order, err := c.orderService.FindOrderByIDForTelegram(userCtx, user.ID, state.OrderID)
@@ -389,7 +406,7 @@ func (c *TelegramController) handleSetSomething(ctx context.Context, chatID int6
 }
 
 func (c *TelegramController) handleSearchStart(ctx context.Context, chatID int64, messageID int) error {
-	state := &dto.TelegramState{Mode: "awaiting_search", MessageID: messageID, Source: "search", Changes: make(map[string]string)}
+	state := &dto.TelegramState{Mode: "awaiting_search", MessageID: messageID, Source: "search", Page: 1, Changes: make(map[string]string)}
 	if err := c.setUserState(ctx, chatID, state); err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
@@ -415,11 +432,14 @@ func (c *TelegramController) handleSearchQuery(ctx context.Context, chatID int64
 		return c.renderSearchPrompt(ctx, chatID, state.MessageID, "❌ Запрос слишком длинный \\(макс\\. 100 символов\\)\\.")
 	}
 
-	return c.renderSearchResults(ctx, chatID, state.MessageID, text, true)
+	return c.renderSearchResults(ctx, chatID, state.MessageID, text, true, 1)
 }
 
-func (c *TelegramController) renderSearchResults(ctx context.Context, chatID int64, messageID int, query string, allowDirectExact bool) error {
+func (c *TelegramController) renderSearchResults(ctx context.Context, chatID int64, messageID int, query string, allowDirectExact bool, page int) error {
 	query = strings.TrimSpace(query)
+	if page < 1 {
+		page = 1
+	}
 	_, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
 		return err
@@ -431,7 +451,7 @@ func (c *TelegramController) renderSearchResults(ctx context.Context, chatID int
 			userID, _ := utils.GetUserIDFromCtx(userCtx)
 			order, exactErr := c.orderService.FindOrderByIDForTelegram(userCtx, userID, orderID)
 			if exactErr == nil {
-				orderState := dto.NewTelegramState(orderID, messageID, "search", query)
+				orderState := dto.NewTelegramState(orderID, messageID, "search", query, page)
 				if err := c.setUserState(ctx, chatID, orderState); err != nil {
 					return c.sendInternalError(ctx, chatID)
 				}
@@ -440,8 +460,9 @@ func (c *TelegramController) renderSearchResults(ctx context.Context, chatID int
 		}
 	}
 
-	filter := types.Filter{Limit: 20, Page: 1, Search: query}
-	resp, err := c.orderService.GetOrders(userCtx, filter, false, false)
+	filter := c.newTelegramOrderFilter("search", page)
+	filter.Search = query
+	resp, err := c.orderService.GetOrders(userCtx, filter, false, false, false)
 	if err != nil {
 		c.logger.Error("Telegram search failed", zap.Error(err), zap.Int64("chat_id", chatID))
 		return c.renderSearchPrompt(ctx, chatID, messageID, "❌ Ошибка поиска\\.")
@@ -456,5 +477,5 @@ func (c *TelegramController) renderSearchResults(ctx context.Context, chatID int
 		)
 	}
 
-	return c.renderOrderList(ctx, chatID, resp.List, "🔍 *Результаты поиска*", "", "search", query, messageID)
+	return c.renderOrderList(ctx, chatID, resp.List, resp.TotalCount, page, "🔍 *Результаты поиска*", "", "search", query, messageID)
 }

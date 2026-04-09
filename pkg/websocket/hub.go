@@ -1,11 +1,11 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
 	"time"
-	 "context"
 )
 
 // Hub управляет всеми клиентами и рассылкой сообщений

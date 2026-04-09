@@ -13,16 +13,21 @@ type TelegramState struct {
 	MessageID   int               `json:"message_id"`
 	Source      string            `json:"source,omitempty"`
 	SearchQuery string            `json:"search_query,omitempty"`
+	Page        int               `json:"page,omitempty"`
 	Changes     map[string]string `json:"changes"`
 }
 
-func NewTelegramState(orderID uint64, messageID int, source string, searchQuery string) *TelegramState {
+func NewTelegramState(orderID uint64, messageID int, source string, searchQuery string, page int) *TelegramState {
+	if page < 1 {
+		page = 1
+	}
 	return &TelegramState{
 		Mode:        "editing_order",
 		OrderID:     orderID,
 		MessageID:   messageID,
 		Source:      source,
 		SearchQuery: searchQuery,
+		Page:        page,
 		Changes:     make(map[string]string),
 	}
 }

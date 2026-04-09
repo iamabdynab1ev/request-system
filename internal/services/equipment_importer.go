@@ -290,13 +290,13 @@ func (s *EquipImportService) fuzzyFind(excelName string, dbItems []dbEnt) uint64
 
 func cleanString(in string) string {
 	in = strings.NewReplacer(
-		"Ті", "х",
-		"Т·", "ч",
-		"Т›", "к",
-		"УЇ", "у",
-		"УЈ", "и",
-		"Т“", "г",
-		"УЎ", "з",
+		"ҳ", "х",
+		"ҷ", "ч",
+		"қ", "к",
+		"ӯ", "у",
+		"ӣ", "и",
+		"ғ", "г",
+		"ӡ", "з",
 	).Replace(strings.ToLower(in))
 
 	replacer := strings.NewReplacer(

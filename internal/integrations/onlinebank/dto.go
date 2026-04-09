@@ -44,5 +44,4 @@ type OfficeDTO struct {
 	Longitude               float64 `json:"Longitude"`
 }
 
-
 func (o OfficeDTO) GetID() int { return o.ID }

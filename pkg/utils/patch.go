@@ -2,9 +2,9 @@ package utils
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
-	"strconv"
 )
 
 func SmartUpdate(dst interface{}, changes map[string]interface{}) bool {
@@ -122,7 +122,7 @@ func convertType(from interface{}, targetType reflect.Type) interface{} {
 		}
 		return nil
 	}
-	
+
 	fromVal := reflect.ValueOf(from)
 
 	// Если типы уже совпадают, возвращаем как есть
@@ -184,17 +184,17 @@ func PtrToString(val *uint64) string {
 }
 
 func convertAnyToString(v interface{}) string {
-    if s, ok := v.(string); ok {
-        return s
-    }
-    if u, ok := v.(uint64); ok {
-        return strconv.FormatUint(u, 10)
-    }
-    if u, ok := v.(uint32); ok {
-        return strconv.FormatUint(uint64(u), 10)
-    }
-    if f, ok := v.(float64); ok {
-        return strconv.FormatUint(uint64(f), 10)
-    }
-    return ""
+	if s, ok := v.(string); ok {
+		return s
+	}
+	if u, ok := v.(uint64); ok {
+		return strconv.FormatUint(u, 10)
+	}
+	if u, ok := v.(uint32); ok {
+		return strconv.FormatUint(uint64(u), 10)
+	}
+	if f, ok := v.(float64); ok {
+		return strconv.FormatUint(uint64(f), 10)
+	}
+	return ""
 }

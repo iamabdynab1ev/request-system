@@ -19,21 +19,21 @@ type User struct {
 
 	StatusID uint64 `json:"status_id" db:"status_id"`
 
-	BranchID           *uint64 `json:"branch_id" db:"branch_id"`
-	OfficeID           *uint64 `json:"office_id" db:"office_id"`
-	DepartmentID       *uint64 `json:"department_id" db:"department_id"`
-	OtdelID            *uint64 `json:"otdel_id" db:"otdel_id"`
-	PositionID         *uint64 `json:"position_id" db:"position_id"`
-	PositionIDs        []uint64 `json:"position_ids" db:"-"` 
-	OtdelIDs     []uint64 `json:"otdel_ids" db:"-"`
-	PositionName       *string `json:"position_name,omitempty" db:"position_name"`
-	BranchName         *string `json:"branch_name,omitempty" db:"branch_name"`
-	DepartmentName     *string `json:"department_name,omitempty" db:"department_name"`
-	OtdelName          *string `json:"otdel_name,omitempty" db:"otdel_name"`
-	OfficeName         *string `json:"office_name,omitempty" db:"office_name"`
-	PhotoURL           *string `json:"photo_url,omitempty" db:"photo_url"`
-	IsHead             *bool   `json:"is_head,omitempty" db:"is_head"`
-	MustChangePassword bool    `json:"must_change_password" db:"must_change_password"`
+	BranchID           *uint64  `json:"branch_id" db:"branch_id"`
+	OfficeID           *uint64  `json:"office_id" db:"office_id"`
+	DepartmentID       *uint64  `json:"department_id" db:"department_id"`
+	OtdelID            *uint64  `json:"otdel_id" db:"otdel_id"`
+	PositionID         *uint64  `json:"position_id" db:"position_id"`
+	PositionIDs        []uint64 `json:"position_ids" db:"-"`
+	OtdelIDs           []uint64 `json:"otdel_ids" db:"-"`
+	PositionName       *string  `json:"position_name,omitempty" db:"position_name"`
+	BranchName         *string  `json:"branch_name,omitempty" db:"branch_name"`
+	DepartmentName     *string  `json:"department_name,omitempty" db:"department_name"`
+	OtdelName          *string  `json:"otdel_name,omitempty" db:"otdel_name"`
+	OfficeName         *string  `json:"office_name,omitempty" db:"office_name"`
+	PhotoURL           *string  `json:"photo_url,omitempty" db:"photo_url"`
+	IsHead             *bool    `json:"is_head,omitempty" db:"is_head"`
+	MustChangePassword bool     `json:"must_change_password" db:"must_change_password"`
 
 	ExternalID   *string `json:"external_id,omitempty" db:"external_id"`
 	SourceSystem *string `json:"source_system,omitempty" db:"source_system"`

@@ -5,15 +5,15 @@ import (
 )
 
 type Equipment struct {
-	ID              uint64 `json:"id"`
-	Name            string `json:"name"`
-	Address         string `json:"address"`
+	ID              uint64  `json:"id"`
+	Name            string  `json:"name"`
+	Address         string  `json:"address"`
 	BranchID        *uint64 `json:"branch_id"`
 	OfficeID        *uint64 `json:"office_id"`
-	StatusID        uint64 `json:"status_id"`
-	EquipmentTypeID uint64 `json:"equipment_type_id"`
+	StatusID        uint64  `json:"status_id"`
+	EquipmentTypeID uint64  `json:"equipment_type_id"`
 
-	types.BaseEntity 
+	types.BaseEntity
 
 	Branch        *Branch        `db:"-"`
 	Office        *Office        `db:"-"`

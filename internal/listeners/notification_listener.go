@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv" 
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +22,6 @@ import (
 	"request-system/pkg/websocket"
 )
 
-
 type eventGroupKey struct {
 	OrderID uint64
 	TxID    string
@@ -31,10 +30,7 @@ type eventGroupKey struct {
 type eventGroup struct {
 	events []events.OrderHistoryCreatedEvent
 	timer  *time.Timer
-	
 }
-
-
 
 type NotificationListener struct {
 	notificationService   services.NotificationServiceInterface
@@ -77,7 +73,6 @@ func (l *NotificationListener) Register(bus *eventbus.Bus) {
 	l.logger.Info("NotificationListener (с группировкой) подписан на событие 'order.history.created'")
 }
 
-
 func (l *NotificationListener) handleOrderHistoryCreated(ctx context.Context, event eventbus.Event) error {
 	e, ok := event.(events.OrderHistoryCreatedEvent)
 	if !ok || e.HistoryItem.TxID == nil {
@@ -107,30 +102,28 @@ func (l *NotificationListener) handleOrderHistoryCreated(ctx context.Context, ev
 	return nil
 }
 
-
 func (l *NotificationListener) sendGroupedNotification(ctx context.Context, key eventGroupKey) {
-    l.groupsMu.Lock()
-    group, exists := l.groups[key]
-    if !exists {
-        l.groupsMu.Unlock()
-        return
-    }
-    delete(l.groups, key)
-    l.groupsMu.Unlock()
+	l.groupsMu.Lock()
+	group, exists := l.groups[key]
+	if !exists {
+		l.groupsMu.Unlock()
+		return
+	}
+	delete(l.groups, key)
+	l.groupsMu.Unlock()
 
-    if len(group.events) == 0 {
-        return
-    }
-    sort.Slice(group.events, func(i, j int) bool {
-        return group.events[i].HistoryItem.CreatedAt.Before(group.events[j].HistoryItem.CreatedAt)
-    })
+	if len(group.events) == 0 {
+		return
+	}
+	sort.Slice(group.events, func(i, j int) bool {
+		return group.events[i].HistoryItem.CreatedAt.Before(group.events[j].HistoryItem.CreatedAt)
+	})
 
-    recipients, err := l.determineRecipients(ctx, group.events)
+	recipients, err := l.determineRecipients(ctx, group.events)
 	if err != nil {
 		l.logger.Error("Не удалось определить получателей для отправки", zap.Error(err), zap.Any("key", key))
 		return
 	}
-
 
 	for _, user := range recipients {
 		message := l.formatGroupedMessage(ctx, group.events, &user)
@@ -148,7 +141,7 @@ func (l *NotificationListener) sendGroupedNotification(ctx context.Context, key 
 		payload, err := l.formatWebSocketPayload(ctx, group.events, &user)
 		if err != nil {
 			l.logger.Error("Не удалось сформировать WebSocket payload", zap.Uint64("userID", user.ID), zap.Error(err))
-			continue 
+			continue
 		}
 		if payload != nil {
 			err := l.wsNotificationService.SendNotification(user.ID, payload, "notification")
@@ -158,7 +151,6 @@ func (l *NotificationListener) sendGroupedNotification(ctx context.Context, key 
 		}
 	}
 }
-
 
 func (l *NotificationListener) determineRecipients(ctx context.Context, groupEvents []events.OrderHistoryCreatedEvent) ([]entities.User, error) {
 	if len(groupEvents) == 0 {
@@ -179,19 +171,18 @@ func (l *NotificationListener) determineRecipients(ctx context.Context, groupEve
 		userIDs[*order.ExecutorID] = struct{}{}
 	}
 	for _, e := range groupEvents {
-    if e.HistoryItem.UserID > 0 {
-        userIDs[e.HistoryItem.UserID] = struct{}{}
-    }
-    if e.HistoryItem.EventType == "DELEGATION" && e.HistoryItem.OldValue.Valid {
-        oldExecutorID, err := strconv.ParseUint(e.HistoryItem.OldValue.String, 10, 64)
-        if err == nil && oldExecutorID > 0 {
-            userIDs[oldExecutorID] = struct{}{}
-        }
-    }
-}
+		if e.HistoryItem.UserID > 0 {
+			userIDs[e.HistoryItem.UserID] = struct{}{}
+		}
+		if e.HistoryItem.EventType == "DELEGATION" && e.HistoryItem.OldValue.Valid {
+			oldExecutorID, err := strconv.ParseUint(e.HistoryItem.OldValue.String, 10, 64)
+			if err == nil && oldExecutorID > 0 {
+				userIDs[oldExecutorID] = struct{}{}
+			}
+		}
+	}
 
-
-if actor != nil {
+	if actor != nil {
 		delete(userIDs, actor.ID)
 	}
 
@@ -320,8 +311,6 @@ func (l *NotificationListener) formatGroupedMessage(ctx context.Context, events 
 
 	return sb.String()
 }
-
-
 
 func (l *NotificationListener) formatWebSocketPayload(ctx context.Context, events []events.OrderHistoryCreatedEvent, recipient *entities.User) (*websocket.NotificationPayload, error) {
 	if len(events) == 0 || recipient == nil {

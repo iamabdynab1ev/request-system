@@ -202,20 +202,20 @@ func ParseFilterFromQuery(values url.Values) types.Filter {
 
 func SuccessResponse(ctx echo.Context, body interface{}, message string, code int, total ...uint64) error {
 	response := &HTTPResponse{Status: true, Message: message}
-	
+
 	// Проверяем наличие параметра withPagination в URL
 	withPagination, _ := strconv.ParseBool(ctx.QueryParam("withPagination"))
-	
+
 	if withPagination && len(total) > 0 {
 		filter := ParseFilterFromQuery(ctx.Request().URL.Query())
-		
+
 		totalPages := 0
 		if filter.Limit > 0 {
 			// ПРАВИЛЬНАЯ ФОРМУЛА:
 			// (Всего + Лимит - 1) / Лимит
 			totalPages = int((total[0] + uint64(filter.Limit) - 1) / uint64(filter.Limit))
 		}
-		
+
 		pagination := map[string]interface{}{
 			"total_count": total[0],
 			"page":        filter.Page,
@@ -226,7 +226,7 @@ func SuccessResponse(ctx echo.Context, body interface{}, message string, code in
 	} else {
 		response.Body = body
 	}
-	
+
 	return ctx.JSON(code, response)
 }
 func ErrorResponse(c echo.Context, err error, logger *zap.Logger) error {

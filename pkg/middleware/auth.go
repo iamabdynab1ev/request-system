@@ -106,8 +106,8 @@ func (m *AuthMiddleware) AuthorizeAny(requiredPermissions ...string) echo.Middle
 			}
 
 			userID := c.Request().Context().Value(contextkeys.UserIDKey)
-			m.logger.Warn("Доступ запрещен (AuthorizeAny)", 
-				zap.Any("userID", userID), 
+			m.logger.Warn("Доступ запрещен (AuthorizeAny)",
+				zap.Any("userID", userID),
 				zap.Strings("required", requiredPermissions),
 				zap.Strings("actual", userPermissions),
 			)
@@ -141,8 +141,8 @@ func (m *AuthMiddleware) AuthorizeAll(requiredPermissions ...string) echo.Middle
 
 			if len(missingPermissions) > 0 {
 				userID := c.Request().Context().Value(contextkeys.UserIDKey)
-				m.logger.Warn("Доступ запрещен (AuthorizeAll)", 
-					zap.Any("userID", userID), 
+				m.logger.Warn("Доступ запрещен (AuthorizeAll)",
+					zap.Any("userID", userID),
 					zap.Strings("missing", missingPermissions),
 				)
 				return utils.ErrorResponse(c, apperrors.ErrForbidden, m.logger)

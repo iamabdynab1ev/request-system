@@ -30,13 +30,17 @@ func (c *TelegramController) handleSelectOrderAction(ctx context.Context, chatID
 
 	source := ""
 	searchQuery := ""
+	page := 1
 	currentState, err := c.getUserState(ctx, chatID)
 	if err == nil && currentState != nil && currentState.MessageID == mid {
 		source = currentState.Source
 		searchQuery = currentState.SearchQuery
+		if currentState.Page > 0 {
+			page = currentState.Page
+		}
 	}
 
-	state := dto.NewTelegramState(orderID, mid, source, searchQuery)
+	state := dto.NewTelegramState(orderID, mid, source, searchQuery, page)
 	if err := c.setUserState(ctx, chatID, state); err != nil {
 		return c.sendInternalError(ctx, chatID)
 	}
@@ -48,7 +52,7 @@ func (c *TelegramController) handleSaveChanges(ctx context.Context, chatID int64
 	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
 		c.logger.Error("Ошибка получения контекста пользователя при сохранении", zap.Error(err), zap.Int64("chat_id", chatID))
-		return c.sendInternalError(ctx, chatID)
+		return c.handlePrepareUserContextError(ctx, chatID, err)
 	}
 
 	state, err := c.getUserState(ctx, chatID)
@@ -160,20 +164,27 @@ func (c *TelegramController) returnToStateSource(ctx context.Context, chatID int
 		return c.handleMyTasksCommand(ctx, chatID, messageID)
 	}
 
+	page := state.Page
+	if page < 1 {
+		page = 1
+	}
+
 	switch state.Source {
+	case "all":
+		return c.handleAllOrdersPage(ctx, chatID, page, messageID)
 	case "assigned":
-		return c.handleAssignedToMeCommand(ctx, chatID, messageID)
+		return c.handleAssignedToMePage(ctx, chatID, page, messageID)
 	case "today":
-		return c.handleTodayTasksCommand(ctx, chatID, messageID)
+		return c.handleTodayTasksPage(ctx, chatID, page, messageID)
 	case "overdue":
-		return c.handleOverdueTasksCommand(ctx, chatID, messageID)
+		return c.handleOverdueTasksPage(ctx, chatID, page, messageID)
 	case "search":
 		if strings.TrimSpace(state.SearchQuery) != "" {
-			return c.renderSearchResults(ctx, chatID, messageID, state.SearchQuery, false)
+			return c.renderSearchResults(ctx, chatID, messageID, state.SearchQuery, false, page)
 		}
 		return c.handleSearchStart(ctx, chatID, messageID)
 	default:
-		return c.handleMyTasksCommand(ctx, chatID, messageID)
+		return c.handleMyTasksPage(ctx, chatID, page, messageID)
 	}
 }
 
@@ -192,12 +203,18 @@ func (c *TelegramController) handleCallbackQuery(ctx context.Context, query *Tel
 	case "main_menu":
 		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 		return c.sendMainMenu(ctx, chatID)
+	case "main_all":
+		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
+		return c.handleAllOrdersCommand(ctx, chatID, msgID)
 	case "main_my_tasks":
 		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 		return c.handleMyTasksCommand(ctx, chatID, msgID)
 	case "main_assigned":
 		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 		return c.handleAssignedToMeCommand(ctx, chatID, msgID)
+	case "main_involved":
+		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
+		return c.handleInvolvedCommand(ctx, chatID, msgID)
 	case "main_today":
 		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 		return c.handleTodayTasksCommand(ctx, chatID, msgID)
@@ -216,6 +233,15 @@ func (c *TelegramController) handleCallbackQuery(ctx context.Context, query *Tel
 	case "main_help":
 		_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 		return c.handleHelpCommand(ctx, chatID)
+	case "list_page":
+		page := 1
+		if pageRaw, ok := data["page"].(float64); ok {
+			page = int(pageRaw)
+		}
+		return c.handleListPageAction(ctx, chatID, msgID, page)
+	case "list_page_info":
+		_ = c.answerCallback(ctx, "Текущая страница")
+		return nil
 	case "unlink_prompt":
 		return c.handleUnlinkCommand(ctx, chatID)
 	case "unlink_confirm":
@@ -278,7 +304,7 @@ func (c *TelegramController) sendEditMenu(ctx context.Context, chatID int64, mes
 
 	user, userCtx, err := c.prepareUserContext(ctx, chatID)
 	if err != nil {
-		return c.sendInternalError(ctx, chatID)
+		return c.handlePrepareUserContextError(ctx, chatID, err)
 	}
 
 	perms, _ := utils.GetPermissionsMapFromCtx(userCtx)

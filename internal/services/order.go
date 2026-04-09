@@ -23,6 +23,7 @@ import (
 	"request-system/internal/repositories"
 
 	pkgconstants "request-system/pkg/constants"
+	"request-system/pkg/contextkeys"
 	apperrors "request-system/pkg/errors"
 	"request-system/pkg/eventbus"
 	"request-system/pkg/filestorage"
@@ -35,8 +36,29 @@ type ValidationRule struct {
 	ErrorMessage string
 }
 
+type orderFieldPermissionSpec struct {
+	Permission string
+	Label      string
+}
+
 var OrderValidationRules = map[string][]string{
 	"EQUIPMENT": {"equipment_id", "equipment_type_id", "priority_id"},
+}
+
+var orderUpdateFieldPermissions = map[string]orderFieldPermissionSpec{
+	"name":              {Permission: authz.OrdersUpdateName, Label: "название заявки"},
+	"address":           {Permission: authz.OrdersUpdateAddress, Label: "адрес"},
+	"department_id":     {Permission: authz.OrdersUpdateDepartmentID, Label: "департамент"},
+	"otdel_id":          {Permission: authz.OrdersUpdateOtdelID, Label: "отдел"},
+	"branch_id":         {Permission: authz.OrdersUpdateBranchID, Label: "филиал"},
+	"office_id":         {Permission: authz.OrdersUpdateOfficeID, Label: "офис"},
+	"equipment_id":      {Permission: authz.OrdersUpdateEquipmentID, Label: "оборудование"},
+	"equipment_type_id": {Permission: authz.OrdersUpdateEquipmentTypeID, Label: "тип оборудования"},
+	"executor_id":       {Permission: authz.OrdersUpdateExecutorID, Label: "исполнитель"},
+	"status_id":         {Permission: authz.OrdersUpdateStatusID, Label: "статус"},
+	"priority_id":       {Permission: authz.OrdersUpdatePriorityID, Label: "приоритет"},
+	"duration":          {Permission: authz.OrdersUpdateDuration, Label: "срок"},
+	"comment":           {Permission: authz.OrdersUpdateComment, Label: "комментарий"},
 }
 
 var ValidationRegistry = map[string][]ValidationRule{
@@ -49,7 +71,7 @@ var ValidationRegistry = map[string][]ValidationRule{
 
 type OrderServiceInterface interface {
 	CreateOrder(ctx context.Context, createDTO dto.CreateOrderDTO, file *multipart.FileHeader) (*dto.OrderResponseDTO, error)
-	GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool, onlyAssigned bool) (*dto.OrderListResponseDTO, error)
+	GetOrders(ctx context.Context, filter types.Filter, onlyCreated bool, onlyAssigned bool, onlyInvolved bool) (*dto.OrderListResponseDTO, error)
 	FindOrderByID(ctx context.Context, orderID uint64) (*dto.OrderResponseDTO, error)
 	UpdateOrder(ctx context.Context, orderID uint64, updateDTO dto.UpdateOrderDTO, file *multipart.FileHeader, explicitFields map[string]interface{}) (*dto.OrderResponseDTO, error)
 	DeleteOrder(ctx context.Context, orderID uint64) error
@@ -115,17 +137,43 @@ func NewOrderService(
 	}
 }
 
-func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyParticipant bool, onlyAssigned bool) (*dto.OrderListResponseDTO, error) {
+func (s *OrderService) resolveActorFromContext(ctx context.Context, userID uint64) (*entities.User, error) {
+	if actor, ok := ctx.Value(contextkeys.UserEntityKey).(*entities.User); ok && actor != nil && actor.ID == userID {
+		return actor, nil
+	}
+
+	return s.userRepo.FindUserByID(ctx, userID)
+}
+
+func (s *OrderService) resolvePermissionsMap(ctx context.Context, userID uint64) (map[string]bool, error) {
+	if permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx); err == nil && permissionsMap != nil {
+		return permissionsMap, nil
+	}
+
+	permissions, err := s.authPermissionService.GetAllUserPermissions(ctx, userID)
+	if err != nil {
+		return nil, apperrors.ErrUnauthorized
+	}
+
+	permMap := make(map[string]bool, len(permissions))
+	for _, p := range permissions {
+		permMap[p] = true
+	}
+
+	return permMap, nil
+}
+
+func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyCreated bool, onlyAssigned bool, onlyInvolved bool) (*dto.OrderListResponseDTO, error) {
 	// 1. Получаем актора
 	userID, err := utils.GetUserIDFromCtx(ctx)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
-	permissionsMap, err := utils.GetPermissionsMapFromCtx(ctx)
+	permissionsMap, err := s.resolvePermissionsMap(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUnauthorized
 	}
-	actor, err := s.userRepo.FindUserByID(ctx, userID)
+	actor, err := s.resolveActorFromContext(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
@@ -169,13 +217,27 @@ func (s *OrderService) GetOrders(ctx context.Context, filter types.Filter, onlyP
 		}
 	}
 
-	if onlyParticipant {
+	if onlyCreated {
 		securityBuilder = append(securityBuilder, sq.Eq{"o.user_id": actor.ID})
 	}
 
 	// Назначены мне — только исполнитель
 	if onlyAssigned {
 		securityBuilder = append(securityBuilder, sq.Eq{"o.executor_id": actor.ID})
+	}
+
+	if onlyInvolved {
+		securityBuilder = append(
+			securityBuilder,
+			sq.Expr(
+				`o.id IN (SELECT DISTINCT order_id FROM order_history WHERE user_id = ?)
+				 AND o.user_id <> ?
+				 AND (o.executor_id IS NULL OR o.executor_id <> ?)`,
+				actor.ID,
+				actor.ID,
+				actor.ID,
+			),
+		)
 	}
 
 	// 5. Запрос в БД
@@ -233,13 +295,12 @@ func (s *OrderService) FindOrderByIDForTelegram(ctx context.Context, userID uint
 	}
 
 	// Fast auth check
-	permissions, _ := s.authPermissionService.GetAllUserPermissions(ctx, userID)
-	permMap := make(map[string]bool)
-	for _, p := range permissions {
-		permMap[p] = true
+	permMap, err := s.resolvePermissionsMap(ctx, userID)
+	if err != nil {
+		return nil, apperrors.ErrUnauthorized
 	}
 
-	user, err := s.userRepo.FindUserByID(ctx, userID)
+	user, err := s.resolveActorFromContext(ctx, userID)
 	if err != nil {
 		s.logger.Error("Пользователь не найден при проверке прав через Telegram",
 			zap.Uint64("userID", userID),
@@ -414,6 +475,9 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 	if !authz.CanDo(authz.OrdersUpdate, *authCtx) {
 		return nil, apperrors.ErrForbidden
 	}
+	if err := s.validateUpdateFieldPermissions(authCtx, explicitFields, file); err != nil {
+		return nil, err
+	}
 
 	// 2. Валидация Комментария
 	orderTypeCode, _ := s.orderTypeRepo.FindCodeByID(ctx, *currentOrder.OrderTypeID)
@@ -446,18 +510,47 @@ func (s *OrderService) UpdateOrder(ctx context.Context, orderID uint64, updateDT
 			utils.DiffPtr(currentOrder.BranchID, updated.BranchID) ||
 			utils.DiffPtr(currentOrder.OfficeID, updated.OfficeID)
 
-		if structureChanged {
-			s.logger.Info("Изменение структуры -> Поиск исполнителя", zap.Uint64("order_id", orderID))
+		explicitExecutorSelected := false
+		if rawExecutor, exists := explicitFields["executor_id"]; exists && rawExecutor != nil {
+			explicitExecutorSelected = true
+		}
+
+		if explicitExecutorSelected {
+			if !authz.CanDo(authz.OrdersUpdateExecutorID, *authCtx) {
+				return apperrors.NewHttpError(http.StatusForbidden, "У вас нет прав назначать исполнителя вручную.", nil, nil)
+			}
+
 			orderCtx := OrderContext{
+				OrderTypeID:  utils.SafeDeref(updated.OrderTypeID),
 				DepartmentID: utils.SafeDeref(updated.DepartmentID),
 				OtdelID:      updated.OtdelID,
 				BranchID:     updated.BranchID,
 				OfficeID:     updated.OfficeID,
 			}
-			res, err := s.ruleEngine.ResolveExecutor(ctx, tx, orderCtx, nil)
+
+			routingResult, err := s.ruleEngine.ResolveExecutor(ctx, tx, orderCtx, updateDTO.ExecutorID)
 			if err != nil {
-				updated.ExecutorID = nil
-			} else {
+				return err
+			}
+			updated.ExecutorID = &routingResult.Executor.ID
+			fieldsChanged = true
+		}
+
+		if structureChanged {
+			s.logger.Info("Изменение структуры -> Поиск исполнителя", zap.Uint64("order_id", orderID))
+			orderCtx := OrderContext{
+				OrderTypeID:  utils.SafeDeref(updated.OrderTypeID),
+				DepartmentID: utils.SafeDeref(updated.DepartmentID),
+				OtdelID:      updated.OtdelID,
+				BranchID:     updated.BranchID,
+				OfficeID:     updated.OfficeID,
+			}
+
+			if !explicitExecutorSelected {
+				res, err := s.ruleEngine.ResolveExecutor(ctx, tx, orderCtx, nil)
+				if err != nil {
+					return s.wrapExecutorResolutionError(err, &updated)
+				}
 				updated.ExecutorID = &res.Executor.ID
 			}
 			fieldsChanged = true
@@ -842,7 +935,7 @@ func (s *OrderService) buildAuthzContext(ctx context.Context, orderID uint64) (*
 		if err != nil {
 			return nil, apperrors.ErrUnauthorized
 		}
-		actor, err := s.userRepo.FindUserByID(ctx, userID)
+		actor, err := s.resolveActorFromContext(ctx, userID)
 		if err != nil {
 			return nil, apperrors.ErrUserNotFound
 		}
@@ -864,7 +957,7 @@ func (s *OrderService) buildAuthzContextWithTarget(ctx context.Context, t *entit
 	if err != nil {
 		return nil, apperrors.ErrUnauthorized
 	}
-	actor, err := s.userRepo.FindUserByID(ctx, userID)
+	actor, err := s.resolveActorFromContext(ctx, userID)
 	if err != nil {
 		return nil, apperrors.ErrUserNotFound
 	}
@@ -876,9 +969,6 @@ func (s *OrderService) buildAuthzContextWithTarget(ctx context.Context, t *entit
 	return ctxAuth, nil
 }
 
-// calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
-// calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
-// calculateMetrics вызывается внутри UpdateOrder, чтобы обновить статистику времени
 func (s *OrderService) calculateMetrics(ctx context.Context, newOrder, oldOrder *entities.Order, dto dto.UpdateOrderDTO, actorID uint64, now time.Time) {
 	newStatus, _ := s.statusRepo.FindStatus(ctx, newOrder.StatusID)
 	newCode := ""
@@ -1015,6 +1105,57 @@ func (s *OrderService) invalidateDashboardCache(ctx context.Context) {
 	}
 	if _, err := s.cacheRepo.Incr(ctx, pkgconstants.DashboardCacheVersionKey); err != nil {
 		s.logger.Warn("не удалось обновить версию кеша дашборда", zap.Error(err))
+	}
+}
+
+func (s *OrderService) wrapExecutorResolutionError(err error, order *entities.Order) error {
+	var httpErr *apperrors.HttpError
+	if errors.As(err, &httpErr) && httpErr.Code == http.StatusBadRequest {
+		return apperrors.NewBadRequestError(buildMissingResponsibleError(order))
+	}
+	return err
+}
+
+func (s *OrderService) validateUpdateFieldPermissions(authCtx *authz.Context, explicitFields map[string]interface{}, file *multipart.FileHeader) error {
+	for fieldName, spec := range orderUpdateFieldPermissions {
+		if _, exists := explicitFields[fieldName]; !exists {
+			continue
+		}
+		if authz.CanDo(spec.Permission, *authCtx) {
+			continue
+		}
+		return apperrors.NewHttpError(
+			http.StatusForbidden,
+			fmt.Sprintf("У вас нет прав изменять поле «%s».", spec.Label),
+			nil,
+			map[string]interface{}{"field": fieldName, "permission": spec.Permission},
+		)
+	}
+
+	if file != nil && !authz.CanDo(authz.OrdersUpdateFile, *authCtx) {
+		return apperrors.NewHttpError(
+			http.StatusForbidden,
+			"У вас нет прав добавлять файл к заявке.",
+			nil,
+			map[string]interface{}{"field": "file", "permission": authz.OrdersUpdateFile},
+		)
+	}
+
+	return nil
+}
+
+func buildMissingResponsibleError(order *entities.Order) string {
+	switch {
+	case order.DepartmentID != nil:
+		return "В выбранном департаменте не найден руководитель или заместитель. Выберите исполнителя вручную или настройте маршрутизацию."
+	case order.OtdelID != nil:
+		return "В выбранном отделе не найден руководитель или заместитель. Выберите исполнителя вручную или настройте маршрутизацию."
+	case order.BranchID != nil:
+		return "В выбранном филиале не найден руководитель или заместитель. Выберите исполнителя вручную или настройте маршрутизацию."
+	case order.OfficeID != nil:
+		return "В выбранном офисе не найден руководитель или заместитель. Выберите исполнителя вручную или настройте маршрутизацию."
+	default:
+		return "Для выбранной структуры не найден ответственный руководитель. Выберите исполнителя вручную или настройте маршрутизацию."
 	}
 }
 

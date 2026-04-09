@@ -3,6 +3,7 @@ package telegram
 const (
 	menuMyTasksButton   = "📋 Мои заявки"
 	menuAssignedButton  = "👨‍💼 Назначены мне"
+	menuInvolvedButton  = "🗂 Участвовал"
 	menuTodayButton     = "⏰ На сегодня"
 	menuOverdueButton   = "🔴 Просроченные"
 	menuStatsButton     = "📊 Статистика"
@@ -20,6 +21,7 @@ func isTelegramMenuButton(text string) bool {
 	switch text {
 	case menuMyTasksButton,
 		menuAssignedButton,
+		menuInvolvedButton,
 		menuTodayButton,
 		menuOverdueButton,
 		menuStatsButton,

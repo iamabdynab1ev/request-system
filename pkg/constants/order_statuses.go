@@ -32,7 +32,6 @@ func IsFinalStatus(code string) bool {
 	return false
 }
 
-
 const (
 	OrderTypeEquipment      = "EQUIPMENT"
 	OrderTypeAdministrative = "ADMINISTRATIVE"

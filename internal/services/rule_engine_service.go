@@ -61,11 +61,11 @@ func NewRuleEngineService(
 
 // ResolveExecutor - Точка входа для поиска исполнителя
 func (s *RuleEngineService) ResolveExecutor(ctx context.Context, tx pgx.Tx, orderCtx OrderContext, explicitExecutorID *uint64) (*RoutingResult, error) {
-	// 1. Если исполнитель выбран вручную — берем его (тут без изменений)
+	// 1. Если исполнитель выбран вручную — валидируем его по структуре и берем его
 	if explicitExecutorID != nil {
-		user, err := s.userRepo.FindUserByIDInTx(ctx, tx, *explicitExecutorID)
+		user, err := s.validateExplicitExecutor(ctx, tx, *explicitExecutorID, orderCtx)
 		if err != nil {
-			return nil, apperrors.NewHttpError(http.StatusBadRequest, "Исполнитель не найден", err, nil)
+			return nil, err
 		}
 		return &RoutingResult{Executor: *user, StatusID: 0, RuleFound: false}, nil
 	}
@@ -189,7 +189,7 @@ func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d
 		officeID = d.OfficeID
 
 	} else {
-		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Не выбрано подразделение.", nil, nil)
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Для заявки не выбрана структура. Укажите подразделение или выберите исполнителя вручную.", nil, nil)
 	}
 
 	// 3. ПОИСК В БАЗЕ (С ПОДДЕРЖКОЙ ЗАМЕСТИТЕЛЯ)
@@ -259,8 +259,70 @@ func (s *RuleEngineService) resolveByHierarchy(ctx context.Context, tx pgx.Tx, d
 		}
 	}
 
-	return nil, apperrors.NewHttpError(http.StatusBadRequest,
-		fmt.Sprintf("В подразделении '%s' не найден ни '%s', ни '%s'.", searchScopeName, roleName1, roleName2), nil, nil)
+	return nil, apperrors.NewHttpError(
+		http.StatusBadRequest,
+		fmt.Sprintf("В подразделении '%s' не найден ни '%s', ни '%s'. Выберите исполнителя вручную или настройте маршрутизацию.", searchScopeName, roleName1, roleName2),
+		nil,
+		nil,
+	)
+}
+
+func (s *RuleEngineService) validateExplicitExecutor(ctx context.Context, tx pgx.Tx, executorID uint64, orderCtx OrderContext) (*entities.User, error) {
+	user, err := s.userRepo.FindUserByIDInTx(ctx, tx, executorID)
+	if err != nil {
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Выбранный исполнитель не найден.", err, nil)
+	}
+
+	if !strings.EqualFold(user.StatusCode, "ACTIVE") {
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, "Выбранный исполнитель неактивен. Выберите другого сотрудника.", nil, nil)
+	}
+
+	if !matchesExecutorToStructure(user, orderCtx) {
+		return nil, apperrors.NewHttpError(http.StatusBadRequest, buildExecutorStructureError(orderCtx), nil, nil)
+	}
+
+	return user, nil
+}
+
+func matchesExecutorToStructure(user *entities.User, orderCtx OrderContext) bool {
+	if orderCtx.DepartmentID != 0 {
+		return user.DepartmentID != nil && *user.DepartmentID == orderCtx.DepartmentID
+	}
+
+	if orderCtx.OtdelID != nil {
+		if user.OtdelID == nil || *user.OtdelID != *orderCtx.OtdelID {
+			return false
+		}
+		if orderCtx.BranchID != nil {
+			return user.BranchID != nil && *user.BranchID == *orderCtx.BranchID
+		}
+		return true
+	}
+
+	if orderCtx.BranchID != nil {
+		return user.BranchID != nil && *user.BranchID == *orderCtx.BranchID
+	}
+
+	if orderCtx.OfficeID != nil {
+		return user.OfficeID != nil && *user.OfficeID == *orderCtx.OfficeID
+	}
+
+	return true
+}
+
+func buildExecutorStructureError(orderCtx OrderContext) string {
+	switch {
+	case orderCtx.DepartmentID != 0:
+		return "Выбранный исполнитель не относится к выбранному департаменту."
+	case orderCtx.OtdelID != nil:
+		return "Выбранный исполнитель не относится к выбранному отделу."
+	case orderCtx.BranchID != nil:
+		return "Выбранный исполнитель не относится к выбранному филиалу."
+	case orderCtx.OfficeID != nil:
+		return "Выбранный исполнитель не относится к выбранному офису."
+	default:
+		return "Выбранный исполнитель не соответствует структуре заявки."
+	}
 }
 func (s *RuleEngineService) findUserByPositionAndStructure(ctx context.Context, tx pgx.Tx, posID int, ctxData OrderContext) (*entities.User, error) {
 	positionID := uint64(posID)
