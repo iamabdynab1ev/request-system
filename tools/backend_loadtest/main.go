@@ -4,24 +4,29 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"request-system/pkg/service"
+
 	"github.com/joho/godotenv"
+	"go.uber.org/zap"
 )
 
 type config struct {
 	URL         string
 	Method      string
-	Token       string
+	Tokens      []string
 	ContentType string
 	Body        string
 	Requests    int
@@ -39,7 +44,11 @@ type result struct {
 func main() {
 	_ = godotenv.Load()
 
-	cfg := parseFlags()
+	cfg, err := parseFlags()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	client := &http.Client{
 		Timeout: cfg.Timeout,
 		Transport: &http.Transport{
@@ -53,10 +62,13 @@ func main() {
 	fmt.Printf("Requests: %d\n", cfg.Requests)
 	fmt.Printf("Concurrency: %d\n", cfg.Concurrency)
 	fmt.Printf("Timeout: %s\n", cfg.Timeout)
-	if strings.TrimSpace(cfg.Token) != "" {
-		fmt.Println("Authorization: Bearer enabled")
-	} else {
+	switch len(cfg.Tokens) {
+	case 0:
 		fmt.Println("Authorization: disabled")
+	case 1:
+		fmt.Println("Authorization: Bearer enabled (single token)")
+	default:
+		fmt.Printf("Authorization: Bearer pool enabled (%d tokens)\n", len(cfg.Tokens))
 	}
 	fmt.Println()
 
@@ -75,7 +87,7 @@ func main() {
 					return
 				}
 
-				results <- runOnce(client, cfg)
+				results <- runOnce(client, cfg, index-1)
 			}
 		}()
 	}
@@ -86,16 +98,25 @@ func main() {
 	report(cfg, time.Since(start), results)
 }
 
-func parseFlags() config {
+func parseFlags() (config, error) {
 	defaultBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("SERVER_BASE_URL")), "/")
 	if defaultBaseURL == "" {
 		defaultBaseURL = "https://localhost:8091"
 	}
 
 	cfg := config{}
+	var singleToken string
+	var tokensRaw string
+	var tokensFile string
+	var userIDsRaw string
+	var userIDsFile string
 	flag.StringVar(&cfg.URL, "url", defaultBaseURL+"/api/order?withPagination=true&page=1&limit=50", "Target API URL")
 	flag.StringVar(&cfg.Method, "method", http.MethodGet, "HTTP method")
-	flag.StringVar(&cfg.Token, "token", strings.TrimSpace(os.Getenv("LOADTEST_BEARER_TOKEN")), "Bearer token")
+	flag.StringVar(&singleToken, "token", strings.TrimSpace(os.Getenv("LOADTEST_BEARER_TOKEN")), "Single Bearer token")
+	flag.StringVar(&tokensRaw, "tokens", strings.TrimSpace(os.Getenv("LOADTEST_BEARER_TOKENS")), "Comma-separated Bearer tokens")
+	flag.StringVar(&tokensFile, "tokens-file", strings.TrimSpace(os.Getenv("LOADTEST_BEARER_TOKENS_FILE")), "Path to file with one Bearer token per line")
+	flag.StringVar(&userIDsRaw, "user-ids", "", "Comma-separated user IDs for local JWT generation")
+	flag.StringVar(&userIDsFile, "user-ids-file", "", "Path to file with one user ID per line for local JWT generation")
 	flag.StringVar(&cfg.ContentType, "content-type", "application/json", "Request Content-Type")
 	flag.StringVar(&cfg.Body, "body", "", "Raw request body")
 	flag.IntVar(&cfg.Requests, "requests", 200, "Total request count")
@@ -115,10 +136,27 @@ func parseFlags() config {
 		panic("concurrency must be > 0")
 	}
 
-	return cfg
+	useGeneratedTokens := strings.TrimSpace(userIDsRaw) != "" || strings.TrimSpace(userIDsFile) != ""
+
+	var tokens []string
+	var err error
+	if useGeneratedTokens {
+		tokens, err = loadGeneratedTokens(userIDsRaw, userIDsFile)
+		if err != nil {
+			return config{}, err
+		}
+	} else {
+		tokens, err = loadTokens(singleToken, tokensRaw, tokensFile)
+		if err != nil {
+			return config{}, err
+		}
+	}
+	cfg.Tokens = tokens
+
+	return cfg, nil
 }
 
-func runOnce(client *http.Client, cfg config) result {
+func runOnce(client *http.Client, cfg config, requestIndex int) result {
 	var body io.Reader
 	if cfg.Body != "" {
 		body = bytes.NewBufferString(cfg.Body)
@@ -131,8 +169,8 @@ func runOnce(client *http.Client, cfg config) result {
 	if cfg.ContentType != "" && cfg.Body != "" {
 		req.Header.Set("Content-Type", cfg.ContentType)
 	}
-	if strings.TrimSpace(cfg.Token) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.Token))
+	if token := cfg.tokenFor(requestIndex); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	reqStart := time.Now()
@@ -145,6 +183,183 @@ func runOnce(client *http.Client, cfg config) result {
 	_ = resp.Body.Close()
 
 	return result{statusCode: resp.StatusCode, latency: latency}
+}
+
+func (cfg config) tokenFor(requestIndex int) string {
+	if len(cfg.Tokens) == 0 {
+		return ""
+	}
+	if len(cfg.Tokens) == 1 {
+		return cfg.Tokens[0]
+	}
+	if requestIndex < 0 {
+		requestIndex = 0
+	}
+	return cfg.Tokens[requestIndex%len(cfg.Tokens)]
+}
+
+func loadTokens(singleToken, tokensRaw, tokensFile string) ([]string, error) {
+	tokens := make([]string, 0, 8)
+	tokens = appendTokens(tokens, strings.Split(tokensRaw, ",")...)
+
+	if strings.TrimSpace(tokensFile) != "" {
+		fileTokens, err := loadTokensFromFile(tokensFile)
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, fileTokens...)
+	}
+
+	if len(tokens) == 0 {
+		tokens = appendTokens(tokens, singleToken)
+	}
+
+	return dedupeTokens(tokens), nil
+}
+
+func loadGeneratedTokens(userIDsRaw, userIDsFile string) ([]string, error) {
+	userIDs := make([]uint64, 0, 8)
+
+	parsedUserIDs, err := parseUserIDs(strings.Split(userIDsRaw, ",")...)
+	if err != nil {
+		return nil, err
+	}
+	userIDs = append(userIDs, parsedUserIDs...)
+
+	if strings.TrimSpace(userIDsFile) != "" {
+		fileUserIDs, err := loadUserIDsFromFile(userIDsFile)
+		if err != nil {
+			return nil, err
+		}
+		userIDs = append(userIDs, fileUserIDs...)
+	}
+
+	userIDs = dedupeUserIDs(userIDs)
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+
+	secretKey := strings.TrimSpace(os.Getenv("JWT_SECRET_KEY"))
+	if secretKey == "" {
+		return nil, errors.New("generate tokens: JWT_SECRET_KEY is not set")
+	}
+
+	jwtSvc := service.NewJWTService(secretKey, 24*time.Hour, 30*24*time.Hour, zap.NewNop())
+	tokens := make([]string, 0, len(userIDs))
+	for _, userID := range userIDs {
+		accessToken, _, err := jwtSvc.GenerateTokens(userID, 0, jwtSvc.GetAccessTokenTTL(), jwtSvc.GetRefreshTokenTTL())
+		if err != nil {
+			return nil, fmt.Errorf("generate tokens: user_id=%d: %w", userID, err)
+		}
+		tokens = append(tokens, accessToken)
+	}
+
+	return tokens, nil
+}
+
+func loadTokensFromFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load tokens file: %w", err)
+	}
+
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	tokens := make([]string, 0, len(lines))
+	for i, line := range lines {
+		token := strings.TrimSpace(strings.TrimPrefix(line, "\uFEFF"))
+		if token == "" || strings.HasPrefix(token, "#") {
+			continue
+		}
+		if strings.Contains(token, " ") {
+			return nil, fmt.Errorf("load tokens file: line %d contains spaces", i+1)
+		}
+		tokens = append(tokens, token)
+	}
+
+	if len(tokens) == 0 {
+		return nil, errors.New("load tokens file: no valid tokens found")
+	}
+
+	return tokens, nil
+}
+
+func loadUserIDsFromFile(path string) ([]uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load user ids file: %w", err)
+	}
+
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	userIDs, err := parseUserIDs(lines...)
+	if err != nil {
+		return nil, fmt.Errorf("load user ids file: %w", err)
+	}
+	if len(userIDs) == 0 {
+		return nil, errors.New("load user ids file: no valid user IDs found")
+	}
+
+	return userIDs, nil
+}
+
+func appendTokens(tokens []string, rawTokens ...string) []string {
+	for _, token := range rawTokens {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens
+}
+
+func dedupeTokens(tokens []string) []string {
+	if len(tokens) <= 1 {
+		return tokens
+	}
+
+	seen := make(map[string]struct{}, len(tokens))
+	deduped := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		deduped = append(deduped, token)
+	}
+	return deduped
+}
+
+func parseUserIDs(values ...string) ([]uint64, error) {
+	userIDs := make([]uint64, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(strings.TrimPrefix(value, "\uFEFF"))
+		if value == "" || strings.HasPrefix(value, "#") {
+			continue
+		}
+		userID, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid user id %q: %w", value, err)
+		}
+		userIDs = append(userIDs, userID)
+	}
+	return userIDs, nil
+}
+
+func dedupeUserIDs(userIDs []uint64) []uint64 {
+	if len(userIDs) <= 1 {
+		return userIDs
+	}
+
+	seen := make(map[uint64]struct{}, len(userIDs))
+	deduped := make([]uint64, 0, len(userIDs))
+	for _, userID := range userIDs {
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		deduped = append(deduped, userID)
+	}
+	return deduped
 }
 
 func report(cfg config, elapsed time.Duration, results <-chan result) {

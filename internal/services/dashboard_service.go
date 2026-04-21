@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,6 +66,7 @@ type DashboardService struct {
 	cache    repositories.CacheRepositoryInterface
 	logger   *zap.Logger
 	flight   singleflight.Group
+	workers  int
 }
 
 type dashboardRequest struct {
@@ -84,6 +87,7 @@ func NewDashboardService(
 		userRepo: userRepo,
 		cache:    cache,
 		logger:   logger,
+		workers:  loadDashboardWorkerLimit(),
 	}
 }
 
@@ -114,45 +118,7 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context, filter dto.Das
 	}
 
 	securityCondition := resolveDashboardSecurity(&authContext, actor, &req)
-	cacheVersion := s.loadDashboardCacheVersion(ctx)
-	cacheKey, err := buildDashboardCacheKey(userID, actor, permissionsMap, req, cacheVersion)
-	if err != nil {
-		s.logger.Warn("dashboard cache key build failed", zap.Uint64("user_id", userID), zap.Error(err))
-		cacheKey = ""
-	}
-
-	if cacheKey != "" {
-		if cached, cacheErr := s.readDashboardFromCache(ctx, cacheKey); cacheErr == nil {
-			return cached, nil
-		}
-	}
-
-	loadFn := func() (*dto.DashboardStatsDTO, error) {
-		result, loadErr := s.loadDashboardStats(ctx, req, securityCondition)
-		if loadErr != nil {
-			return nil, loadErr
-		}
-		if cacheKey != "" {
-			s.writeDashboardToCache(ctx, cacheKey, result)
-		}
-		return result, nil
-	}
-
-	if cacheKey == "" {
-		return loadFn()
-	}
-
-	value, err, _ := s.flight.Do(cacheKey, func() (interface{}, error) {
-		if cached, cacheErr := s.readDashboardFromCache(ctx, cacheKey); cacheErr == nil {
-			return cached, nil
-		}
-		return loadFn()
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return value.(*dto.DashboardStatsDTO), nil
+	return s.loadDashboardWithCache(ctx, userID, actor, permissionsMap, req, securityCondition)
 }
 
 func (s *DashboardService) loadDashboardStats(ctx context.Context, req dashboardRequest, securityCondition sq.Sqlizer) (*dto.DashboardStatsDTO, error) {
@@ -172,12 +138,12 @@ func (s *DashboardService) loadDashboardStats(ctx context.Context, req dashboard
 	)
 
 	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(4)
+	group.SetLimit(s.workers)
 
 	if req.wants(dashboardWidgetAlerts) {
 		group.Go(func() error {
 			var err error
-			alerts, err = s.repo.GetAlerts(groupCtx, securityCondition)
+			alerts, err = s.repo.GetAlerts(groupCtx, securityCondition, req.query)
 			return err
 		})
 	}
@@ -319,15 +285,115 @@ func (s *DashboardService) writeDashboardToCache(ctx context.Context, cacheKey s
 	}
 }
 
-func (s *DashboardService) loadDashboardCacheVersion(ctx context.Context) string {
+func (s *DashboardService) loadDashboardWithCache(
+	ctx context.Context,
+	userID uint64,
+	actor *entities.User,
+	permissionsMap map[string]bool,
+	req dashboardRequest,
+	securityCondition sq.Sqlizer,
+) (*dto.DashboardStatsDTO, error) {
+	parts := splitDashboardRequestForCache(req)
+	if len(parts) == 1 {
+		return s.loadDashboardSliceWithCache(ctx, userID, actor, permissionsMap, parts[0], securityCondition)
+	}
+
+	results := make([]dashboardSliceResult, len(parts))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(len(parts))
+
+	for i, part := range parts {
+		i, part := i, part
+		group.Go(func() error {
+			stats, err := s.loadDashboardSliceWithCache(groupCtx, userID, actor, permissionsMap, part, securityCondition)
+			if err != nil {
+				return err
+			}
+
+			results[i] = dashboardSliceResult{
+				request: part,
+				stats:   stats,
+			}
+			return nil
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+
+	return mergeDashboardStats(results), nil
+}
+
+func (s *DashboardService) loadDashboardSliceWithCache(
+	ctx context.Context,
+	userID uint64,
+	actor *entities.User,
+	permissionsMap map[string]bool,
+	req dashboardRequest,
+	securityCondition sq.Sqlizer,
+) (*dto.DashboardStatsDTO, error) {
+	cacheVersion := s.loadDashboardCacheVersion(ctx, req.widgets)
+	cacheKey, err := buildDashboardCacheKey(userID, actor, permissionsMap, req, cacheVersion)
+	if err != nil {
+		s.logger.Warn("dashboard cache key build failed", zap.Uint64("user_id", userID), zap.Error(err))
+		cacheKey = ""
+	}
+
+	if cacheKey != "" {
+		if cached, cacheErr := s.readDashboardFromCache(ctx, cacheKey); cacheErr == nil {
+			return cached, nil
+		}
+	}
+
+	loadFn := func() (*dto.DashboardStatsDTO, error) {
+		result, loadErr := s.loadDashboardStats(ctx, req, securityCondition)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		if cacheKey != "" {
+			s.writeDashboardToCache(ctx, cacheKey, result)
+		}
+		return result, nil
+	}
+
+	if cacheKey == "" {
+		return loadFn()
+	}
+
+	value, err, _ := s.flight.Do(cacheKey, func() (interface{}, error) {
+		if cached, cacheErr := s.readDashboardFromCache(ctx, cacheKey); cacheErr == nil {
+			return cached, nil
+		}
+		return loadFn()
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return value.(*dto.DashboardStatsDTO), nil
+}
+
+func (s *DashboardService) loadDashboardCacheVersion(ctx context.Context, widgets map[string]struct{}) string {
 	if s.cache == nil {
 		return "0"
 	}
-	version, err := s.cache.Get(ctx, pkgconstants.DashboardCacheVersionKey)
-	if err != nil || strings.TrimSpace(version) == "" {
+
+	parts := make([]string, 0, 2)
+	for _, key := range dashboardCacheVersionKeysForWidgets(widgets) {
+		version, err := s.cache.Get(ctx, key)
+		if err != nil || strings.TrimSpace(version) == "" {
+			parts = append(parts, key+"=0")
+			continue
+		}
+		parts = append(parts, key+"="+version)
+	}
+
+	if len(parts) == 0 {
 		return "0"
 	}
-	return version
+
+	return strings.Join(parts, "|")
 }
 
 func buildDashboardRequest(filter dto.DashboardFilterDTO, userID uint64) (dashboardRequest, error) {
@@ -540,6 +606,163 @@ func sortedDashboardWidgets(widgets map[string]struct{}) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+type dashboardSliceResult struct {
+	request dashboardRequest
+	stats   *dto.DashboardStatsDTO
+}
+
+func splitDashboardRequestForCache(req dashboardRequest) []dashboardRequest {
+	summaryWidgets := make(map[string]struct{})
+	activityWidgets := make(map[string]struct{})
+
+	for widget := range req.widgets {
+		if widget == dashboardWidgetLastActivity {
+			activityWidgets[widget] = struct{}{}
+			continue
+		}
+		summaryWidgets[widget] = struct{}{}
+	}
+
+	parts := make([]dashboardRequest, 0, 2)
+	if len(summaryWidgets) > 0 {
+		parts = append(parts, cloneDashboardRequestWithWidgets(req, summaryWidgets))
+	}
+	if len(activityWidgets) > 0 {
+		parts = append(parts, cloneDashboardRequestWithWidgets(req, activityWidgets))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, req)
+	}
+
+	return parts
+}
+
+func cloneDashboardRequestWithWidgets(req dashboardRequest, widgets map[string]struct{}) dashboardRequest {
+	clonedWidgets := make(map[string]struct{}, len(widgets))
+	for widget := range widgets {
+		clonedWidgets[widget] = struct{}{}
+	}
+
+	filterWidgets := make([]string, 0, len(clonedWidgets))
+	for _, widget := range sortedDashboardWidgets(clonedWidgets) {
+		filterWidgets = append(filterWidgets, widget)
+	}
+
+	clonedFilter := req.filter
+	clonedFilter.Widgets = filterWidgets
+
+	return dashboardRequest{
+		filter:         clonedFilter,
+		query:          req.query,
+		effectiveScope: req.effectiveScope,
+		widgets:        clonedWidgets,
+	}
+}
+
+func mergeDashboardStats(parts []dashboardSliceResult) *dto.DashboardStatsDTO {
+	result := &dto.DashboardStatsDTO{}
+
+	for _, part := range parts {
+		if part.stats == nil {
+			continue
+		}
+
+		if result.Meta == nil && part.stats.Meta != nil {
+			result.Meta = part.stats.Meta
+		}
+
+		applyDashboardSlice(result, part.stats, part.request)
+	}
+
+	return result
+}
+
+func applyDashboardSlice(dst *dto.DashboardStatsDTO, src *dto.DashboardStatsDTO, req dashboardRequest) {
+	if req.wants(dashboardWidgetAlerts) {
+		dst.Alerts = src.Alerts
+	}
+	if req.wants(dashboardWidgetKPIs) {
+		dst.KPIs = src.KPIs
+	}
+	if req.wants(dashboardWidgetSLA) {
+		dst.SLA = src.SLA
+	}
+	if req.wants(dashboardWidgetWeeklyVolume) {
+		dst.WeeklyVolume = src.WeeklyVolume
+	}
+	if req.wants(dashboardWidgetTimeByPriority) {
+		dst.TimeByPriority = src.TimeByPriority
+	}
+	if req.wants(dashboardWidgetTimeByOrderType) {
+		dst.TimeByOrderType = src.TimeByOrderType
+	}
+	if req.wants(dashboardWidgetCountByStatus) {
+		dst.CountByStatus = src.CountByStatus
+	}
+	if req.wants(dashboardWidgetCountByExecutor) {
+		dst.CountByExecutor = src.CountByExecutor
+	}
+	if req.wants(dashboardWidgetTopCategories) {
+		dst.TopCategories = src.TopCategories
+	}
+	if req.wants(dashboardWidgetDepartments) {
+		dst.Departments = src.Departments
+	}
+	if req.wants(dashboardWidgetBranches) {
+		dst.Branches = src.Branches
+	}
+	if req.wants(dashboardWidgetLastActivity) {
+		dst.LastActivity = src.LastActivity
+	}
+}
+
+func dashboardCacheVersionKeysForWidgets(widgets map[string]struct{}) []string {
+	keys := make([]string, 0, 2)
+
+	if dashboardUsesSummaryCache(widgets) {
+		keys = append(keys, pkgconstants.DashboardCacheVersionSummaryKey)
+	}
+	if dashboardUsesActivityCache(widgets) {
+		keys = append(keys, pkgconstants.DashboardCacheVersionActivityKey)
+	}
+
+	if len(keys) == 0 {
+		keys = append(keys, pkgconstants.DashboardCacheVersionSummaryKey)
+	}
+
+	return keys
+}
+
+func dashboardUsesSummaryCache(widgets map[string]struct{}) bool {
+	for widget := range widgets {
+		if widget != dashboardWidgetLastActivity {
+			return true
+		}
+	}
+	return false
+}
+
+func dashboardUsesActivityCache(widgets map[string]struct{}) bool {
+	_, ok := widgets[dashboardWidgetLastActivity]
+	return ok
+}
+
+func loadDashboardWorkerLimit() int {
+	const defaultWorkers = 6
+
+	raw := strings.TrimSpace(os.Getenv("DASHBOARD_WORKER_LIMIT"))
+	if raw == "" {
+		return defaultWorkers
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return defaultWorkers
+	}
+
+	return value
 }
 
 func fillMissingBuckets(input []types.DashboardChartData, dateRange types.DashboardDateRange, granularity string, loc *time.Location) []types.DashboardChartData {

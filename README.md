@@ -70,6 +70,7 @@ go test ./...
 - WebSocket authentication uses `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: bearer, <token>`.
 - Telegram deep link can be built from `TELEGRAM_BOT_USERNAME` and is returned by `POST /api/profile/telegram/generate-token` as `bot_link`.
 - Telegram webhook registration requires `SERVER_BASE_URL` with `https://...`; optional request validation uses `TELEGRAM_WEBHOOK_SECRET_TOKEN`.
+- For domain rollout over HTTPS by IP, use the AD CS flow in `docs/ad-ip-certificate-rollout.md` instead of a plain self-signed server certificate.
 
 ## Project Structure
 

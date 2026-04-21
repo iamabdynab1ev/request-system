@@ -52,7 +52,7 @@ migrations-init:
 
 
 # ==========================================
-# SSL Certificate Generation (OpenSSL)
+# SSL Certificate Generation (OpenSSL, development only)
 # ==========================================
 cert-gen:
 	@echo "Создаем SSL сертификат для $(CERT_PRIMARY_IP)..."

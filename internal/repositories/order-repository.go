@@ -195,32 +195,35 @@ func (r *OrderRepository) getOrdersRefactored(ctx context.Context, filter types.
 		return b
 	}
 
-	// COUNT
-	countBuilder := psql.Select("count(o.id)").From(orderTable + " o").Where(sq.Eq{"o.deleted_at": nil})
-
-	if securityCondition != nil {
-		countBuilder = countBuilder.Where(securityCondition)
-	}
-
-	countBuilder = applySearch(countBuilder)
-	countBuilder = applySpecials(countBuilder)
-
-	countFilter := filter
-	countFilter.WithPagination = false
-	countFilter.Sort = nil
-
-	countBuilder = bd.ApplyListParams(countBuilder, countFilter, orderMap)
-
 	var totalCount uint64
-	sqlCount, argsCount, err := countBuilder.ToSql()
-	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
-	}
-	if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&totalCount); err != nil {
-		return nil, 0, err
-	}
-	if totalCount == 0 {
-		return []entities.Order{}, 0, nil
+
+	// COUNT
+	if filter.WithPagination {
+		countBuilder := psql.Select("count(o.id)").From(orderTable + " o").Where(sq.Eq{"o.deleted_at": nil})
+
+		if securityCondition != nil {
+			countBuilder = countBuilder.Where(securityCondition)
+		}
+
+		countBuilder = applySearch(countBuilder)
+		countBuilder = applySpecials(countBuilder)
+
+		countFilter := filter
+		countFilter.WithPagination = false
+		countFilter.Sort = nil
+
+		countBuilder = bd.ApplyListParams(countBuilder, countFilter, orderMap)
+
+		sqlCount, argsCount, err := countBuilder.ToSql()
+		if err != nil {
+			return nil, 0, fmt.Errorf("ошибка построения запроса подсчёта: %w", err)
+		}
+		if err := r.storage.QueryRow(ctx, sqlCount, argsCount...).Scan(&totalCount); err != nil {
+			return nil, 0, err
+		}
+		if totalCount == 0 {
+			return []entities.Order{}, 0, nil
+		}
 	}
 
 	// SELECT
@@ -253,6 +256,10 @@ func (r *OrderRepository) getOrdersRefactored(ctx context.Context, filter types.
 	orders, err := pgx.CollectRows(rows, pgx.RowToStructByName[entities.Order])
 	if err != nil {
 		return nil, 0, err
+	}
+
+	if !filter.WithPagination {
+		totalCount = uint64(len(orders))
 	}
 
 	return orders, totalCount, nil

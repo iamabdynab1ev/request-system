@@ -41,6 +41,12 @@
 *.sql
 !database/migrations/*.sql
 *.dump
+*.csr
+*.req
 *.crt
 *.key
+*.pfx
 *.zip
+/certs/
+/tokens.txt
+/tmp_fix_telegram_controller.go

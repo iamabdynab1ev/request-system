@@ -167,6 +167,10 @@ func ParseFilterFromQuery(values url.Values) types.Filter {
 		filterReq.WithPagination = true
 	}
 
+	if values.Get("include_attachments") == "true" || values.Get("includeAttachments") == "true" {
+		filterReq.IncludeAttachments = true
+	}
+
 	for key, vals := range values {
 		if len(vals) == 0 || vals[0] == "" {
 			continue

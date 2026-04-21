@@ -89,7 +89,7 @@ func InitRouter(
 	notificationService := services.NewTelegramNotificationService(tgService, loggers.Main)
 	orderService := services.NewOrderService(txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo, ruleEngineService,
 		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService, notificationService, cacheRepo)
-	historyService := services.NewOrderHistoryService(historyRepo, userRepo, departmentService, otdelService, statusRepo, priorityRepo, loggers.OrderHistory)
+	historyService := services.NewOrderHistoryService(historyRepo, userRepo, departmentRepo, otdelRepo, branchRepo, officeRepo, statusRepo, priorityRepo, loggers.OrderHistory)
 	reportService := services.NewReportService(reportRepo, userRepo, loggers.Main)
 	_ = reportService
 	branchService := services.NewBranchService(txManager, branchRepo, userRepo, loggers.Main)

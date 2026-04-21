@@ -14,8 +14,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// PriorityServiceInterface - ОБНОВЛЕННЫЙ ИНТЕРФЕЙС.
-// Вся информация о файлах (multipart.FileHeader) удалена.
 type PriorityServiceInterface interface {
 	GetPriorities(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.PriorityDTO], error)
 	FindPriority(ctx context.Context, id uint64) (*dto.PriorityDTO, error)
@@ -24,16 +22,12 @@ type PriorityServiceInterface interface {
 	DeletePriority(ctx context.Context, id uint64) error
 }
 
-// PriorityService - ОБНОВЛЕННАЯ СТРУКТУРА.
-// Убрано поле fileStorage, так как оно больше не используется.
 type PriorityService struct {
 	repo     repositories.PriorityRepositoryInterface
 	userRepo repositories.UserRepositoryInterface
 	logger   *zap.Logger
 }
 
-// NewPriorityService - ОБНОВЛЕННЫЙ КОНСТРУКТОР.
-// Убран параметр fileStorage.
 func NewPriorityService(
 	repo repositories.PriorityRepositoryInterface,
 	userRepo repositories.UserRepositoryInterface,
@@ -42,7 +36,6 @@ func NewPriorityService(
 	return &PriorityService{repo: repo, userRepo: userRepo, logger: logger}
 }
 
-// buildAuthzContext - остается без изменений
 func (s *PriorityService) buildAuthzContext(ctx context.Context) (*authz.Context, error) {
 	userID, err := utils.GetUserIDFromCtx(ctx)
 	if err != nil {
@@ -59,7 +52,6 @@ func (s *PriorityService) buildAuthzContext(ctx context.Context) (*authz.Context
 	return &authz.Context{Actor: actor, Permissions: permissionsMap}, nil
 }
 
-// GetPriorities и FindPriority - остаются без изменений
 func (s *PriorityService) GetPriorities(ctx context.Context, limit, offset uint64, search string) (*dto.PaginatedResponse[dto.PriorityDTO], error) {
 	authContext, err := s.buildAuthzContext(ctx)
 	if err != nil {

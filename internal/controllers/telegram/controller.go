@@ -30,10 +30,10 @@ import (
 const (
 	telegramStateKey     = "tg_user_state:%d"
 	maxMessageAgeSeconds = 600
-	commandCooldown      = 1000 * time.Millisecond // 1 СЃРµРє РјРµР¶РґСѓ РєРѕРјР°РЅРґР°РјРё
-	callbackCooldown     = 500 * time.Millisecond  // 0.5 СЃРµРє РјРµР¶РґСѓ РєР»РёРєР°РјРё
-	menuCooldown         = 2000 * time.Millisecond // 2 СЃРµРє РґР»СЏ СЃС‚Р°С‚РёСЃС‚РёРєРё Рё РјРµРЅСЋ
-	stateExpiration      = 60 * time.Minute        // СЃРѕСЃС‚РѕСЏРЅРёРµ Р¶РёРІС‘С‚ 60 РјРёРЅСѓС‚
+	commandCooldown      = 1000 * time.Millisecond // 1 секунда между командами
+	callbackCooldown     = 500 * time.Millisecond  // 0.5 секунды между кликами
+	menuCooldown         = 2000 * time.Millisecond // 2 секунды для меню и статистики
+	stateExpiration      = 60 * time.Minute        // состояние хранится 60 минут
 	goroutineTimeout     = 45 * time.Second
 
 	maxCommentLength      = 500
@@ -191,7 +191,7 @@ func (c *TelegramController) HandleTelegramWebhook(ctx echo.Context) error {
 	return ctx.NoContent(http.StatusOK)
 }
 
-// ==================== РЎР›РЈР–Р•Р‘РќР«Р• Р¤РЈРќРљР¦РР ====================
+// ==================== Обработка callback ====================
 func (c *TelegramController) handleCallbackQueryAsync(query *TelegramCallbackQuery) {
 	c.sem <- struct{}{}
 	defer func() { <-c.sem }()
@@ -239,7 +239,7 @@ func (c *TelegramController) handleMessageAsync(msg *TelegramMessage) {
 		}
 	}
 
-	// РЈРґР°Р»СЏРµРј СЃРѕРѕР±С‰РµРЅРёРµ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РІ РѕС‚РґРµР»СЊРЅРѕР№ РіРѕСЂСѓС‚РёРЅРµ.
+	// Удаляем сообщение пользователя в отдельной горутине.
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		_ = c.tgService.DeleteMessage(context.Background(), chatID, msgID)
@@ -296,7 +296,7 @@ func (c *TelegramController) handleMessageAsync(msg *TelegramMessage) {
 	}
 }
 
-// ==================== РЎР›РЈР–Р•Р‘РќР«Р• Р¤РЈРќРљР¦РР ====================
+// ==================== Работа с состоянием ====================
 func (c *TelegramController) getUserState(ctx context.Context, chatID int64) (*dto.TelegramState, error) {
 	stateJSON, err := c.cacheRepo.Get(ctx, fmt.Sprintf(telegramStateKey, chatID))
 	if err != nil || stateJSON == "" {
@@ -308,19 +308,19 @@ func (c *TelegramController) getUserState(ctx context.Context, chatID int64) (*d
 func (c *TelegramController) setUserState(ctx context.Context, chatID int64, state *dto.TelegramState) error {
 	js, err := state.ToJSON()
 	if err != nil {
-		c.logger.Error("РћС€РёР±РєР° СЃРµСЂРёР°Р»РёР·Р°С†РёРё СЃРѕСЃС‚РѕСЏРЅРёСЏ", zap.Error(err))
+		c.logger.Error("Ошибка сериализации состояния Telegram", zap.Error(err))
 		return err
 	}
 	return c.cacheRepo.Set(ctx, fmt.Sprintf(telegramStateKey, chatID), js, stateExpiration)
 }
 
 func (c *TelegramController) isMessageRecent(update *TelegramUpdate) bool {
-	// Callback СЃС‡РёС‚Р°РµРј Р°РєС‚СѓР°Р»СЊРЅС‹Рј: РґР°С‚Р° Сѓ РЅРµРіРѕ РѕС‚РЅРѕСЃРёС‚СЃСЏ Рє РёСЃС…РѕРґРЅРѕРјСѓ СЃРѕРѕР±С‰РµРЅРёСЋ Р±РѕС‚Р°.
+	// Callback считаем актуальным: Telegram не передаёт время нажатия кнопки.
 	if update.CallbackQuery != nil {
 		return true
 	}
 
-	// Р”Р»СЏ С‚РµРєСЃС‚РѕРІС‹С… СЃРѕРѕР±С‰РµРЅРёР№ РїСЂРѕРІРµСЂСЏРµРј СЃСЂРѕРє РґР°РІРЅРѕСЃС‚Рё.
+	// Для текстовых сообщений проверяем срок давности.
 	if update.Message != nil {
 		msgDate := update.Message.Date
 		if msgDate > 0 {
@@ -339,7 +339,7 @@ func (c *TelegramController) isMenuButton(text string) bool {
 }
 func (c *TelegramController) recoverPanic(funcName string) {
 	if r := recover(); r != nil {
-		c.logger.Error("PANIC РІ РіРѕСЂСѓС‚РёРЅРµ",
+		c.logger.Error("PANIC в горутине Telegram",
 			zap.String("function", funcName),
 			zap.Any("panic", r),
 			zap.Stack("stacktrace"))
@@ -348,13 +348,13 @@ func (c *TelegramController) recoverPanic(funcName string) {
 
 func (c *TelegramController) sendInternalError(ctx context.Context, chatID int64) error {
 	return c.renderHomeScreen(ctx, chatID, 0,
-		"вќЊ Р’РЅСѓС‚СЂРµРЅРЅСЏСЏ РѕС€РёР±РєР°.\nРџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ РёР»Рё РѕР±СЂР°С‚РёС‚РµСЃСЊ РІ РїРѕРґРґРµСЂР¶РєСѓ.")
+		"❌ Внутренняя ошибка.\nПопробуйте позже или обратитесь в поддержку.")
 }
 
 func (c *TelegramController) sendStaleStateError(ctx context.Context, chatID int64, messageID int) error {
 	_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 	return c.renderHomeScreen(ctx, chatID, messageID,
-		"вљ пёЏ РЎСЂРѕРє РґРµР№СЃС‚РІРёСЏ РјРµРЅСЋ РёСЃС‚С‘Рє.\nРћС‚РєСЂРѕР№С‚Рµ СЃРїРёСЃРѕРє Р·Р°РЅРѕРІРѕ С‡РµСЂРµР· /menu РёР»Рё РєРЅРѕРїРєРё РЅРёР¶Рµ.")
+		"⚠️ Срок действия меню истёк.\nОткройте список заново через /menu или кнопки ниже.")
 }
 
 func (c *TelegramController) answerCallback(ctx context.Context, text string) error {
@@ -378,29 +378,29 @@ func (c *TelegramController) answerCallback(ctx context.Context, text string) er
 
 func getStatusEmoji(status *entities.Status) string {
 	if status == nil || status.Code == nil {
-		return "рџ”·"
+		return "🔷"
 	}
 	switch *status.Code {
 	case "OPEN":
-		return "вќ—"
+		return "❗"
 	case "IN_PROGRESS":
-		return "вЏі"
+		return "⏳"
 	case "REFINEMENT":
-		return "рџ”Ѓ"
+		return "🔁"
 	case "CLARIFICATION":
-		return "вќ“"
+		return "❓"
 	case "COMPLETED":
-		return "вњ…"
+		return "✅"
 	case "CLOSED":
-		return "вњ”пёЏ"
+		return "✔️"
 	case "REJECTED":
-		return "вќЊ"
+		return "❌"
 	case "CONFIRMED":
-		return "рџ”„"
+		return "🔄"
 	case "SERVICE":
-		return "рџ› пёЏ"
+		return "🛠️"
 	default:
-		return "рџ”·"
+		return "🔷"
 	}
 }
 func isUUIDFormat(text string) bool {
@@ -478,7 +478,7 @@ func (c *TelegramController) handlePrepareUserContextError(ctx context.Context, 
 
 func (c *TelegramController) getStatusMap(ctx context.Context) map[uint64]*entities.Status {
 	c.statusCacheMutex.RLock()
-	// РћРїС‚РёРјРёР·Р°С†РёСЏ: РєРµС€ СЃС‚Р°С‚СѓСЃРѕРІ РЅР° 10 РјРёРЅСѓС‚.
+	// Оптимизация: кэш статусов обновляем раз в 10 минут.
 	if time.Since(c.statusCacheTime) < 10*time.Minute && len(c.statusCache) > 0 {
 		defer c.statusCacheMutex.RUnlock()
 		return c.statusCache
@@ -537,10 +537,10 @@ func (c *TelegramController) getAllowedStatuses(ctx context.Context, currentStat
 	return allowed
 }
 
-// ==================== РЎР›РЈР–Р•Р‘РќР«Р• Р¤РЈРќРљР¦РР ====================
+// ==================== Profile API ====================
 func (c *TelegramController) HandleGenerateLinkToken(ctx echo.Context) error {
 	if !c.integrationService.Enabled() {
-		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusServiceUnavailable, "Telegram Р±РѕС‚ РЅРµ РЅР°СЃС‚СЂРѕРµРЅ", nil, nil), c.logger)
+		return utils.ErrorResponse(ctx, apperrors.NewHttpError(http.StatusServiceUnavailable, "Telegram бот не настроен", nil, nil), c.logger)
 	}
 
 	linkData, err := c.userService.GenerateTelegramLinkToken(ctx.Request().Context())
@@ -557,7 +557,7 @@ func (c *TelegramController) HandleGenerateLinkToken(ctx echo.Context) error {
 	}
 
 	return utils.SuccessResponse(ctx, response,
-		"РўРѕРєРµРЅ СЃРіРµРЅРµСЂРёСЂРѕРІР°РЅ", http.StatusOK)
+		"Токен сгенерирован", http.StatusOK)
 }
 
 func (c *TelegramController) RegisterWebhook(baseURL string) error {
@@ -567,13 +567,13 @@ func (c *TelegramController) RegisterWebhook(baseURL string) error {
 
 func (c *TelegramController) StartCleanup(ctx context.Context) {
 	if c.deduplicator != nil {
-		c.logger.Info("Р—Р°РїСѓСЃРє С„РѕРЅРѕРІРѕР№ РѕС‡РёСЃС‚РєРё РґРµРґСѓРїР»РёРєР°С‚РѕСЂР°")
+		c.logger.Info("Запуск фоновой очистки дедупликатора")
 		c.deduplicator.Cleanup(ctx, 2*time.Minute)
-		c.logger.Info("Р¤РѕРЅРѕРІР°СЏ РѕС‡РёСЃС‚РєР° РѕСЃС‚Р°РЅРѕРІР»РµРЅР°")
+		c.logger.Info("Фоновая очистка остановлена")
 	}
 }
 
-// ==================== РЎР›РЈР–Р•Р‘РќР«Р• Р¤РЈРќРљР¦РР ====================
+// ==================== Telegram DTO ====================
 type TelegramUpdate struct {
 	UpdateID      int                    `json:"update_id"`
 	Message       *TelegramMessage       `json:"message"`

@@ -1,3 +1,6 @@
 package constants
 
-const DashboardCacheVersionKey = "dashboard:version"
+const (
+	DashboardCacheVersionSummaryKey  = "dashboard:version:summary"
+	DashboardCacheVersionActivityKey = "dashboard:version:activity"
+)
