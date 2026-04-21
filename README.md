@@ -87,6 +87,7 @@ go test ./...
 
 - `docs/API.md` - practical map of current HTTP endpoints and integration entrypoints.
 - `docs/loadtest-checklist.md` - commands for dashboard, order list, and history load checks.
+- `docs/deployment-checklist.md` - safe backend rollout, smoke checks, and rollback steps.
 
 ## Repository Rules
 
