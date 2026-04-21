@@ -86,6 +86,140 @@ func TestCalculateMetrics_SetsResolutionMetricsForCompletedStatus(t *testing.T) 
 	}
 }
 
+func TestCalculateMetrics_DoesNotOverwriteMetricsWhenCompletedOrderIsClosed(t *testing.T) {
+	const (
+		completedStatusID = uint64(1)
+		closedStatusID    = uint64(2)
+		actorID           = uint64(77)
+		creatorID         = uint64(88)
+		orderID           = uint64(99)
+	)
+
+	statusRepo := &statusRepositoryStub{
+		codesByID: map[uint64]string{
+			completedStatusID: pkgconstants.StatusCompleted,
+			closedStatusID:    pkgconstants.StatusClosed,
+		},
+	}
+	service := &OrderService{
+		statusRepo: statusRepo,
+		logger:     zap.NewNop(),
+	}
+
+	createdAt := time.Date(2026, 4, 1, 8, 0, 0, 0, time.UTC)
+	completedAt := createdAt.Add(2 * time.Hour)
+	now := completedAt.Add(24 * time.Hour)
+	resolutionSeconds := uint64(completedAt.In(time.Local).Sub(createdAt.In(time.Local)).Seconds())
+	firstResponseSeconds := uint64(1800)
+	isFCR := true
+	executorID := actorID
+
+	oldOrder := &entities.Order{
+		ID:                       orderID,
+		StatusID:                 completedStatusID,
+		CreatorID:                creatorID,
+		ExecutorID:               &executorID,
+		CreatedAt:                createdAt,
+		CompletedAt:              &completedAt,
+		ResolutionTimeSeconds:    &resolutionSeconds,
+		FirstResponseTimeSeconds: &firstResponseSeconds,
+		IsFirstContactResolution: &isFCR,
+	}
+	newOrder := &entities.Order{
+		ID:                       orderID,
+		StatusID:                 closedStatusID,
+		CreatorID:                creatorID,
+		ExecutorID:               &executorID,
+		CreatedAt:                createdAt,
+		CompletedAt:              &completedAt,
+		ResolutionTimeSeconds:    &resolutionSeconds,
+		FirstResponseTimeSeconds: &firstResponseSeconds,
+		IsFirstContactResolution: &isFCR,
+	}
+
+	service.calculateMetrics(context.Background(), newOrder, oldOrder, dto.UpdateOrderDTO{}, actorID, now)
+
+	if newOrder.CompletedAt == nil || !newOrder.CompletedAt.Equal(completedAt) {
+		t.Fatalf("expected completed_at to stay %v, got %v", completedAt, newOrder.CompletedAt)
+	}
+	if newOrder.ResolutionTimeSeconds == nil || *newOrder.ResolutionTimeSeconds != resolutionSeconds {
+		t.Fatalf("expected resolution time to stay %d, got %v", resolutionSeconds, newOrder.ResolutionTimeSeconds)
+	}
+	if newOrder.FirstResponseTimeSeconds == nil || *newOrder.FirstResponseTimeSeconds != firstResponseSeconds {
+		t.Fatalf("expected first response time to stay %d, got %v", firstResponseSeconds, newOrder.FirstResponseTimeSeconds)
+	}
+	if newOrder.IsFirstContactResolution == nil || *newOrder.IsFirstContactResolution != isFCR {
+		t.Fatalf("expected FCR to stay %v, got %v", isFCR, newOrder.IsFirstContactResolution)
+	}
+}
+
+func TestCalculateMetrics_ResetResolutionMetricsWhenReturnedToRefinement(t *testing.T) {
+	const (
+		completedStatusID  = uint64(1)
+		refinementStatusID = uint64(2)
+		actorID            = uint64(77)
+		creatorID          = uint64(88)
+		orderID            = uint64(99)
+	)
+
+	statusRepo := &statusRepositoryStub{
+		codesByID: map[uint64]string{
+			completedStatusID:  pkgconstants.StatusCompleted,
+			refinementStatusID: pkgconstants.StatusRefinement,
+		},
+	}
+	service := &OrderService{
+		statusRepo: statusRepo,
+		logger:     zap.NewNop(),
+	}
+
+	createdAt := time.Date(2026, 4, 1, 8, 0, 0, 0, time.UTC)
+	completedAt := createdAt.Add(2 * time.Hour)
+	now := completedAt.Add(30 * time.Minute)
+	resolutionSeconds := uint64(7200)
+	firstResponseSeconds := uint64(1800)
+	isFCR := true
+	executorID := actorID
+
+	oldOrder := &entities.Order{
+		ID:                       orderID,
+		StatusID:                 completedStatusID,
+		CreatorID:                creatorID,
+		ExecutorID:               &executorID,
+		CreatedAt:                createdAt,
+		CompletedAt:              &completedAt,
+		ResolutionTimeSeconds:    &resolutionSeconds,
+		FirstResponseTimeSeconds: &firstResponseSeconds,
+		IsFirstContactResolution: &isFCR,
+	}
+	newOrder := &entities.Order{
+		ID:                       orderID,
+		StatusID:                 refinementStatusID,
+		CreatorID:                creatorID,
+		ExecutorID:               &executorID,
+		CreatedAt:                createdAt,
+		CompletedAt:              &completedAt,
+		ResolutionTimeSeconds:    &resolutionSeconds,
+		FirstResponseTimeSeconds: &firstResponseSeconds,
+		IsFirstContactResolution: &isFCR,
+	}
+
+	service.calculateMetrics(context.Background(), newOrder, oldOrder, dto.UpdateOrderDTO{}, actorID, now)
+
+	if newOrder.CompletedAt != nil {
+		t.Fatalf("expected completed_at to be reset, got %v", newOrder.CompletedAt)
+	}
+	if newOrder.ResolutionTimeSeconds != nil {
+		t.Fatalf("expected resolution time to be reset, got %v", newOrder.ResolutionTimeSeconds)
+	}
+	if newOrder.IsFirstContactResolution != nil {
+		t.Fatalf("expected FCR to be reset, got %v", newOrder.IsFirstContactResolution)
+	}
+	if newOrder.FirstResponseTimeSeconds == nil || *newOrder.FirstResponseTimeSeconds != firstResponseSeconds {
+		t.Fatalf("expected first response time to stay %d, got %v", firstResponseSeconds, newOrder.FirstResponseTimeSeconds)
+	}
+}
+
 type statusRepositoryStub struct {
 	codesByID map[uint64]string
 }
