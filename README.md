@@ -83,6 +83,11 @@ go test ./...
 - `seeders/` - seed scripts
 - `pkg/` - shared infrastructure and utilities
 
+## API Documentation
+
+- `docs/API.md` - practical map of current HTTP endpoints and integration entrypoints.
+- `docs/loadtest-checklist.md` - commands for dashboard, order list, and history load checks.
+
 ## Repository Rules
 
 - Do not commit `.env`, certificates, keys, archives, or uploaded files.

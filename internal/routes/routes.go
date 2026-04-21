@@ -9,7 +9,6 @@ import (
 	"go.uber.org/zap"
 
 	"request-system/internal/authz"
-	"request-system/internal/controllers"
 	"request-system/internal/repositories"
 	"request-system/internal/services"
 	"request-system/pkg/config"
@@ -17,7 +16,6 @@ import (
 	"request-system/pkg/filestorage"
 	"request-system/pkg/middleware"
 	"request-system/pkg/service"
-	"request-system/pkg/telegram"
 	"request-system/pkg/websocket"
 )
 
@@ -42,99 +40,50 @@ func InitRouter(
 	adService services.ADServiceInterface,
 	appCtx context.Context,
 ) {
-	loggers.Main.Info("InitRouter: Начало создания маршрутов")
+	loggers.Main.Info("InitRouter: start route registration")
 
-	// --- 0. ОБЩИЕ КОМПОНЕНТЫ ---
 	api := e.Group("/api")
 	authMW := middleware.NewAuthMiddleware(jwtSvc, authPermissionService, loggers.Auth)
 	fileStorage, err := filestorage.NewLocalFileStorage("uploads")
 	if err != nil {
-		loggers.Main.Fatal("не удалось создать файловое хранилище", zap.Error(err))
+		loggers.Main.Fatal("failed to create local file storage", zap.Error(err))
 	}
 	txManager := repositories.NewTxManager(dbConn, loggers.Main)
 
-	// --- 1. РЕПОЗИТОРИИ (создаем все в одном месте) ---
-	userRepo := repositories.NewUserRepository(dbConn, loggers.User)
-	cacheRepo := repositories.NewRedisCacheRepository(redisClient)
-	roleRepo := repositories.NewRoleRepository(dbConn, loggers.Main)
-	permissionRepo := repositories.NewPermissionRepository(dbConn, loggers.Main)
-	statusRepo := repositories.NewStatusRepository(dbConn)
-	rpRepo := repositories.NewRolePermissionRepository(dbConn)
-	orderRepo := repositories.NewOrderRepository(dbConn, loggers.Order)
-	priorityRepo := repositories.NewPriorityRepository(dbConn, loggers.Main)
-	attachRepo := repositories.NewAttachmentRepository(dbConn)
-	historyRepo := repositories.NewOrderHistoryRepository(dbConn, loggers.OrderHistory)
-	positionRepo := repositories.NewPositionRepository(dbConn, loggers.Main)
-	orderTypeRepo := repositories.NewOrderTypeRepository(dbConn)
-	ruleRepo := repositories.NewOrderRoutingRuleRepository(dbConn)
-	reportRepo := repositories.NewReportRepository(dbConn, loggers.Main)
-	branchRepo := repositories.NewBranchRepository(dbConn, loggers.Main)
-	departmentRepo := repositories.NewDepartmentRepository(dbConn, loggers.Main)
-	otdelRepo := repositories.NewOtdelRepository(dbConn, loggers.Main)
-	officeRepo := repositories.NewOfficeRepository(dbConn, loggers.Main)
-	dashboardRepo := repositories.NewDashboardRepository(dbConn, loggers.Main)
+	repos := buildRouteRepositories(dbConn, redisClient, loggers)
+	servicesBundle := buildRouteServices(repos, txManager, fileStorage, bus, authPermissionService, cfg, loggers)
+	controllersBundle := buildRouteControllers(servicesBundle, adService, fileStorage, wsHub, jwtSvc, cfg, loggers)
 
-	// --- 2. СЕРВИСЫ ---
-	ruleEngineService := services.NewRuleEngineService(ruleRepo, userRepo, loggers.Main)
-	roleService := services.NewRoleService(roleRepo, userRepo, statusRepo, authPermissionService, loggers.Main)
-	permissionService := services.NewPermissionService(permissionRepo, userRepo, loggers.Main)
-	rpService := services.NewRolePermissionService(rpRepo, userRepo, authPermissionService, loggers.Main)
-	orderTypeService := services.NewOrderTypeService(orderTypeRepo, userRepo, txManager, ruleEngineService, loggers.Main)
-	positionService := services.NewPositionService(positionRepo, userRepo, txManager, loggers.Main)
-	userService := services.NewUserService(txManager, userRepo, otdelRepo, roleRepo, permissionRepo, statusRepo, cacheRepo, authPermissionService, loggers.User)
-	departmentService := services.NewDepartmentService(txManager, departmentRepo, userRepo, loggers.Main)
-	otdelService := services.NewOtdelService(txManager, otdelRepo, userRepo, loggers.Main)
-	orderRuleService := services.NewOrderRoutingRuleService(ruleRepo, userRepo, positionRepo, txManager, loggers.Main, orderTypeRepo)
-	tgService := telegram.NewService(cfg.Telegram.BotToken)
-	notificationService := services.NewTelegramNotificationService(tgService, loggers.Main)
-	orderService := services.NewOrderService(txManager, orderRepo, userRepo, statusRepo, priorityRepo, attachRepo, ruleEngineService,
-		historyRepo, fileStorage, bus, loggers.Order, orderTypeRepo, authPermissionService, notificationService, cacheRepo)
-	historyService := services.NewOrderHistoryService(historyRepo, userRepo, departmentRepo, otdelRepo, branchRepo, officeRepo, statusRepo, priorityRepo, loggers.OrderHistory)
-	reportService := services.NewReportService(reportRepo, userRepo, loggers.Main)
-	_ = reportService
-	branchService := services.NewBranchService(txManager, branchRepo, userRepo, loggers.Main)
-	officeService := services.NewOfficeService(officeRepo, userRepo, txManager, loggers.Main)
-	dashboardService := services.NewDashboardService(dashboardRepo, userRepo, cacheRepo, loggers.Main)
-
-	// --- 3. КОНТРОЛЛЕРЫ ---
-	userController := controllers.NewUserController(userService, adService, fileStorage, loggers.User)
-	historyController := controllers.NewOrderHistoryController(historyService, orderService, loggers.OrderHistory)
-	wsController := controllers.NewWebSocketController(wsHub, jwtSvc, loggers.Main, cfg.Server.AllowedOrigins)
-	dashboardController := controllers.NewDashboardController(dashboardService, loggers.Main.Named("Dashboard"))
-
-	// --- 4. РОУТЕРЫ ---
 	secureGroup := api.Group("", authMW.Auth)
 
 	runEquipImportRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runEquipmentRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runAuthRouter(api, dbConn, redisClient, jwtSvc, loggers.Auth, authMW, fileStorage, authPermissionService, cfg,
-		positionService, branchService, departmentService, otdelService, officeService)
+		servicesBundle.position, servicesBundle.branch, servicesBundle.department, servicesBundle.otdel, servicesBundle.office)
 
-	api.GET("/ws", wsController.ServeWs)
+	api.GET("/ws", controllersBundle.websocket.ServeWs)
 
-	runUserRouter(secureGroup, userController, authMW)
-	runRoleRouter(secureGroup, roleService, loggers.Main, authMW)
-	runPermissionRouter(secureGroup, permissionService, loggers.Main, authMW)
-	runRolePermissionRouter(secureGroup, rpService, loggers.Main, authMW)
-	runOrderRouter(secureGroup, orderService, loggers.Order, authMW)
-	runOrderTypeRouter(secureGroup, orderTypeService, loggers.Main, authMW)
-	runPositionRouter(secureGroup, positionService, loggers.Main, authMW)
-	runOrderRoutingRuleRouter(secureGroup, orderRuleService, loggers.Main, authMW)
+	runUserRouter(secureGroup, controllersBundle.user, authMW)
+	runRoleRouter(secureGroup, servicesBundle.role, loggers.Main, authMW)
+	runPermissionRouter(secureGroup, servicesBundle.permission, loggers.Main, authMW)
+	runRolePermissionRouter(secureGroup, servicesBundle.rolePermission, loggers.Main, authMW)
+	runOrderRouter(secureGroup, servicesBundle.order, loggers.Order, authMW)
+	runOrderTypeRouter(secureGroup, servicesBundle.orderType, loggers.Main, authMW)
+	runPositionRouter(secureGroup, servicesBundle.position, loggers.Main, authMW)
+	runOrderRoutingRuleRouter(secureGroup, servicesBundle.orderRule, loggers.Main, authMW)
 	runAttachmentRouter(secureGroup, dbConn, fileStorage, loggers.Main, authMW)
 	runStatusRouter(secureGroup, dbConn, loggers.Main, authMW, fileStorage)
-	runOrderHistoryRouter(secureGroup, historyController, authMW)
+	runOrderHistoryRouter(secureGroup, controllersBundle.history, authMW)
 	RunPriorityRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runDepartmentRouter(secureGroup, dbConn, loggers.Main, authMW, txManager)
 	runOtdelRouter(secureGroup, dbConn, loggers.Main, authMW, txManager)
 	runEquipmentTypeRouter(secureGroup, dbConn, loggers.Main, authMW)
 	runBranchRouter(secureGroup, dbConn, loggers.Main, txManager, authMW)
-	runOfficeRouter(secureGroup, officeService, loggers.Main, authMW)
-	runTelegramRouter(e, userService, orderService, tgService, cacheRepo, statusRepo, userRepo, historyRepo, authPermissionService, orderTypeRepo, authMW, cfg, loggers.Main, appCtx)
-
-	// для интеграции
+	runOfficeRouter(secureGroup, servicesBundle.office, loggers.Main, authMW)
+	runTelegramRouter(e, servicesBundle.user, servicesBundle.order, servicesBundle.telegram, repos.cache, repos.status, repos.user, repos.history, authPermissionService, repos.orderType, authMW, cfg, loggers.Main, appCtx)
 	runSyncRouter(api, dbConn, cfg, loggers)
-	// Dashboard
-	secureGroup.GET("/dashboard", dashboardController.GetDashboardStats, authMW.AuthorizeAny(authz.DashboardView))
 
-	loggers.Main.Info("INIT_ROUTER: Создание маршрутов завершено")
+	secureGroup.GET("/dashboard", controllersBundle.dashboard.GetDashboardStats, authMW.AuthorizeAny(authz.DashboardView))
+
+	loggers.Main.Info("InitRouter: route registration completed")
 }
