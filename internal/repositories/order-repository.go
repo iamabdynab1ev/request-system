@@ -138,15 +138,15 @@ func (r *OrderRepository) getOrdersRefactored(ctx context.Context, filter types.
 	// 🔥 ИЗВЛЕКАЕМ ВСЕ СПЕЦИАЛЬНЫЕ ФИЛЬТРЫ
 	durationFrom, _ := filter.Filter["duration_from"]
 	durationTo, _ := filter.Filter["duration_to"]
-	createdFrom, _ := filter.Filter["created_from"] // 🔥 ДОБАВЛЕНО
-	createdTo, _ := filter.Filter["created_to"]     // 🔥 ДОБАВЛЕНО
+	createdFrom, _ := filter.Filter["created_from"]
+	createdTo, _ := filter.Filter["created_to"]
 	overdueVal, _ := filter.Filter["overdue"]
 
 	// 🔥 УДАЛЯЕМ ИХ ИЗ MAP
 	delete(filter.Filter, "duration_from")
 	delete(filter.Filter, "duration_to")
-	delete(filter.Filter, "created_from") // 🔥 ДОБАВЛЕНО
-	delete(filter.Filter, "created_to")   // 🔥 ДОБАВЛЕНО
+	delete(filter.Filter, "created_from")
+	delete(filter.Filter, "created_to")
 	delete(filter.Filter, "overdue")
 
 	// 🔥 ФУНКЦИЯ ПРИМЕНЕНИЯ СПЕЦИАЛЬНЫХ ФИЛЬТРОВ
