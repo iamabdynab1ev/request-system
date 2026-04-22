@@ -61,7 +61,7 @@ Dashboard business rules:
 - `open_orders` counts all current orders except `CLOSED`.
 - `resolved_orders` counts orders that reached final `CLOSED` in the period.
 - `sla_compliance` uses only closed orders with `duration`.
-- `avg_resolve_time` uses orders closed in the period and measures execution time up to `COMPLETED`.
+- `avg_resolve_time` uses orders closed in the period and measures full time up to final `CLOSED`.
 - `active_agents` counts real executor activity in the selected period.
 
 ## Telegram

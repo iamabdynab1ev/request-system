@@ -109,7 +109,8 @@ func (r *DashboardRepository) GetKPIsWithUser(ctx context.Context, securityCondi
 	closedStatusCheck := dashboardStatusInCheck("status_code", dashboardClosedStatuses)
 	openStatusCheck := dashboardStatusNotInCheck("status_code", dashboardOpenExcludedStatuses)
 	slaEligibleCheck := dashboardSLAEligibleCheck("duration")
-	slaOnTimeCheck := dashboardSLAOnTimeCheck("duration", "completed_at")
+	slaOnTimeCheck := dashboardSLAOnTimeCheck("duration", "closed_at")
+	avgResolveExpr := dashboardResolutionSecondsExpr("closed_at", "created_at")
 	activeAgentEventCheck := dashboardEventNotInCheck("h.event_type", dashboardActiveAgentExcludedEvents)
 	activeAgentAssigneeCheck := dashboardLatestDelegationAssigneeCheck("h")
 
@@ -145,8 +146,8 @@ func (r *DashboardRepository) GetKPIsWithUser(ctx context.Context, securityCondi
 			COALESCE(AVG(first_response_time_seconds) FILTER (WHERE created_at >= $%d AND created_at < $%d AND first_response_time_seconds >= 0), 0) AS avg_response_current,
 			COALESCE(AVG(first_response_time_seconds) FILTER (WHERE created_at >= $%d AND created_at < $%d AND first_response_time_seconds >= 0), 0) AS avg_response_previous,
 
-			COALESCE(AVG(resolution_time_seconds) FILTER (WHERE %s AND closed_at >= $%d AND closed_at < $%d AND resolution_time_seconds >= 0), 0) AS avg_resolve_current,
-			COALESCE(AVG(resolution_time_seconds) FILTER (WHERE %s AND closed_at >= $%d AND closed_at < $%d AND resolution_time_seconds >= 0), 0) AS avg_resolve_previous,
+			COALESCE(AVG(%s) FILTER (WHERE %s AND closed_at >= $%d AND closed_at < $%d), 0) AS avg_resolve_current,
+			COALESCE(AVG(%s) FILTER (WHERE %s AND closed_at >= $%d AND closed_at < $%d), 0) AS avg_resolve_previous,
 
 			COALESCE((SELECT active_agent_count FROM active_agents), 0) AS active_agents,
 
@@ -175,8 +176,8 @@ func (r *DashboardRepository) GetKPIsWithUser(ctx context.Context, securityCondi
 		currFromIdx, currToIdx,
 		prevFromIdx, prevToIdx,
 
-		closedStatusCheck, currFromIdx, currToIdx,
-		closedStatusCheck, prevFromIdx, prevToIdx,
+		avgResolveExpr, closedStatusCheck, currFromIdx, currToIdx,
+		avgResolveExpr, closedStatusCheck, prevFromIdx, prevToIdx,
 
 		closedStatusCheck, currFromIdx, currToIdx,
 		closedStatusCheck, prevFromIdx, prevToIdx,
@@ -283,7 +284,7 @@ func (r *DashboardRepository) GetKPIsWithUser(ctx context.Context, securityCondi
 
 func (r *DashboardRepository) GetSLAStats(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) (*types.DashboardSLAStats, error) {
 	closedAtExpr := dashboardLatestStatusChangeTimestampScalarExpr("o", pkgconstants.StatusClosed)
-	slaOnTimeCheck := dashboardSLAOnTimeCheck("o.duration", "o.completed_at")
+	slaOnTimeCheck := dashboardSLAOnTimeCheck("o.duration", closedAtExpr)
 	builder := sq.Select(
 		"COUNT(CASE WHEN o.duration IS NOT NULL THEN 1 END)",
 		"COUNT(CASE WHEN "+slaOnTimeCheck+" THEN 1 END)",
@@ -307,9 +308,10 @@ func (r *DashboardRepository) GetSLAStats(ctx context.Context, securityCondition
 
 func (r *DashboardRepository) GetAvgTimeByPriority(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) ([]types.DashboardTimeByGroup, error) {
 	closedAtExpr := dashboardLatestStatusChangeTimestampScalarExpr("o", pkgconstants.StatusClosed)
+	avgResolveExpr := dashboardResolutionSecondsExpr(closedAtExpr, "o.created_at")
 	builder := sq.Select(
 		"p.name AS group_name",
-		"COALESCE(AVG(o.resolution_time_seconds), 0) AS avg_seconds",
+		fmt.Sprintf("COALESCE(AVG(%s), 0) AS avg_seconds", avgResolveExpr),
 	).
 		From("orders o").
 		Join("priorities p ON o.priority_id = p.id").
@@ -324,9 +326,10 @@ func (r *DashboardRepository) GetAvgTimeByPriority(ctx context.Context, security
 
 func (r *DashboardRepository) GetAvgTimeByOrderType(ctx context.Context, securityCondition sq.Sqlizer, queryOptions types.DashboardQuery) ([]types.DashboardTimeByGroup, error) {
 	closedAtExpr := dashboardLatestStatusChangeTimestampScalarExpr("o", pkgconstants.StatusClosed)
+	avgResolveExpr := dashboardResolutionSecondsExpr(closedAtExpr, "o.created_at")
 	builder := sq.Select(
 		"ot.name AS group_name",
-		"COALESCE(AVG(o.resolution_time_seconds), 0) AS avg_seconds",
+		fmt.Sprintf("COALESCE(AVG(%s), 0) AS avg_seconds", avgResolveExpr),
 	).
 		From("orders o").
 		Join("order_types ot ON o.order_type_id = ot.id").
@@ -526,6 +529,10 @@ func dashboardSLAEligibleCheck(durationColumn string) string {
 
 func dashboardSLAOnTimeCheck(durationColumn, completedColumn string) string {
 	return fmt.Sprintf("%s AND %s <= %s", dashboardSLAEligibleCheck(durationColumn), completedColumn, durationColumn)
+}
+
+func dashboardResolutionSecondsExpr(closedAtExpr, createdColumn string) string {
+	return fmt.Sprintf("GREATEST(EXTRACT(EPOCH FROM (%s - %s)), 0)", closedAtExpr, createdColumn)
 }
 
 func dashboardLatestStatusChangeTimestampExpr(orderAlias, statusCode, alias string) string {

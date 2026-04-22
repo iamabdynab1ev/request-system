@@ -67,8 +67,18 @@ func TestDashboardSLAHelpers(t *testing.T) {
 		t.Fatalf("unexpected SLA eligible check: %s", got)
 	}
 
-	if got := dashboardSLAOnTimeCheck("duration", "completed_at"); got != "duration IS NOT NULL AND completed_at <= duration" {
+	if got := dashboardSLAOnTimeCheck("duration", "closed_at"); got != "duration IS NOT NULL AND closed_at <= duration" {
 		t.Fatalf("unexpected SLA on-time check: %s", got)
+	}
+}
+
+func TestDashboardResolutionSecondsExpr(t *testing.T) {
+	got := dashboardResolutionSecondsExpr("closed_at", "created_at")
+	if !strings.Contains(got, "closed_at - created_at") {
+		t.Fatalf("expected closed_at based duration, got %s", got)
+	}
+	if !strings.Contains(got, "GREATEST") {
+		t.Fatalf("expected non-negative duration guard, got %s", got)
 	}
 }
 
