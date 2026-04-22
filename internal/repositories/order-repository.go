@@ -327,20 +327,40 @@ func (r *OrderRepository) DeleteOrder(ctx context.Context, orderID uint64) error
 
 func (r *OrderRepository) GetUserOrderStats(ctx context.Context, userID uint64, fromDate time.Time) (*types.UserOrderStats, error) {
 	query := `
-		SELECT 
-			COUNT(CASE WHEN s.code IN ('IN_PROGRESS', 'CLARIFICATION', 'REFINEMENT') THEN 1 END),
-			COUNT(CASE WHEN s.code = 'COMPLETED' THEN 1 END),
-			COUNT(CASE WHEN s.code = 'CLOSED' THEN 1 END),
-			COUNT(CASE WHEN o.duration IS NOT NULL AND o.duration < NOW() AND s.code NOT IN ('COMPLETED', 'CLOSED', 'REJECTED') THEN 1 END),
-			COALESCE(AVG(CASE WHEN s.code IN ('COMPLETED', 'CLOSED') AND o.resolution_time_seconds > 0 THEN o.resolution_time_seconds END), 0)
-		FROM orders o
-		JOIN statuses s ON o.status_id = s.id
-		WHERE (o.executor_id = $1 OR o.user_id = $1)
-		  AND o.deleted_at IS NULL
-		  AND o.created_at >= $2
+		WITH user_orders AS (
+			SELECT
+				o.id,
+				o.created_at,
+				o.duration,
+				s.code AS status_code,
+				(
+					SELECT h.created_at
+					FROM order_history h
+					JOIN statuses closed_status ON closed_status.code = 'CLOSED'
+					WHERE h.order_id = o.id
+					  AND h.event_type = 'STATUS_CHANGE'
+					  AND h.new_value = closed_status.id::text
+					ORDER BY h.created_at DESC
+					LIMIT 1
+				) AS closed_at
+			FROM orders o
+			JOIN statuses s ON o.status_id = s.id
+			WHERE (o.executor_id = $1 OR o.user_id = $1)
+			  AND o.deleted_at IS NULL
+			  AND o.created_at >= $2
+		)
+		SELECT
+			COUNT(*),
+			COUNT(CASE WHEN status_code <> 'CLOSED' THEN 1 END),
+			COUNT(CASE WHEN status_code = 'COMPLETED' THEN 1 END),
+			COUNT(CASE WHEN status_code = 'CLOSED' THEN 1 END),
+			COUNT(CASE WHEN duration IS NOT NULL AND duration < NOW() AND status_code <> 'CLOSED' THEN 1 END),
+			COALESCE(AVG(CASE WHEN status_code = 'CLOSED' AND closed_at IS NOT NULL THEN GREATEST(EXTRACT(EPOCH FROM (closed_at - created_at)), 0) END), 0)
+		FROM user_orders
 	`
 	var stats types.UserOrderStats
 	err := r.storage.QueryRow(ctx, query, userID, fromDate).Scan(
+		&stats.TotalCount,
 		&stats.InProgressCount,
 		&stats.CompletedCount,
 		&stats.ClosedCount,
@@ -350,6 +370,5 @@ func (r *OrderRepository) GetUserOrderStats(ctx context.Context, userID uint64, 
 	if err != nil {
 		return nil, err
 	}
-	stats.TotalCount = stats.InProgressCount + stats.CompletedCount + stats.ClosedCount
 	return &stats, nil
 }
