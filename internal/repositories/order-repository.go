@@ -178,7 +178,7 @@ func (r *OrderRepository) getOrdersRefactored(ctx context.Context, filter types.
 			if isOverdue {
 				b = b.Join("statuses s_ovr ON o.status_id = s_ovr.id").
 					Where("o.duration < NOW()").
-					Where("s_ovr.code NOT IN ('CLOSED', 'COMPLETED', 'REJECTED')")
+					Where("s_ovr.code <> 'CLOSED'")
 			}
 		}
 		return b
