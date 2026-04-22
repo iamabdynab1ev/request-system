@@ -64,7 +64,6 @@ func (r *DashboardRepository) GetAlerts(ctx context.Context, securityCondition s
 		Where(sq.Eq{"o.deleted_at": nil})
 
 	builder = applyDashboardSecurity(builder, securityCondition)
-	builder = applyDashboardRange(builder, "o.created_at", queryOptions.Range)
 	query, args, err := builder.PlaceholderFormat(sq.Dollar).ToSql()
 	if err != nil {
 		return nil, err

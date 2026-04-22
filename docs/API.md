@@ -58,6 +58,7 @@ authentication model, and integration entrypoints.
 Dashboard business rules:
 
 - `total_orders` counts orders created in the selected period.
+- `alerts` are current-state counters for accessible open orders and are not limited to orders created in the selected period.
 - `open_orders` counts all current orders except `CLOSED`.
 - `resolved_orders` counts orders that reached final `CLOSED` in the period.
 - `sla_compliance` uses only closed orders with `duration`.
