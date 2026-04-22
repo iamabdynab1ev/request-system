@@ -36,6 +36,15 @@ func (r *reportRepository) GetReport(ctx context.Context, filter entities.Report
 			FROM order_history h JOIN users u ON u.id = CAST(h.new_value AS bigint)
 			WHERE h.event_type = 'DELEGATION' AND h.new_value ~ '^[0-9]+$'
 			ORDER BY h.order_id, h.created_at ASC
+		),
+		latest_closed AS (
+			SELECT DISTINCT ON (h.order_id)
+				h.order_id, h.created_at AS closed_at
+			FROM order_history h
+			JOIN statuses closed_status ON closed_status.code = 'CLOSED'
+			WHERE h.event_type = 'STATUS_CHANGE'
+			  AND h.new_value = closed_status.id::text
+			ORDER BY h.order_id, h.created_at DESC
 		)
 	`
 
@@ -48,6 +57,7 @@ func (r *reportRepository) GetReport(ctx context.Context, filter entities.Report
 		LeftJoin("priorities p ON o.priority_id = p.id").
 		LeftJoin("statuses s ON o.status_id = s.id").
 		LeftJoin("first_delegation fd ON o.id = fd.order_id").
+		LeftJoin("latest_closed lc ON o.id = lc.order_id").
 		Where(sq.Eq{"o.deleted_at": nil})
 
 	// Обычные фильтры из UI
@@ -131,9 +141,9 @@ func (r *reportRepository) GetReport(ctx context.Context, filter entities.Report
 	mainBuilder := baseSelect.Columns(
 		"o.id AS order_id", "creator.fio AS creator_fio", "o.created_at", "ot.name AS order_type_name",
 		"p.name AS priority_name", "s.name AS status_name", "o.name AS order_name",
-		"fd.responsible_fio", "fd.delegated_at", "executor.fio AS executor_fio", "o.completed_at",
-		"COALESCE(TO_CHAR(o.completed_at - o.created_at, 'HH24:MI:SS'), NULL) AS resolution_time_str",
-		`CASE WHEN o.completed_at IS NOT NULL AND o.duration IS NOT NULL AND o.completed_at <= o.duration THEN 'Выполнен' WHEN o.completed_at IS NOT NULL AND o.duration IS NOT NULL AND o.completed_at > o.duration THEN 'Не выполнен' WHEN o.completed_at IS NULL AND o.duration IS NOT NULL AND NOW() > o.duration THEN 'Просрочен' ELSE 'В процессе' END AS sla_status`,
+		"fd.responsible_fio", "fd.delegated_at", "executor.fio AS executor_fio", "lc.closed_at AS completed_at",
+		"COALESCE(TO_CHAR(lc.closed_at - o.created_at, 'HH24:MI:SS'), NULL) AS resolution_time_str",
+		`CASE WHEN lc.closed_at IS NOT NULL AND o.duration IS NOT NULL AND lc.closed_at <= o.duration THEN 'Выполнен' WHEN lc.closed_at IS NOT NULL AND o.duration IS NOT NULL AND lc.closed_at > o.duration THEN 'Не выполнен' WHEN lc.closed_at IS NULL AND o.duration IS NOT NULL AND NOW() > o.duration THEN 'Просрочен' ELSE 'В процессе' END AS sla_status`,
 		"creator_dep.name AS source_department",
 		"(SELECT comment FROM order_history WHERE order_id = o.id AND event_type = 'COMMENT' ORDER BY created_at DESC LIMIT 1) AS comment",
 	).OrderBy("o.id DESC")

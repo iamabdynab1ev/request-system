@@ -63,6 +63,7 @@ Dashboard business rules:
 - `sla_compliance` uses only closed orders with `duration`.
 - `avg_resolve_time` uses orders closed in the period and measures full time up to final `CLOSED`.
 - `active_agents` counts real executor activity in the selected period.
+- Reports use final `CLOSED` transition for completion date, SLA status, and resolution time.
 
 ## Telegram
 
