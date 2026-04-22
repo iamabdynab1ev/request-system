@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 
 	"request-system/internal/authz"
@@ -640,120 +639,6 @@ func (s *UserService) UpdateUserPermissions(ctx context.Context, userID uint64, 
 	})
 }
 
-func (s *UserService) ConfirmTelegramLink(ctx context.Context, token string, chatID int64) error {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return apperrors.NewBadRequestError("Код привязки не указан")
-	}
-
-	lookupKeys := []string{telegramLinkTokenCacheKey(token)}
-	if isTelegramShortCodeValue(token) {
-		lookupKeys = append([]string{telegramLinkShortCodeCacheKey(token)}, lookupKeys...)
-	}
-
-	var (
-		cacheKey string
-		val      string
-		err      error
-	)
-	for _, key := range lookupKeys {
-		val, err = s.cacheRepository.Get(ctx, key)
-		if err == nil && strings.TrimSpace(val) != "" {
-			cacheKey = key
-			break
-		}
-	}
-	if cacheKey == "" {
-		s.logger.Warn("Telegram link token not found or expired", zap.String("token_or_code", token))
-		return apperrors.NewBadRequestError("Неверный код или срок его действия истек")
-	}
-
-	payload, err := parseTelegramLinkCachePayload(val)
-	if err != nil {
-		s.logger.Error("Telegram link token contains invalid payload",
-			zap.String("token_or_code", token),
-			zap.String("cache_key", cacheKey),
-			zap.String("cached_value", val),
-			zap.Error(err))
-		return apperrors.NewBadRequestError("Код привязки поврежден. Получите новый код на сайте")
-	}
-	uid := payload.UserID
-
-	cleanupKeys := map[string]struct{}{
-		cacheKey: {},
-	}
-	if payload.Token != "" {
-		cleanupKeys[telegramLinkTokenCacheKey(payload.Token)] = struct{}{}
-	}
-	if payload.ShortCode != "" {
-		cleanupKeys[telegramLinkShortCodeCacheKey(payload.ShortCode)] = struct{}{}
-	}
-	cleanup := func() {
-		for key := range cleanupKeys {
-			_ = s.cacheRepository.Del(ctx, key)
-		}
-	}
-
-	existingUser, err := s.userRepository.FindUserByTelegramChatID(ctx, chatID)
-	if err == nil && existingUser != nil {
-		if existingUser.ID == uid {
-			cleanup()
-			s.logger.Info("Telegram already linked to the same user",
-				zap.Uint64("user_id", uid),
-				zap.Int64("chat_id", chatID))
-			return nil
-		}
-
-		if err := s.txManager.RunInTransaction(ctx, func(tx pgx.Tx) error {
-			if err := s.userRepository.ClearTelegramChatID(ctx, tx, existingUser.ID); err != nil {
-				return err
-			}
-			return s.userRepository.UpdateTelegramChatIDTx(ctx, tx, uid, chatID)
-		}); err != nil {
-			s.logger.Error("Failed to reassign telegram chat id",
-				zap.Int64("chat_id", chatID),
-				zap.Uint64("from_user_id", existingUser.ID),
-				zap.Uint64("to_user_id", uid),
-				zap.Error(err))
-			return err
-		}
-
-		cleanup()
-		s.logger.Warn("Telegram chat reassigned to another user",
-			zap.Int64("chat_id", chatID),
-			zap.Uint64("from_user_id", existingUser.ID),
-			zap.Uint64("to_user_id", uid))
-		return nil
-	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		s.logger.Error("Failed to check existing telegram link",
-			zap.Int64("chat_id", chatID),
-			zap.Error(err))
-		return apperrors.ErrInternalServer
-	}
-	if err := s.userRepository.UpdateTelegramChatID(ctx, uid, chatID); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return apperrors.NewBadRequestError("Этот Telegram аккаунт уже привязан к другому пользователю")
-		}
-		if errors.Is(err, apperrors.ErrNotFound) {
-			s.logger.Warn("Telegram link target user not found",
-				zap.Uint64("user_id", uid),
-				zap.Int64("chat_id", chatID))
-			return apperrors.NewBadRequestError("Пользователь для этого кода не найден. Получите новый код на сайте")
-		}
-		s.logger.Error("Failed to update telegram chat id",
-			zap.Uint64("user_id", uid),
-			zap.Int64("chat_id", chatID),
-			zap.Error(err))
-		return err
-	}
-	cleanup()
-	s.logger.Info("Telegram account linked successfully",
-		zap.Uint64("user_id", uid),
-		zap.Int64("chat_id", chatID))
-	return nil
-}
 func (s *UserService) checkAccess(ctx context.Context, perm string, target interface{}) (*authz.Context, error) {
 	actorID, _ := utils.GetUserIDFromCtx(ctx)
 	actor, _ := s.userRepository.FindUserByID(ctx, actorID)
