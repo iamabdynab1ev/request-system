@@ -291,9 +291,6 @@ func getActorFromEvent(event repositories.OrderHistoryItem, s *OrderHistoryServi
 }
 
 func addEventToBlock(block *dto.TimelineEventDTO, event repositories.OrderHistoryItem, resolver *historyReferenceResolver) {
-	ctx := resolver.ctx
-	s := resolver.service
-
 	if event.EventType == "COMMENT" {
 		if comment := strings.TrimSpace(utils.NullStringToString(event.Comment)); comment != "" {
 			block.Comment = &comment
@@ -303,96 +300,6 @@ func addEventToBlock(block *dto.TimelineEventDTO, event repositories.OrderHistor
 
 	if line := resolver.lineForEvent(block, event); line != "" {
 		block.Lines = append(block.Lines, line)
-	}
-	return
-
-	if event.NewValue.Valid || event.EventType == "CREATE" || event.EventType == "COMMENT" {
-		var line string
-		newValue := utils.NullStringToString(event.NewValue)
-
-		switch event.EventType {
-		case "CREATE":
-			line = fmt.Sprintf("Создана заявка: «%s»", newValue)
-		case "DELEGATION":
-			if event.Comment.Valid {
-				line = event.Comment.String
-			}
-		case "ATTACHMENT_ADD":
-			line = fmt.Sprintf("Прикреплен файл: %s", newValue)
-
-			if event.Attachment != nil {
-				block.Attachment = &dto.AttachmentResponseDTO{
-					ID:       event.Attachment.ID,
-					FileName: event.Attachment.FileName,
-					URL:      "/uploads/" + event.Attachment.FilePath,
-				}
-			}
-		case "DEPARTMENT_CHANGE":
-			id, err := strconv.ParseUint(newValue, 10, 64)
-			if err == nil {
-				if dept, err := s.departmentRepo.FindDepartment(ctx, id); err == nil {
-					line = fmt.Sprintf("Заявка переведена в департамент: «%s»", dept.Name)
-				} else {
-					s.logger.Warn("Не удалось найти департамент по ID из истории", zap.Uint64("deptID", id))
-					line = fmt.Sprintf("Изменено поле 'Департамент': ID на %s", newValue)
-				}
-			}
-		case "OTDEL_CHANGE":
-			id, err := strconv.ParseUint(newValue, 10, 64)
-			if err == nil {
-				if otdel, err := s.otdelRepo.FindOtdel(ctx, id); err == nil {
-					line = fmt.Sprintf("Заявка переведена в отдел: «%s»", otdel.Name)
-				} else {
-					s.logger.Warn("Не удалось найти отдел по ID из истории", zap.Uint64("otdelID", id))
-					line = fmt.Sprintf("Изменено поле 'Отдел': ID на %s", newValue)
-				}
-			}
-		case "STATUS_CHANGE":
-			newID, _ := strconv.ParseUint(newValue, 10, 64)
-			if newStatus, err := s.statusRepo.FindStatus(ctx, newID); err == nil {
-				line = fmt.Sprintf("Установлен статус: «%s»", newStatus.Name)
-			}
-		case "PRIORITY_CHANGE":
-			newID, _ := strconv.ParseUint(newValue, 10, 64)
-			if newPriority, err := s.priorityRepo.FindByID(ctx, newID); err == nil {
-				line = fmt.Sprintf("Установлен приоритет: «%s»", newPriority.Name)
-			}
-		case "DURATION_CHANGE":
-			parsedTime, err := time.Parse(time.RFC3339, newValue)
-			if err == nil {
-				line = fmt.Sprintf("Установлен срок выполнения до: %s", parsedTime.Format("02.01.2006 15:04"))
-			} else {
-				line = fmt.Sprintf("Срок выполнения изменен на: %s", newValue)
-			}
-		case "COMMENT":
-
-		case "NAME_CHANGE":
-			oldValue := utils.NullStringToString(event.OldValue)
-			line = fmt.Sprintf("Изменено название заявки: «%s» на «%s»", oldValue, newValue)
-
-		case "ADDRESS_CHANGE":
-			oldValue := utils.NullStringToString(event.OldValue)
-			line = fmt.Sprintf("Изменен адрес: «%s» на «%s»", oldValue, newValue)
-		case "EQUIPMENT_CHANGE":
-			line = fmt.Sprintf("Изменено оборудование: ID на %s", newValue)
-
-		case "EQUIPMENT_TYPE_CHANGE":
-			line = fmt.Sprintf("Изменен тип оборудования: ID на %s", newValue)
-
-		case "ORDER_TYPE_CHANGE":
-			line = fmt.Sprintf("Изменен тип заявки: ID на %s", newValue)
-
-		default:
-			fieldMap := map[string]string{}
-			if humanField, ok := fieldMap[event.EventType]; ok {
-				oldValue := utils.NullStringToString(event.OldValue)
-				line = fmt.Sprintf("Изменено поле '%s': «%s» на «%s»", humanField, oldValue, newValue)
-			}
-		}
-
-		if line != "" {
-			block.Lines = append(block.Lines, line)
-		}
 	}
 }
 

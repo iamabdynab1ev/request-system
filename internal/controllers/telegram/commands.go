@@ -160,14 +160,6 @@ func (c *TelegramController) handleTokenLink(ctx context.Context, chatID int64, 
 
 	_ = c.cacheRepo.Del(ctx, fmt.Sprintf(telegramStateKey, chatID))
 	return c.handleLinkStatusCommand(ctx, chatID)
-
-	return c.renderScreen(
-		ctx,
-		chatID,
-		0,
-		"✅ *Аккаунт успешно привязан\\!*\n\nТеперь вы можете работать с заявками через меню ниже\\.",
-		c.mainMenuScreenOptions()...,
-	)
 }
 
 func (c *TelegramController) handleStateInput(ctx context.Context, chatID int64, text string, state *dto.TelegramState) error {
