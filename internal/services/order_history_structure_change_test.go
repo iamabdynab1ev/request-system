@@ -70,3 +70,19 @@ func TestHumanizeHistoryStructureComment_HumanizesKnownFieldsWithoutNames(t *tes
 		t.Fatalf("expected humanized comment %q, got %q", want, got)
 	}
 }
+
+func TestHumanizeHistoryStructureComment_HandlesLegacyMojibakeArrow(t *testing.T) {
+	comment := "Смена структуры: otdel_id: в†’ 19"
+
+	got := humanizeHistoryStructureComment(comment, func(field string, id uint64) string {
+		if field == "otdel_id" && id == 19 {
+			return "Сектор банкоматов"
+		}
+		return ""
+	})
+
+	want := "Смена структуры: отдел: «Сектор банкоматов»"
+	if got != want {
+		t.Fatalf("expected humanized legacy arrow comment %q, got %q", want, got)
+	}
+}
